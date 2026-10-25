@@ -529,13 +529,16 @@ export function createImpostors(models: readonly PictureModel[], look: PictureLo
   const thinSet = still && models.some((model) => model.parts.some((part) => part.thin));
   const blocks = layoutOf(models.length);
   const block = FRAMES * FRAME_PX;
+  /** The atlas's mips only where read (the plants', `COLOUR_MAP`, `farForest.ts`; a `perMip` set's): any other still set reads level 0 alone
+   *  (`STILL_READ_GLSL`), its chain a third more held for nothing (three r186 getMipLevels). The outline keeps its own: `SHADOW_CUT` reads them. */
+  const atlasLevels = !still || look.perMip === true;
   // Two pictures per view, the colour and the normal; and the outline that throws the shadow. DO NOT keep a depth buffer the size of the atlas for its life: it is drawn once (`bake`, a target of its own with depth).
-  const atlas = new WebGLRenderTarget(blocks.x * block, blocks.y * block, { count: thinSet ? 3 : 2, depthBuffer: false, generateMipmaps: true });
+  const atlas = new WebGLRenderTarget(blocks.x * block, blocks.y * block, { count: thinSet ? 3 : 2, depthBuffer: false, generateMipmaps: atlasLevels });
   // A set with no thin part reads a picture of none (one program for every still set: `COLOUR_MAP_STILL` asks `uHasThin`).
   const noThin = new DataTexture(new Uint8Array(4), 1, 1);
   noThin.needsUpdate = true;
   const outline = new WebGLRenderTarget(blocks.x * block, blocks.y * block, { format: RedFormat, depthBuffer: false, generateMipmaps: true });
-  for (const t of [...atlas.textures, outline.texture]) { t.minFilter = LinearMipmapLinearFilter; t.magFilter = LinearFilter; }
+  for (const t of [...atlas.textures, outline.texture]) { t.minFilter = atlasLevels || t === outline.texture ? LinearMipmapLinearFilter : LinearFilter; t.magFilter = LinearFilter; }
   const uniforms = {
     uAlbedo: { value: atlas.textures[0]! },
     uNormals: { value: atlas.textures[1]! },
@@ -647,10 +650,9 @@ export function createImpostors(models: readonly PictureModel[], look: PictureLo
         taken.dispose();
       }
     } else {
-      // The pictures onto the atlas, and its mip levels made by a draw of nothing into it (three r186 `render` ends with `updateRenderTargetMipmap`).
+      // The pictures onto the atlas, and its mips (if any) made by a draw of nothing into it (three r186 `render` ends with `updateRenderTargetMipmap`).
       for (let i = 0; i < atlas.textures.length; i++) renderer.copyTextureToTexture(drawn.textures[i]!, atlas.textures[i]!);
-      renderer.setRenderTarget(atlas);
-      renderer.render(scene, camera);
+      if (atlasLevels) { renderer.setRenderTarget(atlas); renderer.render(scene, camera); }
     }
     drawn.dispose();
     if (ownModels) for (const model of models) for (const part of model.parts) part.geometry.dispose();

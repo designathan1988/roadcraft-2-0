@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  BackSide, BoxGeometry, DoubleSide, FrontSide, Frustum, Matrix4, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, ShaderLib, Vector3,
+  BackSide, BoxGeometry, DoubleSide, FrontSide, Frustum, LinearFilter, LinearMipmapLinearFilter, Matrix4, MeshStandardMaterial, OrthographicCamera, PerspectiveCamera, ShaderLib, Vector3,
   type InstancedMesh, type Material, type Object3D, type ShaderMaterial, type WebGLProgramParametersWithUniforms, type WebGLRenderer,
 } from 'three';
 import { MeshoptSimplifier } from 'meshoptimizer';
@@ -88,6 +88,28 @@ describe('the still models\' pictures', () => {
     expect(code.indexOf('diffuseColor.rgb *= 0.3;')).toBeLessThan(code.indexOf('gNormal = vec4('));
     expect(code.indexOf('gNormal = vec4(')).toBeLessThan(code.indexOf('#include <lights_fragment_begin>'));
     for (const x of [baked.colour, baked.outline, near]) x.dispose();
+  });
+
+  it('hold an atlas\'s mip levels only where they are read: the plants\' and an alpha-cut set\'s, every shadow outline', () => {
+    const props = new MeshStandardMaterial({ roughness: 0.62, metalness: 0.28 });
+    const still = createImpostors([box()], stillLook(props), 'props');
+    const perMip = createImpostors([box()], { ...stillLook(props), perMip: true }, 'elements');
+    const plants = createPlantImpostors([{ body: new BoxGeometry(1, 2, 1), cards: null, cardsCast: false }], { sway: 0.05, flutter: 0.01 }, 'scenery');
+    const outlineOf = (set: typeof still): import('three').Texture => {
+      const shader = { vertexShader: ShaderLib.depth.vertexShader, fragmentShader: ShaderLib.depth.fragmentShader, uniforms: {} } as unknown as WebGLProgramParametersWithUniforms;
+      set.depth.onBeforeCompile(shader, null as unknown as WebGLRenderer);
+      return (shader.uniforms as Record<string, { value: import('three').Texture }>)['uShadow']!.value;
+    };
+    // A still set's pictures are read at their finest level alone (`STILL_READ_GLSL`): no chain made, none sampled.
+    for (const t of [still.albedo, still.normals]) {
+      expect(t.generateMipmaps).toBe(false);
+      expect(t.minFilter).toBe(LinearFilter);
+    }
+    for (const t of [perMip.albedo, perMip.normals, plants.albedo, plants.normals, outlineOf(still), outlineOf(perMip), outlineOf(plants)]) {
+      expect(t.generateMipmaps).toBe(true);
+      expect(t.minFilter).toBe(LinearMipmapLinearFilter);
+    }
+    for (const set of [still, perMip, plants]) set.dispose();
   });
 
   it('take an alpha-cut set\'s levels with its map read a mip coarser than their texels, its outline as it is', () => {

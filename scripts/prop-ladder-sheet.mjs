@@ -67,7 +67,7 @@ try {
     const out = resolve(plain[1] ?? '');
     mkdirSync(out, { recursive: true });
     const atlas = await page.evaluate(async (module) => (await import(module)).propPicturesAtlas(), '/src/lab/propLadderSheet.ts');
-    for (const name of ['colour', 'normal', 'colourMip3']) writeFileSync(join(out, `atlas-${name}.png`), Buffer.from(atlas[name].slice(atlas[name].indexOf(',') + 1), 'base64'));
+    for (const name of ['colour', 'normal']) writeFileSync(join(out, `atlas-${name}.png`), Buffer.from(atlas[name].slice(atlas[name].indexOf(',') + 1), 'base64'));
     writeFileSync(join(out, 'atlas-modes.txt'), `${atlas.modes.join('\n')}\n`);
     console.log(atlas.modes.join('\n'));
     console.log(`-> ${out}`);

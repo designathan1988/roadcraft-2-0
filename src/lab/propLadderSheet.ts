@@ -253,7 +253,7 @@ export async function propLadderCompare(before: string, after: string, crops: re
 
 /** The street props' pictures as taken (`plantImpostors.ts` propPictures): the atlas's colour and normal targets read back as PNGs, each with
  *  its cover as a second panel (grey). What the far props are drawn from. */
-export async function propPicturesAtlas(): Promise<{ readonly colour: string; readonly normal: string; readonly colourMip3: string; readonly modes: readonly string[] }> {
+export async function propPicturesAtlas(): Promise<{ readonly colour: string; readonly normal: string; readonly modes: readonly string[] }> {
   await MeshoptSimplifier.ready;
   const renderer = new WebGLRenderer({ canvas: document.createElement('canvas'), antialias: false, preserveDrawingBuffer: true });
   const kit = createSceneryKit();
@@ -262,10 +262,8 @@ export async function propPicturesAtlas(): Promise<{ readonly colour: string; re
   const ladder = ladderOf(kit);
   takeWaitingPictures(renderer);
   let last = new Uint8Array(0), lastWidth = 0;
-  /** `shrink`: drawn that many times smaller, the filter reading the mip level as far down. */
-  const read = (texture: Texture, shrink = 1): string => {
-    const full = texture.image as { width: number; height: number };
-    const width = full.width / shrink, height = full.height / shrink;
+  const read = (texture: Texture): string => {
+    const { width, height } = texture.image as { width: number; height: number };
     const target = new WebGLRenderTarget(width, height);
     const scene = new Scene();
     // Its alpha as stored: a transparent material (an opaque one writes 1), not blended.
@@ -308,7 +306,7 @@ export async function propPicturesAtlas(): Promise<{ readonly colour: string; re
     const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([k, n]) => `#${k.toString(16).padStart(6, '0')} ${(100 * n / Math.max(total, 1)).toFixed(1)}%`);
     modes.push(`block ${block}: ${top.join(', ')}`);
   }
-  const result = { colour, normal: read(ladder.pictures.set.normals), colourMip3: read(ladder.pictures.set.albedo, 8), modes };
+  const result = { colour, normal: read(ladder.pictures.set.normals), modes };
   ladder.release();
   kit.dispose();
   renderer.dispose();
