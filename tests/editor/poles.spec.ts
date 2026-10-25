@@ -170,7 +170,7 @@ describe('cross-arms', () => {
   const line = (points: [number, number][]): { poles: Map<PoleId, UtilityPole>; spans: Map<SpanId, UtilitySpan> } => {
     const poles = new Map<PoleId, UtilityPole>();
     const spans = new Map<SpanId, UtilitySpan>();
-    points.forEach(([x, y], i) => poles.set((i + 1) as PoleId, { id: (i + 1) as PoleId, x, y, lamp: false }));
+    points.forEach(([x, y], i) => poles.set((i + 1) as PoleId, { id: (i + 1) as PoleId, x, y, lamp: false, kind: 'urban' }));
     for (let i = 1; i < points.length; i++) spans.set(i as SpanId, { id: i as SpanId, a: i as PoleId, b: (i + 1) as PoleId });
     return { poles, spans };
   };

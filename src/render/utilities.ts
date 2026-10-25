@@ -25,8 +25,14 @@ import { FOOTWAY_RISE } from '@world/roadTypes';
 import { footwayRiseAt } from '@world/roads/footwayRise';
 import {
   POLE_ARM_DROP,
-  POLE_ARM_HALF,
+  POLE_ARM_SPAN,
   POLE_ARM_THICK,
+  POLE_BRACE_DROP,
+  POLE_BRACE_REACH,
+  POLE_INSULATOR_TALL,
+  POLE_PRIMARY,
+  POLE_SECONDARY_DROPS,
+  POLE_SECONDARY_OUT,
   POLE_BASE_RADIUS,
   POLE_HEIGHT,
   POLE_LAMP_DROP,
@@ -35,9 +41,14 @@ import {
   POLE_LAMP_TALL,
   POLE_LAMP_WIDE,
   POLE_TOP_RADIUS,
-  WIRE_COURSES,
-  WIRE_OFFSETS,
   type PoleArms,
+  type PoleKind,
+  type WireSeat,
+  poleToward,
+  primarySeats,
+  secondarySeats,
+  spanCarries,
+  streetArm,
   spanSag,
 } from '@world/utilities';
 import { angleOf } from '@core/vec2';
@@ -46,9 +57,7 @@ import { cylinderWith } from './mesh/cylinder';
 
 /** Pin insulator on the cross-arm. */
 const INSULATOR_RADIUS = m(0.07);
-const INSULATOR_TALL = m(0.2);
 /** Arm braces: how far below the arm they meet the mast, and their section. */
-const BRACE_DROP = m(0.55);
 const BRACE_THICK = m(0.05);
 /** Pole-top transformer can. */
 const CAN_RADIUS = m(0.28);
@@ -179,52 +188,69 @@ export function placePole(
   // A pole cap: the weathering cap on the crown of a timber pole.
   out[POLE_PART.cap]!.push({ x: pole.x, y: pole.y, z: base + POLE_HEIGHT + m(0.03), yaw: 0, sx: 1, sy: 1, sz: 1 });
 
+  // Which way its arms reach: toward the street, as its wires take them (`poleBake.ts` wireEnd).
+  const toward = poleToward(kerb, frame.arms[0] ?? { x: 0, y: 1 });
+  const kind = pole.kind;
+  const [from, to] = POLE_ARM_SPAN[kind];
+  const armTop = top - POLE_ARM_DROP, armZ = armTop - POLE_ARM_THICK / 2;
   // An instanced box is scaled on its LOCAL X and then rotated about Y
-  for (const arm of frame.arms) {
-    const armZ = top - POLE_ARM_DROP;
+  for (const raw of frame.arms) {
+    const arm = streetArm(raw, toward);
+    // The cross-arm: from the mast out over the street (urban) or across the crown (rural).
     out[POLE_PART.arm]!.push({
-      x: pole.x, y: pole.y, z: armZ, yaw: angleOf(arm),
-      sx: POLE_ARM_HALF * 2, sy: POLE_ARM_THICK, sz: POLE_ARM_THICK,
+      x: pole.x + arm.x * (from + to) / 2, y: pole.y + arm.y * (from + to) / 2, z: armZ, yaw: angleOf(arm),
+      sx: to - from, sy: POLE_ARM_THICK, sz: POLE_ARM_THICK,
     });
-    // Pin insulators on the arm, one under each wire of the top course.
-    for (const offset of WIRE_OFFSETS) {
-      out[POLE_PART.insulator]!.push({
-        x: pole.x + arm.x * POLE_ARM_HALF * offset,
-        y: pole.y + arm.y * POLE_ARM_HALF * offset,
-        z: armZ + POLE_ARM_THICK / 2 + INSULATOR_TALL / 2,
-        yaw: 0, sx: 1, sy: 1, sz: 1,
-      });
+    // A pin insulator under each primary wire.
+    for (const along of POLE_PRIMARY[kind]) {
+      out[POLE_PART.insulator]!.push({ x: pole.x + arm.x * along, y: pole.y + arm.y * along, z: armTop + POLE_INSULATOR_TALL / 2, yaw: 0, sx: 1, sy: 1, sz: 1 });
     }
-    // Two flat braces from the mast up to the arm, one each side.
-    for (const side of [1, -1]) {
-      const reach = POLE_ARM_HALF * 0.6;
-      const drop = BRACE_DROP;
-      out[POLE_PART.brace]!.push({
-        x: pole.x + arm.x * side * reach / 2,
-        y: pole.y + arm.y * side * reach / 2,
-        z: armZ - drop / 2,
-        yaw: angleOf({ x: arm.x * side, y: arm.y * side }),
-        roll: Math.atan2(drop, reach),
-        sx: Math.hypot(reach, drop),
-        sy: BRACE_THICK,
-        sz: BRACE_THICK * 0.5,
+    // The brace from the mast under the arm up to it: on the street's side (urban), on the lone insulator's (rural).
+    const side = kind === 'urban' ? 1 : -1;
+    const strap = armTop - POLE_BRACE_DROP, under = armTop - POLE_ARM_THICK;
+    const foot = mastRadiusAt(strap - (top - POLE_HEIGHT));
+    const run = POLE_BRACE_REACH - foot, rise = under - strap;
+    out[POLE_PART.brace]!.push({
+      x: pole.x + arm.x * side * (foot + run / 2),
+      y: pole.y + arm.y * side * (foot + run / 2),
+      z: (strap + under) / 2,
+      yaw: angleOf({ x: arm.x * side, y: arm.y * side }),
+      roll: Math.atan2(rise, run),
+      sx: Math.hypot(run, rise),
+      sy: BRACE_THICK,
+      sz: BRACE_THICK * 0.5,
+    });
+    if (kind !== 'urban') continue;
+    // The secondary rack: a strip bolted to the mast's street side, a spool on it under each secondary wire (S1: an "isolador roldana",
+    // some 8 cm across and tall: the pin insulator's bell scaled to it).
+    const high = top - POLE_SECONDARY_DROPS[0]!, low = top - POLE_SECONDARY_DROPS[POLE_SECONDARY_DROPS.length - 1]!;
+    const face = mastRadiusAt((high + low) / 2 - (top - POLE_HEIGHT));
+    out[POLE_PART.brace]!.push({
+      x: pole.x + arm.x * (face + BRACE_THICK / 2), y: pole.y + arm.y * (face + BRACE_THICK / 2), z: (high + low) / 2,
+      yaw: angleOf(arm), roll: Math.PI / 2, sx: high - low + m(0.2), sy: BRACE_THICK, sz: m(0.06),
+    });
+    for (const drop of POLE_SECONDARY_DROPS) {
+      out[POLE_PART.insulator]!.push({
+        x: pole.x + arm.x * POLE_SECONDARY_OUT, y: pole.y + arm.y * POLE_SECONDARY_OUT, z: top - drop,
+        yaw: 0, sx: SPOOL_WIDE / (2 * INSULATOR_RADIUS), sy: SPOOL_WIDE / POLE_INSULATOR_TALL, sz: SPOOL_WIDE / (2 * INSULATOR_RADIUS),
       });
     }
   }
-  // A pole-top transformer on some poles, hung on the side away from the street.
+  // A transformer on some poles, hung just under the arm - between the primary wires and the secondary, as it feeds them - on the side its
+  // brace is not: away from the street on an urban pole, toward it on a rural one.
   if (pole.id % 5 === 3) {
-    const away = kerb ?? frame.arms[0] ?? { x: 0, y: 1 };
+    const away = kind === 'urban' ? -1 : 1;
     out[POLE_PART.can]!.push({
-      x: pole.x - away.x * (POLE_BASE_RADIUS + CAN_RADIUS),
-      y: pole.y - away.y * (POLE_BASE_RADIUS + CAN_RADIUS),
-      z: top - POLE_ARM_DROP - m(1.6),
+      x: pole.x + toward.x * away * (POLE_BASE_RADIUS + CAN_RADIUS),
+      y: pole.y + toward.y * away * (POLE_BASE_RADIUS + CAN_RADIUS),
+      z: armZ - m(0.75),
       yaw: 0, sx: 1, sy: 1, sz: 1,
     });
   }
 
   if (!pole.lamp) return;
-  // The light reaches out over the street, square to the kerb, whichever way the wires run
-  const reach = kerb ?? frame.arms[0] ?? { x: 0, y: 1 };
+  // The light reaches out over the street, square to the kerb, whichever way the wires run; under every wire.
+  const reach = toward;
   const reachYaw = angleOf(reach);
   const headX = pole.x + reach.x * POLE_LAMP_REACH;
   const headY = pole.y + reach.y * POLE_LAMP_REACH;
@@ -250,6 +276,14 @@ export function placePole(
   out[POLE_PART.beam]!.push({ x: headX, y: headY, z: lensZ, yaw: 0, sx: LAMP_BEAM_RADIUS, sy: Math.max(m(0.004), lensZ - below), sz: LAMP_BEAM_RADIUS });
 }
 
+/** The mast's radius this far over its foot: it tapers from `POLE_BASE_RADIUS` to `POLE_TOP_RADIUS`. */
+function mastRadiusAt(height: number): number {
+  return POLE_BASE_RADIUS + (POLE_TOP_RADIUS - POLE_BASE_RADIUS) * Math.min(1, Math.max(0, height / POLE_HEIGHT));
+}
+
+/** A secondary rack's spool: as wide as it is tall. */
+const SPOOL_WIDE = m(0.08);
+
 const placing = new Object3D();
 /** A part's matrix into `array` at `offset`, as `InstancedMesh.setMatrixAt` writes it. World y is mirrored into three's z. */
 export function writePlacement(placement: Placement, array: Float32Array, offset: number): void {
@@ -260,33 +294,54 @@ export function writePlacement(placement: Placement, array: Float32Array, offset
   placing.matrix.toArray(array, offset);
 }
 
-/** Wires a span carries: every course and offset of the arms. */
-export const SPAN_WIRES = WIRE_COURSES.length * WIRE_OFFSETS.length;
+/** Wires a span's block holds: its three primary wires and two secondary ones, a secondary slot left empty (`WIRE_ABSENT`) where the span
+ *  carries none (`spanCarries`). */
+export const SPAN_WIRES = POLE_PRIMARY.urban.length + POLE_SECONDARY_DROPS.length;
+/** The sag an empty slot holds: the vertex shader draws it as nothing (`WIRE_GLSL`). */
+export const WIRE_ABSENT = -1;
 /** Numbers a wire's instance holds: its two ends in three's axes, its sag, its phase in the wind. */
 export const WIRE_STRIDE = 8;
 
 /** DO NOT build the wires' vertices on the CPU again. */
 export function spanWires(
   span: UtilitySpan,
-  a: { readonly x: number; readonly y: number; readonly top: number; readonly arm: { x: number; y: number } },
-  b: { readonly x: number; readonly y: number; readonly top: number; readonly arm: { x: number; y: number } },
+  a: SpanEnd,
+  b: SpanEnd,
   out: Float32Array,
   at: number,
 ): void {
   const phase = (span.id * 2.399) % (Math.PI * 2);
   let o = at;
-  // Every course and offset of the arms, as `sampleWire` lays them: its ends, and its sag from their distance.
-  for (const course of WIRE_COURSES) {
-    for (const offset of WIRE_OFFSETS) {
-      const ax = a.x + a.arm.x * POLE_ARM_HALF * offset, ay = a.y + a.arm.y * POLE_ARM_HALF * offset, az = a.top - POLE_ARM_DROP + course;
-      const bx = b.x + b.arm.x * POLE_ARM_HALF * offset, by = b.y + b.arm.y * POLE_ARM_HALF * offset, bz = b.top - POLE_ARM_DROP + course;
-      // In three's axes: x, height, -y.
-      out[o] = ax; out[o + 1] = az; out[o + 2] = -ay;
-      out[o + 3] = bx; out[o + 4] = bz; out[o + 5] = -by;
-      out[o + 6] = spanSag(Math.hypot(bx - ax, by - ay)); out[o + 7] = phase;
-      o += WIRE_STRIDE;
-    }
+  // A wire from its seat on one pole to the same seat on the other: its ends, and its sag from their distance.
+  const string = (sa: WireSeat, sb: WireSeat): void => {
+    const ax = a.x + a.arm.x * sa.along, ay = a.y + a.arm.y * sa.along, az = a.top + sa.rise;
+    const bx = b.x + b.arm.x * sb.along, by = b.y + b.arm.y * sb.along, bz = b.top + sb.rise;
+    // In three's axes: x, height, -y.
+    out[o] = ax; out[o + 1] = az; out[o + 2] = -ay;
+    out[o + 3] = bx; out[o + 4] = bz; out[o + 5] = -by;
+    out[o + 6] = spanSag(Math.hypot(bx - ax, by - ay)); out[o + 7] = phase;
+    o += WIRE_STRIDE;
+  };
+  const primaryA = primarySeats(a.kind), primaryB = primarySeats(b.kind);
+  for (let i = 0; i < primaryA.length; i++) string(primaryA[i]!, primaryB[i]!);
+  const secondaryA = secondarySeats(a.kind), secondaryB = secondarySeats(b.kind);
+  const carried = spanCarries(a.kind, b.kind).secondary;
+  for (let i = 0; i < POLE_SECONDARY_DROPS.length; i++) {
+    if (i < carried) { string(secondaryA[i]!, secondaryB[i]!); continue; }
+    // An empty slot: the first wire's ends (the bounds unmoved), drawn as nothing.
+    out.copyWithin(o, at, at + 6);
+    out[o + 6] = WIRE_ABSENT; out[o + 7] = phase;
+    o += WIRE_STRIDE;
   }
+}
+
+/** A span's end at a pole, as its wires read it: the pole's place and top, its arm for the span turned toward the street, its kind. */
+export interface SpanEnd {
+  readonly x: number;
+  readonly y: number;
+  readonly top: number;
+  readonly arm: { readonly x: number; readonly y: number };
+  readonly kind: PoleKind;
 }
 
 /** Half-width of a drawn cable (`WIRE_GLSL`), for the wires' bounds. */
@@ -429,6 +484,13 @@ const WIRE_GLSL = `
           return min(finest, need < 1.0 ? 1.0 : exp2(floor(log2(need)) + 1.0));
         }
         vec3 wirePosition(float pixels) {
+          // An empty slot (a span carrying no secondary wire, WIRE_ABSENT): every corner on one point, nothing drawn.
+          if (aSagPhase.x < 0.0) {
+            wireT = 0.0;
+            wireCover = 0.0;
+            wireNormal = vec3(0.0, 1.0, 0.0);
+            return aStart;
+          }
           float chords = pixels > 0.0 ? wireChords(wireScale(pixels), normal.x) : normal.x;
           wireT = floor(position.x * chords + 0.5) / chords;
           vec3 p = wireAt(wireT);
@@ -565,7 +627,7 @@ function madeUtilityParts(): UtilityParts {
   // Each round piece, finest first: its own sides, then fewer, each as wide on average (`roundShape`).
   const cap = [10, 6, 4].map((sides) => roundShape(POLE_TOP_RADIUS * 0.4, POLE_TOP_RADIUS * 1.15, m(0.08), sides, 10, { top: true, bottom: true }));
   // Its foot stands on the arm.
-  const insulator = [10, 6, 4].map((sides) => roundShape(INSULATOR_RADIUS * 0.55, INSULATOR_RADIUS, INSULATOR_TALL, sides, 10, { top: true, bottom: false }));
+  const insulator = [10, 6, 4].map((sides) => roundShape(INSULATOR_RADIUS * 0.55, INSULATOR_RADIUS, POLE_INSULATOR_TALL, sides, 10, { top: true, bottom: false }));
   const can = [14, 8, 5].map((sides) => roundShape(CAN_RADIUS, CAN_RADIUS, m(0.95), sides, 14, { top: true, bottom: true }));
   return {
     metal, timber, housing, wireMaterial: wires.lit, wireDepth: wires.depth,

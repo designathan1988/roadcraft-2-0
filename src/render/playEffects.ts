@@ -21,7 +21,7 @@ import { floorHeight } from '@world/buildings/foundation';
 import { roofHeightAt, roofRise, volumeCorners, volumeElevation, worldToLocal } from '@world/buildings/geometry';
 import { elementRing } from '@world/buildings/elements';
 import type { Building, BuildingId } from '@world/buildings/types';
-import { POLE_ARM_DROP, POLE_ARM_HALF, POLE_HEIGHT, POLE_LAMP_REACH } from '@world/utilities';
+import { POLE_ARM_DROP, POLE_ARM_SPAN, POLE_HEIGHT, POLE_LAMP_REACH, POLE_PRIMARY } from '@world/utilities';
 import { TUNED_UNIT, m } from '@world/units';
 import type { AgentMeshes } from './agents';
 import type { Exhaust } from './exhaust';
@@ -449,7 +449,7 @@ export function createPlayEffects(ctx: PlayEffectsContext): PlayEffects {
           }
         }
         // The cross-arm and the lamp, knocked off.
-        blast.debris({ shape: 'box', kind: 'wood', color: wood, at: top.clone(), size: new Vector3(POLE_ARM_HALF * 2, m(0.1), m(0.1)),
+        blast.debris({ shape: 'box', kind: 'wood', color: wood, at: top.clone(), size: new Vector3(POLE_ARM_SPAN.urban[1] - POLE_ARM_SPAN.urban[0], m(0.1), m(0.1)),
           velocity: push.clone().add(new Vector3(0, m(2), 0)) });
         if (pole.lamp) blast.debris({ shape: 'box', kind: 'metal', at: top.clone().add(new Vector3(POLE_LAMP_REACH * 0.5, 0, 0)), size: new Vector3(m(0.5), m(0.14), m(0.26)), velocity: push.clone().multiplyScalar(1.2) });
         // A flash and sparks off the line as it goes.
@@ -459,8 +459,9 @@ export function createPlayEffects(ctx: PlayEffectsContext): PlayEffects {
         const g = ground(w.fromX, w.fromY);
         const gt = ground(w.toX, w.toY);
         const dx = w.toX - w.fromX, dy = w.toY - w.fromY, d = Math.hypot(dx, dy) || 1;
-        for (const offset of [-0.8, 0, 0.8]) {
-          const side = new Vector3(-dy / d, 0, -dx / d).multiplyScalar(offset * POLE_ARM_HALF);
+        // The primary wires, from their places along an urban pole's arm.
+        for (const along of POLE_PRIMARY.urban) {
+          const side = new Vector3(-dy / d, 0, -dx / d).multiplyScalar(along);
           const from = new Vector3(w.fromX, g + POLE_HEIGHT - POLE_ARM_DROP, -w.fromY).add(side);
           const to = new Vector3(w.toX, gt + POLE_HEIGHT * 0.6, -w.toY).add(side);
           blast.wire(from, to, away(w.toX, w.toY, m(3)));

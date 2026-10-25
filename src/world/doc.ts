@@ -19,7 +19,7 @@ import {
   asSegmentId,
   asSpanId,
 } from './ids';
-import type { UtilityPole, UtilitySpan } from './utilities';
+import type { PoleKind, UtilityPole, UtilitySpan } from './utilities';
 import { type Barrier, type BarrierKind, isBarrierKind } from './barriers';
 // Runtime imports, and safe: `geometry` and `legAngles` take `RoadDoc` as a TYPE only
 import { TUNNEL_HEADROOM, type RoadStructure, migrateStructure } from './structures';
@@ -437,10 +437,10 @@ export class RoadDoc {
     return this.poles.get(id);
   }
 
-  addPole(at: { x: number; y: number }, lamp = false): UtilityPole {
+  addPole(at: { x: number; y: number }, lamp = false, kind: PoleKind = 'urban'): UtilityPole {
     const on = onWorld(at);
     const id = asPoleId(this.takeId('pole', on, this.poleIds));
-    const pole: UtilityPole = { id, x: on.x, y: on.y, lamp };
+    const pole: UtilityPole = { id, x: on.x, y: on.y, lamp, kind };
     this.putPoleRecord(pole);
     this.changes.record('utilities', [rectAround([pole], ITEM_PAD)!], { ids: [id] });
     return pole;
@@ -1558,7 +1558,7 @@ export class RoadDoc {
     const utilityIds: number[] = [];
     const piecePoles = new Map<PoleId, UtilityPole>();
     for (const p of [...records.poles, ...records.borrowedPoles.filter((q) => !ownedPoles.has(q.id))]) {
-      if (!piecePoles.has(asPoleId(p.id))) piecePoles.set(asPoleId(p.id), { id: asPoleId(p.id), x: p.x, y: p.y, lamp: p.lamp ?? false });
+      if (!piecePoles.has(asPoleId(p.id))) piecePoles.set(asPoleId(p.id), loadedPole(p));
     }
     for (const [id, pole] of piecePoles) {
       if (ownedPoles.has(id) || !this.poleMap.has(id)) { this.putPoleRecord(pole); utilityIds.push(id); }
@@ -2277,7 +2277,7 @@ export class RoadDoc {
           put(this.nodes as Map<number, RoadNode>); this.loose.add(id as NodeId); roadsTouched = true; nodeIds.push(id); break;
         }
         case 'segments': put(this.segments as Map<number, RoadSegment>); roadsTouched = true; traffic = true; segmentIds.push(id); break;
-        case 'poles': if (value === undefined) this.deletePoleRecord(id as PoleId); else this.putPoleRecord(structuredClone(value) as UtilityPole); kinds.add('utilities'); utilityIds.push(id); break;
+        case 'poles': if (value === undefined) this.deletePoleRecord(id as PoleId); else this.putPoleRecord(loadedPole(value as SavedPole)); kinds.add('utilities'); utilityIds.push(id); break;
         case 'poleSpans': if (value === undefined) this.deleteSpanRecord(id as SpanId); else this.putSpanRecord(structuredClone(value) as UtilitySpan); kinds.add('utilities'); utilityIds.push(id); break;
         case 'landscape':
           if (value === undefined) this.deleteLandscapeRecord(id); else this.putLandscapeRecord(structuredClone(value) as LandscapeItem);
@@ -2810,9 +2810,8 @@ export class RoadDoc {
 
     // The utility network, if the map has one.
     for (const p of data.poles ?? []) {
-      const id = asPoleId(p.id);
       const at = repair ? onWorld(p) : p;
-      doc.putPoleRecord({ id, x: at.x, y: at.y, lamp: p.lamp ?? false });
+      doc.putPoleRecord(loadedPole({ ...p, x: at.x, y: at.y }));
       doc.poleIds.reserve(p.id);
     }
     for (const s of data.poleSpans ?? []) {
@@ -3221,7 +3220,8 @@ export interface SerializedDoc {
   /** The ecosystem (`NatureSettings`); absent on maps made before it. */
   readonly nature?: { readonly region: string; readonly seed: number };
   /** The utility network. */
-  readonly poles?: readonly { id: number; x: number; y: number; lamp?: boolean }[];
+  /** `kind` absent on maps made before it: urban (`loadedPole`). */
+  readonly poles?: readonly { id: number; x: number; y: number; lamp?: boolean; kind?: PoleKind }[];
   readonly poleSpans?: readonly { id: number; a: number; b: number }[];
   /** Ground painted over the terrain (`terrainPaint.ts`); OPTIONAL. */
   readonly paint?: readonly { kind: string; x: number; y: number; radius: number; strength: number }[];
@@ -3440,7 +3440,7 @@ function itemDifferences(a: RoadDoc, b: RoadDoc, moved: MovedKinds): { utilities
   const utilities: ChangeRect[] = [], landscape: ChangeRect[] = [], barriers: ChangeRect[] = [];
   const at = (p: { x: number; y: number }): ChangeRect => rectAround([p], ITEM_PAD)!;
   if (moved('utilities')) {
-    for (const [id, p] of a.poles) { const q = b.poles.get(id); if (!q || p.x !== q.x || p.y !== q.y || p.lamp !== q.lamp) { utilities.push(at(p)); if (q) utilities.push(at(q)); } }
+    for (const [id, p] of a.poles) { const q = b.poles.get(id); if (!q || p.x !== q.x || p.y !== q.y || p.lamp !== q.lamp || p.kind !== q.kind) { utilities.push(at(p)); if (q) utilities.push(at(q)); } }
     for (const [id, q] of b.poles) if (!a.poles.has(id)) utilities.push(at(q));
     const spanRect = (doc: RoadDoc, s: UtilitySpan): ChangeRect | null => {
       const p = doc.poles.get(s.a), q = doc.poles.get(s.b);
@@ -3687,7 +3687,11 @@ export function savedSegment(s: RoadSegment): SerializedDoc['segments'][number] 
 }
 
 /** A pole, a span, a landscaping item and a barrier as the file holds them. */
-export const savedPole = (p: UtilityPole): NonNullable<SerializedDoc['poles']>[number] => ({ id: p.id, x: p.x, y: p.y, lamp: p.lamp });
+export const savedPole = (p: UtilityPole): SavedPole => ({ id: p.id, x: p.x, y: p.y, lamp: p.lamp, kind: p.kind });
+/** A pole as a file holds it. */
+type SavedPole = NonNullable<SerializedDoc['poles']>[number];
+/** A pole from a file: one saved before poles had a kind stood on a street, urban. */
+const loadedPole = (p: SavedPole): UtilityPole => ({ id: asPoleId(p.id), x: p.x, y: p.y, lamp: p.lamp ?? false, kind: p.kind ?? 'urban' });
 export const savedSpan = (s: UtilitySpan): NonNullable<SerializedDoc['poleSpans']>[number] => ({ id: s.id, a: s.a, b: s.b });
 export const savedLandscape = (item: LandscapeItem): NonNullable<SerializedDoc['landscape']>[number] => ({ id: item.id, kind: item.kind, x: item.x, y: item.y,
   ...(item.signType ? { signType: item.signType } : {}), ...(item.text ? { text: item.text } : {}),

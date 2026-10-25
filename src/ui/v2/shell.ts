@@ -20,7 +20,7 @@ import {
 import type { TransitLine } from '@world/transit';
 import { blockGridChoice, roadGridShown, roadWidth, setRoadGridShown, setRoadWidth, setZoneColoursShown, signChoice, strikeChoice, zoneColoursShown } from '../toolChoices';
 import { SIGN_HAS_TEXT, SIGN_TEXT_MAX, SIGN_TYPES } from '@world/landscape';
-import { CLOUD_MODES, POLE_TOOL_MODES, cloudMode, setCloudMode, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, fogErase, paintKind, poleLampMode, poleToolMode, setFogErase, setPaintKind, setPoleLampMode, setPoleToolMode, setStreetscapeKind, streetscapeKind } from '../toolChoices';
+import { CLOUD_MODES, POLE_TOOL_MODES, cloudMode, setCloudMode, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, fogErase, paintKind, poleKind, poleLampMode, poleToolMode, setFogErase, setPaintKind, setPoleKind, setPoleLampMode, setPoleToolMode, setStreetscapeKind, streetscapeKind } from '../toolChoices';
 import { PAINT_KINDS, type PaintKind } from '@world/terrainPaint';
 
 /** The colour of each paintable ground, for its button. */
@@ -33,7 +33,7 @@ const PAINT_SWATCH: Readonly<Record<PaintKind, string>> = {
 const BIOME_SWATCHES = ['cerrado', 'atlantic', 'amazon', 'caatinga', 'pampa', 'pantanal'] as const;
 import { LANDSCAPE_KINDS } from '@world/landscape';
 import { BARRIER_KINDS } from '@world/barriers';
-import { POLE_LAMP_MODES } from '@world/utilities';
+import { POLE_KINDS, POLE_LAMP_MODES } from '@world/utilities';
 import { builderIconSvg } from '../builder/icons';
 import { SNAP_MODES, type BuilderState, type BuilderWorkspace } from '../builder/workspace';
 import { t, plural, onLanguageChange, LANGUAGES, language, setLanguage, formatDecimal } from '../i18n';
@@ -193,6 +193,9 @@ const ICON: Record<string, string> = {
   pl_none: '<path d="M8 21V4"/><path d="M4 7h8"/><path d="M15 9l5 5M20 9l-5 5"/>',
   pl_alternate: '<path d="M6 21V5h4M18 21V5"/><path d="M9 5l1 2H8Z"/><path d="M9 9l-.5 2" stroke-dasharray="1.5 1.5"/>',
   pl_all: '<path d="M6 21V5h4M18 21V5h-4"/><path d="M9 5l1 2H8ZM15 5l-1 2h2Z"/><path d="M9 9l-.5 2M15 9l.5 2" stroke-dasharray="1.5 1.5"/>',
+  // What a pole is built as: urban (the arm held out over the street, the rack and the light under it), rural (the arm across the crown)
+  pk_urban: '<path d="M7 21V3"/><path d="M7 4h12"/><path d="M11 3v1M15 3v1M19 3v1"/><path d="M7 9h2M7 11h2"/><path d="M7 15h5l1 1"/>',
+  pk_rural: '<path d="M12 21V3"/><path d="M5 4h14"/><path d="M5 3v1M14 3v1M19 3v1"/>',
   // Gullies: channels running down a slope (the canyon icon is the landform's).
   gully: '<path d="M3 4h18"/><path d="M6 4c1 4-2 7 0 11s0 4 1 5M12 4c2 5-1 8 1 12M18 4c1 3-2 6 0 10"/>',
   warn: '<path d="M12 3 2 20h20Z"/><path d="M12 10v4"/><path d="M12 17v.5"/>',
@@ -1567,6 +1570,10 @@ export function mountShell(deps: ShellDeps): ShellHandle {
       } else if (current === 'streetscape' && kindNow === 'streetname') {
         options.appendChild(orow(t('v2.row.text'), textInput(t('sign.street.placeholder'), signChoice.streetName, (v) => { signChoice.streetName = v; })));
       } else if (current === 'pole' && poleToolMode() === 'build') {
+        // What the next run's poles are built as: urban (the arm over the street) or rural (the arm across the crown).
+        options.appendChild(orow(t('v2.row.poleKind'), choices(POLE_KINDS.map((k) => ({
+          label: t(`pole.kind.${k}`), on: poleKind() === k, run: () => { setPoleKind(k); render(); }, icon: svg(`pk_${k}`, 18),
+        })))));
         // Street lights on the poles of the next run.
         options.appendChild(orow(t('v2.row.lights'), choices(POLE_LAMP_MODES.map((m) => ({
           label: `${t('pole.lamps')}: ${t(`pole.lamps.${m}`)}`, on: poleLampMode() === m, run: () => { setPoleLampMode(m); render(); }, icon: svg(`pl_${m}`, 18),

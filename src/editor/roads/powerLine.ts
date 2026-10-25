@@ -85,9 +85,10 @@ const BATCH = 24;
 function runPlanner(net: Network, streets: number): PlanRun {
   if (streets > BATCH) {
     const planner = poleRunPlanner(net);
-    return (doc, from, to) => planner.plan(doc, from, to, SNAP_REACH, undefined, 'all');
+    return (doc, from, to) => planner.plan(doc, from, to, SNAP_REACH, undefined, 'all', 'urban');
   }
-  return (doc, from, to) => planPoleRun(doc, net, from, to, SNAP_REACH, undefined, 'all');
+  // A street's line: urban poles, their arms over the street.
+  return (doc, from, to) => planPoleRun(doc, net, from, to, SNAP_REACH, undefined, 'all', 'urban');
 }
 
 /** Segments strung between two yields of `layPowerLinesSteps`. */

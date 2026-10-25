@@ -8,7 +8,7 @@ import { nearestOnContour, onFootway, poleLinesAt, poleLinesIn, poleLinesOf, typ
 import { type RouteGraph, buildRouteGraph, route } from './poleRoutes';
 import { CELL } from '@world/cells';
 import type { ChangeRect } from '@world/changes';
-import { DEFAULT_POLE_SPACING, MAX_POLE_SPACING, MIN_POLE_SPACING, poleCarriesLamp, type PoleLampMode } from '@world/utilities';
+import { DEFAULT_POLE_SPACING, MAX_POLE_SPACING, MIN_POLE_SPACING, poleCarriesLamp, type PoleKind, type PoleLampMode } from '@world/utilities';
 import { m } from '@world/units';
 
 /** Where a pole line goes: on the footway, just behind the kerb, and nowhere else */
@@ -67,6 +67,8 @@ interface PlannedPole {
   /** The pole already standing here, which the run will reuse. */
   readonly existing: PoleId | null;
   readonly lamp: boolean;
+  /** What it is built as: the run's kind for a new pole, its own for one standing. */
+  readonly kind: PoleKind;
 }
 
 type PoleRunRefusal = 'offFootway' | 'noPath';
@@ -153,7 +155,7 @@ const TILE = CELL * 4;
 
 /** Plans many runs over the same streets (`poleRunPlanner`). */
 export interface PoleRunPlanner {
-  plan(doc: RoadDoc, rawFrom: Vec2, rawTo: Vec2, reach: number, spacing?: number, lamps?: PoleLampMode): PoleRunPlan;
+  plan(doc: RoadDoc, rawFrom: Vec2, rawTo: Vec2, reach: number, spacing?: number, lamps?: PoleLampMode, kind?: PoleKind): PoleRunPlan;
 }
 
 /** DO NOT plan a batch of runs one region each: the lines are the same. */
@@ -174,12 +176,12 @@ export function poleRunPlanner(net: Network): PoleRunPlanner {
   const inner = (r: ChangeRect, p: Vec2): boolean =>
     p.x >= r[0] + ROUTE_MARGIN && p.x <= r[2] - ROUTE_MARGIN && p.y >= r[1] + ROUTE_MARGIN && p.y <= r[3] - ROUTE_MARGIN;
   return {
-    plan(doc, rawFrom, rawTo, reach, spacing = DEFAULT_POLE_SPACING, lamps = 'alternate') {
+    plan(doc, rawFrom, rawTo, reach, spacing = DEFAULT_POLE_SPACING, lamps = 'alternate', kind = 'urban') {
       const tile = tileAt(rawFrom);
       if (!inner(tile.region, rawFrom) || !inner(tile.region, rawTo)) {
-        return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, regional(net, ROUTE_MARGIN));
+        return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, kind, regional(net, ROUTE_MARGIN));
       }
-      return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, {
+      return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, kind, {
         linesAt: () => tile.lines,
         route: (from, to) => {
           const a = placeOf(tile.lines, from);
@@ -245,15 +247,16 @@ export function planPoleRun(
   reach: number,
   spacing = DEFAULT_POLE_SPACING,
   lamps: PoleLampMode = 'alternate',
+  kind: PoleKind = 'urban',
 ): PoleRunPlan {
   // The preview asks for the plan every frame (`main.ts`), and the same plan while the pointer stands still
   const poles = doc.changes.serialOf('utilities');
   const k = lastPlan;
   if (k && k.doc === doc && k.net === net && k.revision === net.revision && k.poles === poles &&
       k.fx === rawFrom.x && k.fy === rawFrom.y && k.tx === rawTo.x && k.ty === rawTo.y &&
-      k.reach === reach && k.spacing === spacing && k.lamps === lamps) return k.plan;
-  const plan = computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, regional(net, ROUTE_MARGIN));
-  lastPlan = { doc, net, revision: net.revision, poles, fx: rawFrom.x, fy: rawFrom.y, tx: rawTo.x, ty: rawTo.y, reach, spacing, lamps, plan };
+      k.reach === reach && k.spacing === spacing && k.lamps === lamps && k.kind === kind) return k.plan;
+  const plan = computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, kind, regional(net, ROUTE_MARGIN));
+  lastPlan = { doc, net, revision: net.revision, poles, fx: rawFrom.x, fy: rawFrom.y, tx: rawTo.x, ty: rawTo.y, reach, spacing, lamps, kind, plan };
   return plan;
 }
 
@@ -261,15 +264,15 @@ export function planPoleRun(
 let lastPlan: {
   readonly doc: RoadDoc; readonly net: Network; readonly revision: number; readonly poles: number;
   readonly fx: number; readonly fy: number; readonly tx: number; readonly ty: number;
-  readonly reach: number; readonly spacing: number; readonly lamps: PoleLampMode; readonly plan: PoleRunPlan;
+  readonly reach: number; readonly spacing: number; readonly lamps: PoleLampMode; readonly kind: PoleKind; readonly plan: PoleRunPlan;
 } | null = null;
 
 /** `planPoleRun` routed over the lines of a region covering the whole map (every street within `ROUTE_MARGIN_MOST`) */
 export function planPoleRunWhole(
   doc: RoadDoc, net: Network, rawFrom: Vec2, rawTo: Vec2, reach: number,
-  spacing = DEFAULT_POLE_SPACING, lamps: PoleLampMode = 'alternate',
+  spacing = DEFAULT_POLE_SPACING, lamps: PoleLampMode = 'alternate', kind: PoleKind = 'urban',
 ): PoleRunPlan {
-  return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, regional(net, ROUTE_MARGIN_MOST));
+  return computePoleRun(doc, net, rawFrom, rawTo, reach, spacing, lamps, kind, regional(net, ROUTE_MARGIN_MOST));
 }
 
 function computePoleRun(
@@ -280,6 +283,7 @@ function computePoleRun(
   reach: number,
   spacing: number,
   lamps: PoleLampMode,
+  kind: PoleKind,
   routing: Routing,
 ): PoleRunPlan {
   const from = snapOn(doc, net, routing.linesAt(rawFrom), rawFrom, reach);
@@ -352,8 +356,9 @@ function computePoleRun(
     const planned: PlannedPole = {
       at: existing ? { x: existing.x, y: existing.y } : p,
       existing: existing?.id ?? null,
-      // A pole that already exists keeps the lamp it has.
+      // A pole that already exists keeps the lamp it has, and what it is built as.
       lamp: existing ? existing.lamp : lampFor(index, lamps),
+      kind: existing ? existing.kind : kind,
     };
     const prev = poles[poles.length - 1];
     // The same standing pole twice in a row is one pole.
@@ -374,7 +379,7 @@ export function commitPoleRunPoles(doc: RoadDoc, plan: PoleRunPlan): PoleId[] | 
   if (plan.refused || plan.poles.length < 2) return null;
 
   const ids: PoleId[] = plan.poles.map(
-    (pole) => pole.existing ?? doc.addPole({ x: pole.at.x, y: pole.at.y }, pole.lamp).id,
+    (pole) => pole.existing ?? doc.addPole({ x: pole.at.x, y: pole.at.y }, pole.lamp, pole.kind).id,
   );
 
   let built = false;
@@ -392,9 +397,10 @@ export interface PoleToolHost {
   readonly doc: RoadDoc;
   readonly net: Network;
   zoom(): number;
-  /** The tool's verb ('build' or 'remove', `ui/toolChoices.ts`) and its lamps. */
+  /** The tool's verb ('build' or 'remove', `ui/toolChoices.ts`), its lamps and the kind of pole it builds. */
   mode(): string;
   lamps(): PoleLampMode;
+  kind(): PoleKind;
   /** Whether the pole tool is the tool in hand. */
   inHand(): boolean;
   /** An edit of the document, one undo step; whether it changed it. */
@@ -441,9 +447,9 @@ export class PoleTool {
       this.lastMode = host.mode();
       this.cancel();
     }
-    if (this.draft) return planPoleRun(host.doc, host.net, this.draft.from, this.draft.to, this.reach(), undefined, host.lamps());
+    if (this.draft) return planPoleRun(host.doc, host.net, this.draft.from, this.draft.to, this.reach(), undefined, host.lamps(), host.kind());
     if (host.inHand() && host.mode() === 'build' && this.chain && this.hover) {
-      return planPoleRun(host.doc, host.net, this.chain, this.hover, this.reach(), undefined, host.lamps());
+      return planPoleRun(host.doc, host.net, this.chain, this.hover, this.reach(), undefined, host.lamps(), host.kind());
     }
     return null;
   }
@@ -489,7 +495,7 @@ export class PoleTool {
     const { host } = this;
     const run = this.draft;
     if (!run) return;
-    const plan = planPoleRun(host.doc, host.net, run.from, run.to, this.reach(), undefined, host.lamps());
+    const plan = planPoleRun(host.doc, host.net, run.from, run.to, this.reach(), undefined, host.lamps(), host.kind());
     this.draft = null;
     if (!commit) { this.chain = null; return; }
     const last = plan.poles[plan.poles.length - 1];

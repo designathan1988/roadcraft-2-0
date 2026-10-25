@@ -21,7 +21,7 @@ import type { PoleId, SpanId } from '@world/ids';
 import type { Network } from '@world/network';
 import { PoleIndex } from '@world/poleIndex';
 import { m } from '@world/units';
-import type { PoleArms, UtilityPole, UtilitySpan } from '@world/utilities';
+import type { PoleArms, PoleKind, UtilityPole, UtilitySpan } from '@world/utilities';
 import {
   type PartBounds,
   type PartShape,
@@ -78,6 +78,7 @@ interface PoleState {
   readonly top: number;
   readonly kerb: { x: number; y: number } | null;
   readonly frame: PoleArms;
+  readonly kind: PoleKind;
   /** Its slots in each part's mesh (`POLE_PART`). */
   readonly slots: number[][];
 }
@@ -653,7 +654,7 @@ export class PoleLayer implements Utilities {
       out.forEach((list, part) => { for (const placement of list) slots[part]!.push(block.parts[part]!.add(pole.id, placement)); });
     }
     block.poles.add(pole.id);
-    this.poles.set(pole.id, { block: key, x: pole.x, y: pole.y, top, kerb, frame, slots });
+    this.poles.set(pole.id, { block: key, x: pole.x, y: pole.y, top, kerb, frame, kind: pole.kind, slots });
     this.index.putPole(pole);
   }
 
@@ -682,7 +683,7 @@ export class PoleLayer implements Utilities {
     if (!a || !b) return;
     // In the block of its first pole.
     const key = a.block;
-    const block = this.block(key).wires.add(span, wireEnd(span, a), wireEnd(span, b));
+    const block = this.block(key).wires.add(span, wireEnd(span, a, a.kind), wireEnd(span, b, b.kind));
     this.spans.set(span.id, { span, key, block });
     this.index.putSpan(span);
   }
@@ -754,7 +755,7 @@ export function buildUtilities(
 
 /** A planned pole run, as the editor would build it: in order, each pole new or already standing. */
 export interface PolePreviewInput {
-  readonly poles: readonly { readonly x: number; readonly y: number; readonly lamp: boolean; readonly standing: boolean }[];
+  readonly poles: readonly { readonly x: number; readonly y: number; readonly lamp: boolean; readonly kind: PoleKind; readonly standing: boolean }[];
 }
 
 /** The run under the pointer, drawn as it will stand */
@@ -770,7 +771,7 @@ export function buildPolePreview(
   const standing = new Set<PoleId>();
   input.poles.forEach((pole, index) => {
     const id = (index + 1) as PoleId;
-    poles.set(id, { id, x: pole.x, y: pole.y, lamp: pole.lamp });
+    poles.set(id, { id, x: pole.x, y: pole.y, lamp: pole.lamp, kind: pole.kind });
     if (pole.standing) standing.add(id);
     if (index === 0) return;
     const span: UtilitySpan = { id: index as SpanId, a: index as PoleId, b: id };

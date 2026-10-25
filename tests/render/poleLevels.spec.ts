@@ -64,7 +64,8 @@ describe('the pole layer as the camera sees it', () => {
     // chord, creased between the tube's two faces seen (the tube drew 8 * 24). The far line's wires by a coarser template, their own.
     expect(drawn(wires!)).toBe(true);
     expect((wires!.geometry as InstancedBufferGeometry).index!.count).toBe(8 * 12);
-    expect((wires!.geometry as InstancedBufferGeometry).instanceCount).toBe(9 * 4);
+    // The near line's 4 spans, 5 wires each: the 3 primary and the 2 secondary of urban poles (9 a span before 2026-10-25).
+    expect((wires!.geometry as InstancedBufferGeometry).instanceCount).toBe(5 * 4);
     expect((farWires!.geometry as InstancedBufferGeometry).index!.count).toBeLessThan(8 * 12);
     // Near, the finest mast.
     const masts = named(layer.group, 'utility-poles')[0]!;

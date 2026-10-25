@@ -52,7 +52,7 @@ import {
   planPoleRun,
   type PoleRunPlan,
 } from '@editor/poles';
-import { blockGridChoice, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleLampMode, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
+import { blockGridChoice, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleKind, poleLampMode, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
 import { TERRAIN_MIN_MS, TerrainBrush, type DabSettings } from '@editor/terrainBrush';
 import { CLOUD_SPAN, scatterClouds } from '@world/clouds';
 import { CloudTool } from '@editor/cloudTool';
@@ -491,6 +491,7 @@ const poleTool = new PoleTool({
   zoom: () => view.zoom,
   mode: () => poleToolMode(),
   lamps: () => poleLampMode(),
+  kind: () => poleKind(),
   inHand: () => game.tool === 'pole',
   mutate: (fn) => mutateBuilt(fn),
   hint: (key) => flashHint(key),
@@ -2699,7 +2700,7 @@ function frame(now: number): void {
   // The pole run under the pointer, planned once per frame
   framePolePlan = poleTool.plan();
   scene.setPolePreview(net, framePolePlan && !framePolePlan.refused && framePolePlan.poles.length >= 2
-    ? { poles: framePolePlan.poles.map((pole) => ({ x: pole.at.x, y: pole.at.y, lamp: pole.lamp, standing: pole.existing !== null })) }
+    ? { poles: framePolePlan.poles.map((pole) => ({ x: pole.at.x, y: pole.at.y, lamp: pole.lamp, kind: pole.kind, standing: pole.existing !== null })) }
     : null);
   frameTimer.mark('poles');
   scene.draw(net, sim, alpha, wall, { holdRoads: terrainBrush.stroking });

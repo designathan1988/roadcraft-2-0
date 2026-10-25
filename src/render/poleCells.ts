@@ -204,7 +204,7 @@ export class PoleCells implements Utilities {
         if (span.a !== pole.id) continue;
         const other = doc.poles.get(span.b);
         if (!other) continue;
-        block.wires.add(span, wireEnd(span, frameOf(pole)), wireEnd(span, frameOf(other)));
+        block.wires.add(span, wireEnd(span, frameOf(pole), pole.kind), wireEnd(span, frameOf(other), other.kind));
       }
     }
     for (const part of block.parts) part.flush();

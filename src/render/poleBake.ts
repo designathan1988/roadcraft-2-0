@@ -2,8 +2,8 @@ import type { PoleId, SpanId } from '@world/ids';
 import type { Network } from '@world/network';
 import { kerbward } from '@world/poleLines';
 import { m } from '@world/units';
-import { POLE_HEIGHT, type PoleArms, poleArmsAt, type UtilityPole, type UtilitySpan } from '@world/utilities';
-import { type Placement, SPAN_WIRES, WIRE_STRIDE, spanWires } from './utilities';
+import { POLE_HEIGHT, type PoleArms, type PoleKind, poleArmsAt, poleToward, streetArm, type UtilityPole, type UtilitySpan } from '@world/utilities';
+import { type Placement, SPAN_WIRES, type SpanEnd, WIRE_STRIDE } from './utilities';
 
 /** WHAT THE POLE LAYER'S PARTS SHARE (`poleLayer.ts`): a pole's frame, a wire's ends, a cell's bounds */
 /** What a pole layer is built from: the document's poles and spans, or a planned run (`buildPolePreview`). */
@@ -57,6 +57,8 @@ export function growWires(b: WireBounds, d: Float32Array, at: number): boolean {
   let moved = false;
   const x = b.box;
   for (let i = at; i < at + WIRE_BLOCK; i += WIRE_STRIDE) {
+    // An empty slot (`WIRE_ABSENT`): no wire to take in.
+    if (d[i + 6]! < 0) continue;
     for (const k of [i, i + 3]) {
       if (d[k]! < x[0]! || d[k + 1]! < x[1]! || d[k + 2]! < x[2]! || d[k]! > x[3]! || d[k + 1]! > x[4]! || d[k + 2]! > x[5]!) {
         x[0] = Math.min(x[0]!, d[k]!); x[1] = Math.min(x[1]!, d[k + 1]!); x[2] = Math.min(x[2]!, d[k + 2]!);
@@ -82,6 +84,10 @@ export function framePole(net: Network, groundAt: (x: number, y: number) => numb
   return { top, kerb, frame };
 }
 
-/** A span's end at a pole, as its wires read it: the pole's place and top, and its arm for the span. */
-export const wireEnd = (span: UtilitySpan, at: { readonly x: number; readonly y: number; readonly top: number; readonly frame: PoleArms }): Parameters<typeof spanWires>[1] =>
-  ({ x: at.x, y: at.y, top: at.top, arm: at.frame.bySpan.get(span.id) ?? { x: 0, y: 1 } });
+/** A span's end at a pole, as its wires read it: the pole's place and top, its arm for the span turned toward the street the way its parts
+ *  are (`utilities.ts` placePole: `poleToward`, `streetArm`), and its kind. */
+export function wireEnd(span: UtilitySpan, at: { readonly x: number; readonly y: number; readonly top: number; readonly kerb: { x: number; y: number } | null;
+  readonly frame: PoleArms }, kind: PoleKind): SpanEnd {
+  const toward = poleToward(at.kerb, at.frame.arms[0] ?? { x: 0, y: 1 });
+  return { x: at.x, y: at.y, top: at.top, arm: streetArm(at.frame.bySpan.get(span.id) ?? { x: 0, y: 1 }, toward), kind };
+}

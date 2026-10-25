@@ -24,7 +24,7 @@ function tool(mode = 'build'): { pole: PoleTool; doc: RoadDoc; hints: string[] }
   const { doc, net } = street();
   const hints: string[] = [];
   const host: PoleToolHost = {
-    doc, net, zoom: () => 2 / U, mode: () => mode, lamps: () => 'none', inHand: () => true,
+    doc, net, zoom: () => 2 / U, mode: () => mode, lamps: () => 'none', kind: () => 'urban', inHand: () => true,
     mutate: (fn) => fn(), hint: (key) => hints.push(key), redraw: () => {},
   };
   return { pole: new PoleTool(host), doc, hints };
@@ -78,7 +78,7 @@ describe('the pole tool', () => {
     click(built.pole, { x: -60 * U, y: Y });
     const [first] = [...built.doc.poles.values()];
     const removing = new PoleTool({
-      doc: built.doc, net: new Network(built.doc), zoom: () => 2 / U, mode: () => 'remove', lamps: () => 'none', inHand: () => true,
+      doc: built.doc, net: new Network(built.doc), zoom: () => 2 / U, mode: () => 'remove', lamps: () => 'none', kind: () => 'urban', inHand: () => true,
       mutate: (fn) => fn(), hint: () => {}, redraw: () => {},
     });
     const before = built.doc.poles.size;
@@ -101,7 +101,7 @@ describe('the pole tool', () => {
     const net = new Network(doc);
     net.rebuild();
     const pole = new PoleTool({
-      doc, net, zoom: () => 2 / U, mode: () => 'build', lamps: () => 'none', inHand: () => true,
+      doc, net, zoom: () => 2 / U, mode: () => 'build', lamps: () => 'none', kind: () => 'urban', inHand: () => true,
       mutate: (fn) => fn(), hint: () => {}, redraw: () => {},
     });
     click(pole, { x: cx - 200 * U, y: cy + Y });

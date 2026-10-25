@@ -148,7 +148,7 @@ export function buildingItems(add: Add, counts: Map<string, CountEntry>, list: B
 export function previewItems(add: Add): void {
   // A network of its own, empty: the previews stand on no city.
   const net = new Network(new RoadDoc());
-  const poles = buildPolePreview(net, () => 0, createSceneryKit(), { poles: [{ x: 0, y: 0, lamp: true, standing: true }, { x: 30, y: 0, lamp: false, standing: true }, { x: 60, y: 0, lamp: true, standing: true }] });
+  const poles = buildPolePreview(net, () => 0, createSceneryKit(), { poles: [{ x: 0, y: 0, lamp: true, kind: 'urban', standing: true }, { x: 30, y: 0, lamp: false, kind: 'urban', standing: true }, { x: 60, y: 0, lamp: true, kind: 'urban', standing: true }] });
   add({ group: 'Editor previews', name: 'pole run', variation: '3 poles', origin: 'editor preview', preview: true, source: 'src/render/poleLayer.ts (buildPolePreview)', build: 'individual', pieces: buildingPieces(poles.group), object: poles.group });
   const track = buildTrackPreview([{ x: 0, y: 0 }, { x: 100, y: 0 }], 'train', () => 0);
   add({ group: 'Editor previews', name: 'railway', variation: '100 m', origin: 'editor preview', preview: true, source: 'src/render/transit.ts (buildTrackPreview)', build: 'individual', pieces: buildingPieces(track.group), object: track.group });

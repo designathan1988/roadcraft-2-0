@@ -10,19 +10,40 @@ export const POLE_HEIGHT = m(8.5);
 /** Radius at the crown and at the foot. A pole tapers. */
 export const POLE_TOP_RADIUS = m(0.11);
 export const POLE_BASE_RADIUS = m(0.18);
-/** Half-length of the cross-arm the wires are strung from. */
-export const POLE_ARM_HALF = m(0.85);
-/** How far below the crown the cross-arm sits. */
-export const POLE_ARM_DROP = m(0.55);
-export const POLE_ARM_THICK = m(0.1);
-/** Vertical spacing between the wire courses on the arm. */
-export const WIRE_COURSES: readonly number[] = [0, -m(0.45), -m(0.9)];
-/** Lateral position of each wire on the cross-arm, as a fraction of its half. */
-export const WIRE_OFFSETS: readonly number[] = [-0.8, 0, 0.8];
 
-/** Lamp arm reach and head, for the poles that carry a light. */
+/**
+ * WHAT A POLE IS BUILT AS, after a distributor's standard structures (CELESC E-313.0002, "Estruturas para redes aereas convencionais de
+ * distribuicao", 2024: https://www.celesc.com.br/arquivos/normas-tecnicas/especificacao-tecnica/E3130002.pdf):
+ * - URBAN: the cross-arm held out over the street from the mast (the "beco" structure B1, Figura 43), the three primary wires on its pin
+ *   insulators; under it the secondary rack (structure S1, Figura 71) with two wires one over the other; the street light under every wire.
+ * - RURAL (outside the city): the cross-arm across the crown (the "normal" structure N1, Figura 31), the three primary wires alone.
+ * DO NOT string wires in rows round the mast again: a span carried 9 (three courses of three, the middle one through the mast), and the lamp
+ * hung among them.
+ */
+export const POLE_KINDS = ['urban', 'rural'] as const;
+export type PoleKind = (typeof POLE_KINDS)[number];
+
+/** The cross-arm (2.0 m, Figura 16): its top this far under the crown (Figura 31: 15 cm), its section. */
+export const POLE_ARM_DROP = m(0.15);
+export const POLE_ARM_THICK = m(0.1);
+/** Its two ends along it from the mast's axis, toward the street (urban: the mast at its end) or across the crown (rural). */
+export const POLE_ARM_SPAN: Readonly<Record<PoleKind, readonly [number, number]>> = { urban: [0, m(2)], rural: [-m(1), m(1)] };
+/** Where the primary wires' pin insulators stand along it, from the mast's axis (Figura 16: B1 at 55, 125 and 185 cm; N1 at -95, 35 and 95). */
+export const POLE_PRIMARY: Readonly<Record<PoleKind, readonly number[]>> = { urban: [m(0.55), m(1.25), m(1.85)], rural: [-m(0.95), m(0.35), m(0.95)] };
+/** A pin insulator's height: a primary wire rests on its top. */
+export const POLE_INSULATOR_TALL = m(0.2);
+/** The brace under the arm (the "mao francesa"): from the mast this far under the arm's top (Figura 31: 50 cm) to the arm this far out. */
+export const POLE_BRACE_DROP = m(0.5);
+export const POLE_BRACE_REACH = m(0.45);
+/** The secondary rack's spools (S1): 20 cm apart (spans to 40 m), the upper 1.3 m under the crown - at least 80 cm under the primary between
+ *  circuits (Figura 1, 13.8 kV) - each this far out from the mast's axis on the street's side. An urban pole carries two. */
+export const POLE_SECONDARY_OUT = m(0.22);
+export const POLE_SECONDARY_DROPS: readonly number[] = [m(1.3), m(1.5)];
+
+/** Lamp arm reach and head, for the poles that carry a light: the head under every wire (the bracket's foot ~6.3 m up, as a town's street
+ *  lighting fixes it: https://saiserver.pelotas.com.br/anexos_licitacao/arq_objeto/2023-07-31_11-49-22_objeto_Anexo_02.pdf). */
 export const POLE_LAMP_REACH = m(1.6);
-export const POLE_LAMP_DROP = m(1.1);
+export const POLE_LAMP_DROP = m(2);
 export const POLE_LAMP_LONG = m(0.5);
 export const POLE_LAMP_TALL = m(0.14);
 export const POLE_LAMP_WIDE = m(0.26);
@@ -46,6 +67,44 @@ export interface UtilityPole {
   y: number;
   /** Whether this pole carries a street light. */
   lamp: boolean;
+  /** What it is built as (`POLE_KINDS`). */
+  kind: PoleKind;
+}
+
+/** A wire's seat on a pole: how far along the arm toward the street (or across the crown) from the mast's axis, and how far over (+) or
+ *  under (-) the crown. */
+export interface WireSeat {
+  readonly along: number;
+  readonly rise: number;
+}
+
+/** The primary wires' seats on a pole of `kind`: on its insulators' tops. */
+export function primarySeats(kind: PoleKind): readonly WireSeat[] {
+  return POLE_PRIMARY[kind].map((along) => ({ along, rise: POLE_INSULATOR_TALL - POLE_ARM_DROP }));
+}
+
+/** The secondary wires' seats: on an urban pole's rack, none on a rural one. */
+export function secondarySeats(kind: PoleKind): readonly WireSeat[] {
+  return kind === 'urban' ? POLE_SECONDARY_DROPS.map((drop) => ({ along: POLE_SECONDARY_OUT, rise: -drop })) : [];
+}
+
+/** The wires a span between poles of these kinds carries: the three primary always, the two secondary between two urban poles. */
+export function spanCarries(a: PoleKind, b: PoleKind): { readonly primary: number; readonly secondary: number } {
+  return { primary: POLE_PRIMARY.urban.length, secondary: a === 'urban' && b === 'urban' ? POLE_SECONDARY_DROPS.length : 0 };
+}
+
+/** Which way a pole's arms reach out (toward the street): the way to the kerb, or off the streets a way fixed in the world - its arm turned
+ *  positive along its larger axis, the same at every pole of a line however it wanders, so its wires never cross from one side to the other
+ *  between two poles (a sign of x alone flipped between the poles of a line running along y). */
+export function poleToward(kerb: Vec2 | null, arm: Vec2): Vec2 {
+  if (kerb) return kerb;
+  const back = Math.abs(arm.x) >= Math.abs(arm.y) ? arm.x < 0 : arm.y < 0;
+  return back ? { x: -arm.x, y: -arm.y } : arm;
+}
+
+/** An arm turned to reach toward the street (`poleToward`): itself or its opposite. */
+export function streetArm(arm: Vec2, toward: Vec2): Vec2 {
+  return arm.x * toward.x + arm.y * toward.y >= 0 ? arm : { x: -arm.x, y: -arm.y };
 }
 
 export interface UtilitySpan {

@@ -23,11 +23,17 @@ import { WIRE_WIDTH, wireChords } from '../render/utilities';
 const WIDTH = 1920, HEIGHT = 1080, FOV = 35;
 /** The poles: every 30 m along x (a street's span) from just ahead of the eye to the horizon, on two lines beside the eye's way. */
 const SPAN = m(30), FIRST = m(4), LAST = m(2700);
-const LINES = [m(7), -m(16)];
-/** The views: from the street and from the air, each looking down the lines. */
+/** The two lines: urban poles (the arm over the street, the rack, the light under the wires) and rural ones (`@world/utilities` POLE_KINDS). */
+const LINES = [{ y: m(7), kind: 'urban' }, { y: -m(16), kind: 'rural' }] as const;
+/** The views: from the street and from the air, each looking down the lines; and a pole of each line close up, three quarters on (the
+ *  third pole of each, 64 m along, a lamp on it). */
 const VIEWS = [
   { name: 'street', eye: new Vector3(-m(6), m(6), 0), at: new Vector3(m(400), m(5), 0) },
   { name: 'aerial', eye: new Vector3(-m(60), m(150), m(60)), at: new Vector3(m(500), 0, 0) },
+  { name: 'urban-close', eye: new Vector3(m(56), m(7), m(1)), at: new Vector3(m(64), m(7.2), -m(7)) },
+  { name: 'rural-close', eye: new Vector3(m(56), m(7), m(8)), at: new Vector3(m(64), m(7.2), m(16)) },
+  // The urban pole from its arm's side (world +y, three's -z): its rack and spools, every wire on its support.
+  { name: 'urban-rack', eye: new Vector3(m(59), m(7.4), -m(11)), at: new Vector3(m(64), m(7.6), -m(7)) },
 ] as const;
 
 /** One frame of the sheet: the picture, what three drew, the wires' triangles, and where each span's middle stands on it with its size. */
@@ -42,6 +48,8 @@ export interface WireFrame {
   /** The triangles of the wires with an area: each wire's own chords as the vertex shader keeps them (`utilities.ts` WIRE_GLSL wireChords),
    *  4 a chord creased, 2 once thinner than 1.5 px at its nearest - worked out here on the CPU by the same rules, not read from the GPU. */
   readonly wireAreaTriangles: number;
+  /** The triangles three sends for each of the layer's meshes drawn this frame, summed by name (index / 3 x instances). */
+  readonly meshes: Readonly<Record<string, number>>;
   /** Each span's middle on the frame (pixels from the top left), its distance, and a metre's pixels there (`props` for the compare's crops). */
   readonly props: readonly { readonly distance: number; readonly x: number; readonly y: number; readonly px: number }[];
 }
@@ -57,10 +65,10 @@ export async function wireLadderFrames(): Promise<WireFrame[]> {
   renderer.setSize(WIDTH, HEIGHT, false);
   const kit = createSceneryKit();
   const doc = new RoadDoc();
-  for (const y of LINES) {
+  for (const { y, kind } of LINES) {
     let last: PoleId | null = null;
     for (let x = FIRST, i = 0; x <= LAST; x += SPAN, i++) {
-      const id = doc.addPole({ x, y }, i % 2 === 0).id;
+      const id = doc.addPole({ x, y }, i % 2 === 0, kind).id;
       if (last !== null) doc.addPoleSpan(last, id);
       last = id;
     }
@@ -123,22 +131,33 @@ export async function wireLadderFrames(): Promise<WireFrame[]> {
       // Each wire's own chords, at most the template's: its chord's nearest point to the eye less its sag (`WIRE_GLSL` wireScale).
       const finest = g.index!.count / 12, data = (g.getAttribute('aStart') as InterleavedBufferAttribute).data.array as Float32Array;
       for (let i = 0; i < g.instanceCount; i++) {
+        // An empty slot (`WIRE_ABSENT`): no wire.
+        if (data[i * 8 + 6]! < 0) continue;
         const o8 = i * 8, a = new Vector3(data[o8], data[o8 + 1], data[o8 + 2]), c = new Vector3(data[o8 + 3], data[o8 + 4], data[o8 + 5]).sub(a);
         const k = Math.min(1, Math.max(0, eye.clone().sub(a).dot(c) / Math.max(c.lengthSq(), 1e-8)));
         const near = Math.max(a.clone().addScaledVector(c, k).distanceTo(eye) - data[o8 + 6]!, 1e-4);
         wireAreaTriangles += (WIRE_WIDTH * (perUnit / near) >= 1.5 ? 4 : 2) * Math.min(finest, wireChords(perUnit / near, data[o8 + 6]!));
       }
     });
+    const meshes: Record<string, number> = {};
+    layer.group.traverse((o) => {
+      const mesh = o as InstancedMesh;
+      if (!mesh.isMesh || !shown(o)) return;
+      const g = mesh.geometry as InstancedBufferGeometry;
+      const count = mesh.isInstancedMesh ? mesh.count : g.isInstancedBufferGeometry ? g.instanceCount : 1;
+      const perOne = (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+      if (count > 0) meshes[o.name] = (meshes[o.name] ?? 0) + perOne * count;
+    });
     const props = [];
     for (let x = FIRST + SPAN / 2; x <= LAST; x += SPAN) {
       // The nearer line's span middle, a few metres up (three's axes).
-      const mid = new Vector3(x, m(6), -LINES[0]!);
+      const mid = new Vector3(x, m(6), -LINES[0].y);
       const w = mid.clone().applyMatrix4(camera.matrixWorldInverse).z;
       if (w >= 0) continue;
       const at = mid.clone().project(camera);
       props.push({ distance: x - v.eye.x, x: Math.round(((at.x + 1) / 2) * WIDTH), y: Math.round(((1 - at.y) / 2) * HEIGHT), px: perUnitAtOne / -w });
     }
-    out.push({ name: v.name, png, drawCalls, triangles, wires, wireTriangles: wires.reduce((s, x) => s + x.count * x.triangles, 0), wireAreaTriangles, props });
+    out.push({ name: v.name, png, drawCalls, triangles, wires, wireTriangles: wires.reduce((s, x) => s + x.count * x.triangles, 0), wireAreaTriangles, meshes, props });
   }
   layer.dispose();
   pmrem.dispose();
