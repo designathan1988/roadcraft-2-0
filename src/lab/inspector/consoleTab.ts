@@ -23,7 +23,7 @@ return by;`],
   ['Meshes by name', `return $find('asphalt').map((o) => ({ type: o.type, name: o.name, visible: o.visible, uuid: o.uuid }));`],
   ['Largest geometries', `const rows = []; const seen = new Set();
 $scene.traverse((o) => { const g = o.geometry; if (!g || seen.has(g)) return; seen.add(g); let b = 0;
-  for (const a of Object.values(g.attributes)) b += (a.array ?? a.data?.array)?.byteLength ?? a.keptBytes ?? 0; b += g.index?.array?.byteLength ?? 0;
+  for (const a of Object.values(g.attributes)) b += (a.array ?? a.data?.array)?.byteLength ?? a.keptBytes ?? 0; b += g.index?.array?.byteLength ?? g.index?.keptBytes ?? 0;
   rows.push({ name: o.name, type: o.type, mb: +(b / 1048576).toFixed(2) }); });
 return rows.sort((a, b) => b.mb - a.mb).slice(0, 25);`],
   ['Objects by type', `const by = {}; $scene.traverse((o) => { by[o.type] = (by[o.type] ?? 0) + 1; }); return by;`],

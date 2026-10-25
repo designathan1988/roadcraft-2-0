@@ -95,10 +95,13 @@ export function sceneInventory(root: Object3D): Inventory {
       row.triangles += (indices / 3) * instances;
       const add = (a: Attribute | null | undefined): void => {
         if (!a || !resident) return;
-        const owner: { array: (ArrayLike<number> & { byteLength?: number }) | null; count: number; itemSize?: number; stride?: number } =
+        const owner: { array: (ArrayLike<number> & { byteLength?: number }) | null; count: number; itemSize?: number; stride?: number; isGLBufferAttribute?: boolean; keptBytes?: number } =
           a.isInterleavedBufferAttribute && a.data ? a.data as never : a as never;
         if (buffers.has(owner)) return;
         buffers.add(owner);
+        // A buffer three never held an array for (`GLBufferAttribute`, the shell batches' `gpuBatchedMesh.ts`): on the GPU alone, its size kept.
+        // DO NOT read its `array`: the batch's index carries one with only `BYTES_PER_ELEMENT` (three's multi-draw reads it), whose `length * 4` was NaN.
+        if (owner.isGLBufferAttribute) { row!.gpuBytes += owner.keptBytes ?? owner.count * (owner.itemSize ?? 1) * 4; return; }
         const array = owner.array;
         const bytes = array ? array.byteLength ?? array.length * 4 : owner.count * (owner.stride ?? owner.itemSize ?? 1) * 4;
         row!.gpuBytes += bytes;

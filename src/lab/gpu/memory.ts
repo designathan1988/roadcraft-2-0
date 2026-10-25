@@ -124,9 +124,13 @@ export function scanGpuObjects(renderer: WebGLRenderer, scene: Scene, seenTarget
     let bytes = 0, gpuOnlyBytes = 0;
     const add = (a: Attribute | null | undefined): void => {
       if (!a) return;
-      const owner = (a.isInterleavedBufferAttribute && a.data ? a.data : a) as { array: ArrayLike<number> & { byteLength?: number } | null; keptBytes?: number };
+      const owner = (a.isInterleavedBufferAttribute && a.data ? a.data : a) as { array: ArrayLike<number> & { byteLength?: number } | null; keptBytes?: number; isGLBufferAttribute?: boolean };
       if (seen.has(owner)) return;
       seen.add(owner);
+      // A buffer three never held an array for (`GLBufferAttribute`, the shell batches' `gpuBatchedMesh.ts`): its size kept, as `memoryCounters.ts`
+      // reads it. DO NOT read its `array`: the batch's index carries one with only `BYTES_PER_ELEMENT` (three's multi-draw reads it), and its
+      // `length * 4` was NaN - the lab's VRAM meter read "NaN%" (the F7 audit, `reports/audit-f7/AUDIT.md` P1, 2026-10-25).
+      if (owner.isGLBufferAttribute) { if (owner.keptBytes !== undefined) { bytes += owner.keptBytes; gpuOnlyBytes += owner.keptBytes; } return; }
       if (owner.array) bytes += owner.array.byteLength ?? owner.array.length * 4;
       else if (owner.keptBytes !== undefined) { bytes += owner.keptBytes; gpuOnlyBytes += owner.keptBytes; }
     };
