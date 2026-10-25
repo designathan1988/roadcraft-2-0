@@ -83,19 +83,3 @@ export function createKtx2Reader(): Ktx2Reader {
     },
   };
 }
-
-/** One reader for the files read on demand during play (a person's atlas), its workers let go after `IDLE_MS` without a read. */
-const IDLE_MS = 10_000;
-let shared: Ktx2Reader | null = null;
-let idle: ReturnType<typeof setTimeout> | null = null;
-
-export async function readKtx2(buffer: ArrayBuffer, codec: Ktx2Codec, use: Ktx2Use): Promise<CompressedTexture> {
-  shared ??= createKtx2Reader();
-  if (idle !== null) clearTimeout(idle);
-  idle = null;
-  try {
-    return await shared.read(buffer, codec, use);
-  } finally {
-    idle = setTimeout(() => { shared?.dispose(); shared = null; idle = null; }, IDLE_MS);
-  }
-}

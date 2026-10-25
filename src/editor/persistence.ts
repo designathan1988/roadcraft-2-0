@@ -135,8 +135,9 @@ export class Persistence {
         this.writeSettings(settings);
         this.dropParts();
         return true;
-      } catch {
+      } catch (error) {
         // Full: the large store below.
+        console.warn('[save] the map did not fit the small store; written to the large one', error);
       }
     }
     // Too large for Web Storage: IndexedDB, and once it is written the small key points there
@@ -147,7 +148,7 @@ export class Persistence {
       if (!ok) { this.onSaveFailed?.(); return; }
       if (generation !== this.generation) return;
       this.dropParts();
-      try { localStorage.setItem(key, `{"version":2,"stored":"indexeddb","savedAt":${savedAt}}`); } catch { /* the stored copy stands */ }
+      try { localStorage.setItem(key, `{"version":2,"stored":"indexeddb","savedAt":${savedAt}}`); } catch (error) { console.warn('[save] the pointer to the large store was not written; the stored copy stands', error); }
     }, (error: unknown) => { console.error('[save] the map could not be written to IndexedDB', error); this.onSaveFailed?.(); });
     return true;
   }
@@ -170,7 +171,7 @@ export class Persistence {
       const raw = localStorage.getItem(this.storageKey);
       const at = raw ? /"savedAt":(\d+)/.exec(raw.slice(0, 64)) : null;
       if (at && local) localAt = Number(at[1]);
-    } catch { /* storage blocked */ }
+    } catch (error) { console.warn('[save] local storage could not be read', error); }
     // The newest of the three copies: the small key, a large map in parts, the large store.
     let best = local, bestAt = localAt;
     this.loadedParts = null;
@@ -196,7 +197,7 @@ export class Persistence {
         const storedAt = isFiniteNumber(parsed.savedAt) ? parsed.savedAt : 0;
         if (storedAt > bestAt) { this.loadedParts = null; return { document: parsed.document, settings: this.readSettings() ?? normalizeSettings(parsed.settings) }; }
       }
-    } catch { /* unreadable: the newest other copy */ }
+    } catch (error) { console.warn('[save] the large store\'s copy is unreadable; the newest other copy is read', error); }
     return best;
   }
 
@@ -244,8 +245,9 @@ export class Persistence {
     if (this.storageKey !== KEY) return;
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(withUnit(settings)));
-    } catch {
-      /* Settings are a convenience; the map's own entry still carries them. */
+    } catch (error) {
+      // Settings are a convenience; the map's own entry still carries them.
+      console.warn('[save] the settings were not written', error);
     }
   }
 
@@ -257,7 +259,8 @@ export class Persistence {
       if (!raw) return null;
       const parsed: unknown = JSON.parse(raw);
       return isSavedSettings(parsed) ? normalizeSettings(parsed) : null;
-    } catch {
+    } catch (error) {
+      console.warn('[save] the settings could not be read', error);
       return null;
     }
   }
@@ -289,7 +292,8 @@ export class Persistence {
     let raw: string | null;
     try {
       raw = localStorage.getItem(this.storageKey);
-    } catch {
+    } catch (error) {
+      console.warn('[save] local storage could not be read', error);
       return null;
     }
     if (!raw) return null;
@@ -302,8 +306,9 @@ export class Persistence {
       if (isSavedSession(parsed)) {
         return { document: parsed.document, settings: this.readSettings() ?? normalizeSettings(parsed.settings) };
       }
-    } catch {
+    } catch (error) {
       // Unparseable. Fall through and set it aside rather than reread it.
+      console.warn('[save] the stored map is unreadable; set aside', error);
     }
 
     this.rejected = true;
@@ -329,7 +334,8 @@ export class Persistence {
     let raw: string | null;
     try {
       raw = localStorage.getItem(this.storageKey);
-    } catch {
+    } catch (error) {
+      console.warn('[save] local storage could not be read; nothing set aside', error);
       return;
     }
     quarantine(raw, this.storageKey, this.storageKey === KEY ? QUARANTINE_KEY : `${this.storageKey}.unreadable`);
@@ -338,8 +344,8 @@ export class Persistence {
   clear(): void {
     try {
       localStorage.removeItem(this.storageKey);
-    } catch {
-      /* ignore */
+    } catch (error) {
+      console.warn('[save] the stored map could not be removed', error);
     }
   }
 }
@@ -353,21 +359,24 @@ function quarantine(raw: string | null, sourceKey = KEY, quarantineKey = QUARANT
   try {
     const held = localStorage.getItem(quarantineKey);
     if (held !== null && held !== raw) target = `${quarantineKey}.${Date.now()}`;
-  } catch {
+  } catch (error) {
     // Storage unreadable: the write below fails the same way and keeps the original.
+    console.warn('[save] the copy set aside before could not be read', error);
   }
 
   try {
     localStorage.setItem(target, raw);
-  } catch {
-    // No room for a copy.
+  } catch (error) {
+    // No room for a copy: the original stays where it is.
+    console.warn('[save] no room to set the unreadable map aside; it stays', error);
     return;
   }
 
   try {
     localStorage.removeItem(sourceKey);
-  } catch {
-    /* The copy is safe; the original merely lingers. */
+  } catch (error) {
+    // The copy is safe; the original merely lingers.
+    console.warn('[save] the unreadable map was set aside but not removed', error);
   }
 }
 
@@ -454,7 +463,8 @@ export async function importFromFile(): Promise<ImportResult> {
       try {
         const session = readMapFile(await file.arrayBuffer());
         finish(session ? { status: 'ok', session } : { status: 'invalid' });
-      } catch {
+      } catch (error) {
+        console.warn('[save] the map file could not be read', error);
         finish({ status: 'invalid' });
       }
     };
@@ -470,7 +480,7 @@ export async function importFromFile(): Promise<ImportResult> {
 /** A map file's session, known by its first bytes: the binary file (magic 'RCMF', `mapExport.ts` mapFileBlob), or a JSON file of the builds before it (a session, or a map alone); null when it is neither. */
 export function readMapFile(bytes: ArrayBuffer): SavedSession | null {
   if (magicOf(bytes) !== FILE_MAGIC) {
-    try { return readImportedSession(JSON.parse(new TextDecoder().decode(bytes))); } catch { return null; }
+    try { return readImportedSession(JSON.parse(new TextDecoder().decode(bytes))); } catch (error) { console.warn('[save] the file is neither a map file nor its JSON', error); return null; }
   }
   const frame = readFrame(bytes, FILE_MAGIC);
   const map = frame?.get(FILE_DOC);
@@ -646,7 +656,8 @@ async function storeRequest<T>(mode: IDBTransactionMode, run: (store: IDBObjectS
       tx.oncomplete = () => resolve((request.result as T) ?? null);
       tx.onerror = () => resolve(null);
       tx.onabort = () => resolve(null);
-    } catch {
+    } catch (error) {
+      console.warn('[save] the saves\' store could not be opened for this', error);
       resolve(null);
     }
   });

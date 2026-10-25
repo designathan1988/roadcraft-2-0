@@ -1,7 +1,7 @@
 import type { Group, Texture } from 'three';
 import FILES from 'virtual:model-urls/citizens/people?ext=bin,ktx2';
 import { uncookInWorker } from '../bakePool';
-import { readKtx2 } from '../ktx2Texture';
+import type { Ktx2Reader } from '../ktx2Texture';
 import { assemblePerson, decodeCookedPerson, type CookedHeader } from './cookedPerson';
 
 /** THE CAST'S PEOPLE, READ (`cookedPerson.ts`): the sixteen ready files of `public/models/citizens/people`, a body (`<id>.bin`, its levels
@@ -21,8 +21,8 @@ export interface CookedPersonLoaded {
   readonly atlas: Texture;
 }
 
-/** Person `id` of the cast, read. */
-export async function loadCookedPerson(id: string): Promise<CookedPersonLoaded> {
+/** Person `id` of the cast, read; its atlas by `reader` (its owner's: `riggedCitizens.ts`). */
+export async function loadCookedPerson(id: string, reader: Ktx2Reader): Promise<CookedPersonLoaded> {
   const url = fileUrl(`${id}.bin`);
   // Read in a worker, its arrays moved here; read here only where no worker can.
   const decoded = await uncookInWorker(url) ?? await (async () => {
@@ -33,7 +33,7 @@ export async function loadCookedPerson(id: string): Promise<CookedPersonLoaded> 
   const header = decoded.header;
   const atlasResponse = await fetch(fileUrl(header.atlas.file));
   if (!atlasResponse.ok) throw new Error(`${header.atlas.file}: ${atlasResponse.status}`);
-  const atlas = await readKtx2(await atlasResponse.arrayBuffer(), header.atlas.codec, 'color');
+  const atlas = await reader.read(await atlasResponse.arrayBuffer(), header.atlas.codec, 'color');
   atlas.name = `person-atlas-${id}`;
   return { scene: assemblePerson(decoded), header, atlas };
 }

@@ -12,6 +12,7 @@ import { cancelUploads, compileAhead, shadowStandIn, warmAhead } from './uploads
 import { fillArrays, gpuOnlyAttributes, type GeometryArrays } from './mesh/gpuOnly';
 import { bakeDeferredInWorker, bakeInWorker, bakeRig, releaseIdleBakeWorkers } from './bakePool';
 import { loadCookedPerson, type CookedPersonLoaded } from './people/cookedLoad';
+import { createKtx2Reader, type Ktx2Reader } from './ktx2Texture';
 import { VERTEX_LAYOUT } from './people/cookedPerson';
 import { createPersonMaterials, type PersonMaterials } from './people/personMaterial';
 import { createPersonImpostor, IMPOSTOR_PIXELS, type PersonImpostor } from './people/personImpostor';
@@ -339,6 +340,9 @@ export function personProgramStandIns(): { readonly lit: Group; readonly shadow:
   return { lit, shadow };
 }
 
+/** Frames with no body read after which the atlases' reader lets its transcoding workers go (~10 s at 60 frames a second). */
+const READER_IDLE_FRAMES = 600;
+
 export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
   onAssetsReady: () => void = () => {}) {
   const group = new Group();
@@ -356,6 +360,23 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
   const RETRY_MS = 5000;
   let visualFrame = 0;
   let activeLoads = 0;
+  /** The atlases' reader (`ktx2Texture.ts`): made at the first body read, its transcoding workers let go once none has been read for
+   *  `READER_IDLE_FRAMES` frames and none is being read (`begin`), and at `dispose`. */
+  let atlasReader: Ktx2Reader | null = null;
+  let readerIdle = 0, readingAtlases = 0;
+  const atlases: Ktx2Reader = {
+    async read(buffer, codec, use) {
+      readerIdle = 0;
+      readingAtlases++;
+      try {
+        return await (atlasReader ??= createKtx2Reader()).read(buffer, codec, use);
+      } finally {
+        readingAtlases--;
+        readerIdle = 0;
+      }
+    },
+    dispose() { atlasReader?.dispose(); atlasReader = null; },
+  };
   const resources = new Set<{ dispose(): void }>();
   const disposeOwned = (owned: Set<{ dispose(): void }>): void => {
     cancelUploads([...owned].filter((resource): resource is Texture => resource instanceof Texture));
@@ -447,7 +468,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
 
   /** The body's arrays read back from its cook, as `load` uploaded them (`keepPartOnGpu`), under the same names (`partArrays`). */
   async function arraysAgain(id: string): Promise<GeometryArrays | null> {
-    const loaded = await loadCookedPerson(id);
+    const loaded = await loadCookedPerson(id, atlases);
     const { mesh, levels } = cookedParts(loaded);
     const own = partArrays(mesh.geometry, levels.slice(1));
     const arrays: Record<string, ArrayLike<number>> = {};
@@ -481,7 +502,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       const model = CROWD[index];
       if (!model) throw new Error(`No body ${index} in the cast`);
       const sex: WalkSex = model.gender === 'f' ? 'female' : 'male';
-      const loaded = await loadCookedPerson(model.id);
+      const loaded = await loadCookedPerson(model.id, atlases);
       const { mesh: source, levels: levelIndices, errors } = cookedParts(loaded);
       owned.add(source.geometry);
       owned.add(source.skeleton);
@@ -816,6 +837,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       figureRatio = ratio;
       frameNow = performance.now();
       visualFrame++;
+      if (atlasReader && readingAtlases === 0 && ++readerIdle > READER_IDLE_FRAMES) atlases.dispose();
       held.begin();
       detail = level;
       registry.beginFrame();
@@ -1150,6 +1172,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
     dispose() {
       disposed = true;
       clearInterval(evictionTimer);
+      atlases.dispose();
       for (const entry of queuedLoads.values()) entry.resolve();
       queuedLoads.clear();
       for (const batch of batches.values()) {

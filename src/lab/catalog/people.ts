@@ -1,6 +1,7 @@
 import { BufferAttribute, BufferGeometry, DataTexture, FloatType, MeshStandardMaterial, RGBAFormat, type Material, type SkinnedMesh } from 'three';
 import { CROWD_IDS } from '../../render/citizenCasting';
 import { loadCookedPerson } from '../../render/people/cookedLoad';
+import { createKtx2Reader } from '../../render/ktx2Texture';
 import { createPersonMaterials } from '../../render/people/personMaterial';
 import type { ItemSpec, PieceSpec } from './items';
 
@@ -21,9 +22,10 @@ function personPieces(mesh: SkinnedMesh, material: Material): PieceSpec[] {
 
 /** The cast's people as the game draws them: one cooked body each. */
 export async function peopleItems(add: Add): Promise<void> {
+  const atlases = createKtx2Reader();
   for (const id of CROWD_IDS) {
     try {
-      const loaded = await loadCookedPerson(id);
+      const loaded = await loadCookedPerson(id, atlases);
       let mesh: SkinnedMesh | undefined;
       loaded.scene.traverse((o) => { if ((o as SkinnedMesh).isSkinnedMesh && !mesh) mesh = o as SkinnedMesh; });
       if (!mesh) throw new Error('no mesh');
@@ -38,9 +40,11 @@ export async function peopleItems(add: Add): Promise<void> {
           `${m.morphs.length} face expressions (sparse)`, 'one material, one atlas, 26 bytes a vertex'],
       });
     } catch (error) {
+      console.warn(`[catalogue] person ${id} could not be read`, error);
       add({ group: 'People: cast (cooked)', name: id, origin: 'file', source: `public/models/citizens/people/${id}.bin`, build: 'skinned', pieces: [], notes: [`could not be read: ${String(error)}`] });
     }
   }
+  atlases.dispose();
   // Materials the catalogue made for the sheets are let go with the page.
   void MeshStandardMaterial;
 }

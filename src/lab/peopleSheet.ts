@@ -5,7 +5,7 @@ import {
 } from 'three';
 import { ARCHETYPES } from '@sim/vehicles/archetypes';
 import { clipTransferFor, loadRocketboxClips, neutralWalkFor, walkDuration } from '../render/citizenWalk';
-import { readKtx2 } from '../render/ktx2Texture';
+import { createKtx2Reader, type Ktx2Codec } from '../render/ktx2Texture';
 import { assemblePerson, decodeCookedPerson, type CookedHeader } from '../render/people/cookedPerson';
 import { createPersonImpostor } from '../render/people/personImpostor';
 import { createPersonMaterials } from '../render/people/personMaterial';
@@ -41,6 +41,16 @@ const RENDER_BACK = 0xd9dde2, WIRE_BACK = 0xffffff;
 const THREE_QUARTER = 25;
 
 /** The bones' matrices of `mesh` as the palette pass writes them: one row, four texels a bone (`personMaterial.ts` getBoneMatrix). */
+/** A person's atlas read by a reader of its own, let go once read (`ktx2Texture.ts`). */
+async function atlasOf(buffer: ArrayBuffer, codec: Ktx2Codec): Promise<Texture> {
+  const reader = createKtx2Reader();
+  try {
+    return await reader.read(buffer, codec, 'color');
+  } finally {
+    reader.dispose();
+  }
+}
+
 function paletteOf(mesh: SkinnedMesh): DataTexture {
   mesh.skeleton.update();
   const data = Float32Array.from(mesh.skeleton.boneMatrices!);
@@ -96,7 +106,7 @@ export async function peopleSheet(binUrl: string, atlasUrl: string, yawDegrees =
   const header = person.header;
   const atlasResponse = await fetch(atlasUrl);
   if (!atlasResponse.ok) throw new Error(`${atlasUrl}: ${atlasResponse.status}`);
-  const atlas: Texture = await readKtx2(await atlasResponse.arrayBuffer(), header.atlas.codec, 'color');
+  const atlas: Texture = await atlasOf(await atlasResponse.arrayBuffer(), header.atlas.codec);
   const root = assemblePerson(person);
   root.updateMatrixWorld(true);
   let source: SkinnedMesh | undefined;
@@ -282,7 +292,7 @@ export async function personViews(binUrl: string, atlasUrl: string, views: reado
   const header = person.header;
   const atlasResponse = await fetch(atlasUrl);
   if (!atlasResponse.ok) throw new Error(`${atlasUrl}: ${atlasResponse.status}`);
-  const atlas: Texture = await readKtx2(await atlasResponse.arrayBuffer(), header.atlas.codec, 'color');
+  const atlas: Texture = await atlasOf(await atlasResponse.arrayBuffer(), header.atlas.codec);
   const root = assemblePerson(person);
   root.updateMatrixWorld(true);
   let source: SkinnedMesh | undefined;

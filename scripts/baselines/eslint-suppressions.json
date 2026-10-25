@@ -239,11 +239,6 @@
       "count": 2
     }
   },
-  "src/editor/persistence.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 15
-    }
-  },
   "src/editor/poles.ts": {
     "roadcraft/no-global-revision": {
       "count": 4
