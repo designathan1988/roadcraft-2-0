@@ -9,7 +9,8 @@ import { ViewCells, type CellKey } from '@world/viewCells';
 import type { KeptFrustum } from './cellInstances';
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
 import { framePole, wireEnd } from './poleBake';
-import { BLOCK, type Block, POLE_REACH, PartStore, ScreenScale, ViewedRoot, WireStore, docPoles, screen } from './poleLayer';
+import { BLOCK, type Block, POLE_REACH, ViewedRoot, docPoles } from './poleLayer';
+import { PartStore, ScreenScale, WireStore, screen } from './poleStores';
 import type { SceneryKit } from './scenery';
 import { POLE_PART_COUNT, type Placement, type PolePartSpec, type Utilities, placePole, polePartSpecs, wireScreen } from './utilities';
 
@@ -226,7 +227,7 @@ export class PoleCells implements Utilities {
       let nearest = -Infinity;
       for (const part of block.parts) if (part.count > 0) nearest = Math.max(nearest, this.scale.atBox(part.box));
       if (block.wires.count > 0) nearest = Math.max(nearest, this.scale.atBox(block.wires.box));
-      for (const part of block.parts) part.view(this.scale, nearest);
+      for (const part of block.parts) part.view(this.scale);
       block.wires.view(this.scale, nearest);
     }
   }

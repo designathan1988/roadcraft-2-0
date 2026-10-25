@@ -393,6 +393,19 @@ function stripTemplate(segments: number, creased: boolean): WireTemplate {
 const WIRE_CHORDS = [8, 4, 2, 1] as const;
 /** The ways of drawing a wire, finest first: creased strips of 8, 4, 2 and 1 chords, then plain ones. Made once, at load. */
 const WIRE_TEMPLATES: readonly WireTemplate[] = [...WIRE_CHORDS.map((n) => stripTemplate(n, true)), ...WIRE_CHORDS.map((n) => stripTemplate(n, false))];
+/** How many ways of drawing a wire there are (`wireLevel`'s levels). */
+export const WIRE_TEMPLATE_COUNT = WIRE_TEMPLATES.length;
+
+/** The way of drawing a wire with `chords` chords (8, 4, 2 or 1), creased or not (`wireLevel`'s level). */
+export function wireTemplateOf(chords: number, creased: boolean): number {
+  return WIRE_CHORDS.indexOf(chords as (typeof WIRE_CHORDS)[number]) + (creased ? 0 : WIRE_CHORDS.length);
+}
+
+/** A way of drawing a wire's chords, crease and triangles a wire: what the stores weigh a draw of its own by (`poleStores.ts`). */
+export function wireTemplate(level: number): { readonly chords: number; readonly creased: boolean; readonly triangles: number } {
+  const t = WIRE_TEMPLATES[level]!;
+  return { chords: t.segments, creased: level < WIRE_CHORDS.length, triangles: t.index.count / 3 };
+}
 
 /**
  * The fewest chords that bend a wire of `sag` seen at `pixelsPerUnit` within a pixel of its parabola (a chord of 1/n of it strays from it by

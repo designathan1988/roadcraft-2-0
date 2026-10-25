@@ -6,6 +6,7 @@ import { POLE_HEIGHT, type PoleKind, WIRE_SEGMENTS } from '@world/utilities';
 import { sampleWire } from '../world/oracle/sampleWire';
 import { createSceneryKit } from '@render/scenery';
 import { buildUtilities } from '@render/poleLayer';
+import { castShadowKey } from '@render/shadowCasters';
 import { SPAN_WIRES, WIRE_ABSENT } from '@render/utilities';
 import { m } from '@world/units';
 
@@ -18,16 +19,17 @@ function line(doc: RoadDoc, n: number, y: number, kind: (i: number) => PoleKind)
   for (let i = 1; i < n; i++) doc.addPoleSpan(ids[i - 1]!, ids[i]!);
 }
 
-/** The wires of a layer built from the document: their instances' numbers and count. */
+/** The wires of a layer built from the document: every wire's numbers and their count, as the mesh casting them all holds them (the colour
+ *  pass draws each span by its own size, `poleStores.ts`). */
 function wiresOf(doc: RoadDoc): { data: Float32Array; count: number; geometry: InstancedBufferGeometry; dispose: () => void } {
   const net = new Network(doc);
   net.rebuild();
   const layer = buildUtilities(net, () => 0, createSceneryKit());
-  const wires = layer.group.getObjectByName('utility-wires') as Mesh;
+  const wires = layer.group.getObjectByName('utility-wires-cast') as Mesh;
   const geometry = wires.geometry as InstancedBufferGeometry;
   const start = geometry.getAttribute('aStart') as InterleavedBufferAttribute;
   expect(start.data.stride).toBe(8);
-  return { data: start.data.array as Float32Array, count: geometry.instanceCount, geometry, dispose: () => layer.dispose() };
+  return { data: start.data.array as Float32Array, count: castShadowKey(wires)!.count!, geometry, dispose: () => layer.dispose() };
 }
 
 /** The wire's point at t from its instance, as the shader takes it (`wireAt`). */

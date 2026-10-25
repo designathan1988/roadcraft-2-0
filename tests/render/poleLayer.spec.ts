@@ -6,13 +6,15 @@ import { DEFAULT_CITY, planCity } from '@world/cityGen/plan';
 import { greenCity, layCity, widenCityFootways } from '@editor/cityGenerator';
 import { createSceneryKit } from '@render/scenery';
 import { type PoleLayer, buildUtilities } from '@render/poleLayer';
+import { castShadowKey } from '@render/shadowCasters';
 import type { RoadDoc } from '@world/doc';
 import type { PoleId } from '@world/ids';
 import { m } from '@world/units';
 
 /** THE POLE LAYER KEPT BY POLE (`render/poleLayer.ts`) */
 
-/** Each part's drawn instances as sorted rows over every cell, and the wires' likewise: the picture, whatever the slots. */
+/** Each part's instances as sorted rows over every cell, and the wires' likewise - all of them, as their meshes cast them (the colour pass
+ *  draws each by its own size, `poleStores.ts`): the picture, whatever the slots. */
 function picture(layer: PoleLayer): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const put = (name: string, rows: string[]): void => { out.set(name, [...(out.get(name) ?? []), ...rows].sort()); };
@@ -21,13 +23,15 @@ function picture(layer: PoleLayer): Map<string, string[]> {
     if (mesh.isInstancedMesh) {
       const a = mesh.instanceMatrix.array as Float32Array;
       const rows: string[] = [];
-      for (let i = 0; i < mesh.count; i++) rows.push([...a.subarray(i * 16, i * 16 + 16)].map((v) => v.toFixed(4)).join(','));
+      const count = castShadowKey(mesh)?.count ?? mesh.count;
+      for (let i = 0; i < count; i++) rows.push([...a.subarray(i * 16, i * 16 + 16)].map((v) => v.toFixed(4)).join(','));
       if (rows.length) put(mesh.name, rows);
-    } else if ((o as Mesh).isMesh && o.name === 'utility-wires') {
+    } else if ((o as Mesh).isMesh && o.name === 'utility-wires-cast') {
       const geometry = (o as Mesh).geometry as InstancedBufferGeometry;
       const data = (geometry.getAttribute('aStart') as InterleavedBufferAttribute).data.array as Float32Array;
       const rows: string[] = [];
-      for (let i = 0; i < geometry.instanceCount; i++) rows.push([...data.subarray(i * 8, i * 8 + 8)].map((v) => v.toFixed(4)).join(','));
+      const count = castShadowKey(o as Mesh)?.count ?? 0;
+      for (let i = 0; i < count; i++) rows.push([...data.subarray(i * 8, i * 8 + 8)].map((v) => v.toFixed(4)).join(','));
       if (rows.length) put(o.name, rows);
     }
   });

@@ -603,7 +603,8 @@ export function createSceneRenderer(
   /** The instances of `mesh` that differ from the last look, each added as a change box; false when the mesh's matrices are not on the page (then its box as a whole). */
   const instanceChanges = (mesh: Mesh & { count?: number; instanceMatrix?: { version?: number; array?: ArrayLike<number> | null } }): boolean => {
     const array = mesh.instanceMatrix?.array;
-    const count = mesh.count ?? 0;
+    // What it casts, not what the colour pass draws (`castShadowKey`): a poles' part drawn into the cascades alone counts 0 in colour.
+    const count = castShadowKey(mesh)?.count ?? mesh.count ?? 0;
     if (!array || array.length < count * 16) return false;
     let kept = instancePlaces.get(mesh);
     if (!kept) { kept = { places: new Float32Array(0), count: 0 }; instancePlaces.set(mesh, kept); }
