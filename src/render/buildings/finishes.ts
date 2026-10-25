@@ -12,7 +12,7 @@ import { SHELL_PART_BEGIN, SHELL_PART_PARS, SHELL_UV_GLSL, shellPartVertex } fro
 /** Four-number rows a finish takes in the look table: (uv scale, normal scale, metalness, envMapIntensity), then (metal read from the map, roof, glassy, 0). */
 const LOOK_ROWS = 2;
 
-/** Each finish's scalars, indexed by its id (its place in `FINISHES`, its layer in the arrays); `baked`: its maps are loaded. */
+/** Each finish's scalars, indexed by its id (its place in `FINISHES`, its layer in the arrays); `baked`: the program knows which of a metallic finish is metal - its maps are loaded, or it is the far program, whose tones carry each finish's metal (`finishFar`, `FAR_FINISH`). */
 export function finishLookTable(baked: boolean): Float32Array {
   const table = new Float32Array(FINISHES.length * LOOK_ROWS * 4);
   FINISHES.forEach((finish, id) => {
@@ -237,7 +237,10 @@ export function createShellMaterial(options: { readonly plain?: boolean; readonl
   // Cast by its back faces (the walls turned from the sun, the roofs' undersides): the silhouette is the same, and a face the sun lights never shades itself. DO NOT cast both sides: a lit wall at a grazing sun shadowed itself in diagonal bands of acne whatever the offset (the street views, 2026-10-20).
   const material = new MeshStandardMaterial({ vertexColors: true, roughness: maps || far ? 1 : 0.9, metalness: 1, envMapIntensity: 1, shadowSide: BackSide });
   material.name = plain ? 'building-shell-plain' : carried ? 'building-ruin' : 'building-shell';
-  const looks = { value: finishLookTable(maps !== undefined) };
+  // The far program takes a metallic finish's metal from its tones (`FAR_FINISH`), as the near one from its map. DO NOT give it the table of a
+  // program without either: the glass's metal went to 0 and its albedo, worked out for a metal of 0.76 (`finishFar`), scattered whole - 4.2 times
+  // the light its texture scatters (0.119 for 0.028) with a dielectric's 0.04 for its 0.1 reflectance (2026-10-25).
+  const looks = { value: finishLookTable(maps !== undefined || far) };
   material.onBeforeCompile = (shader) => shellShader(shader, maps, looks, !plain, carried, tones);
   const key = `building-shell-v2-${plain ? 'plain' : 'weathered'}-${carried ? 'carried' : 'laid'}-${maps ? 'maps' : 'none'}${far ? '-far' : ''}`;
   material.customProgramCacheKey = () => key;
@@ -267,9 +270,9 @@ const DIELECTRIC_F0 = 0.04;
  * - the light scattered (albedo x (1 - metal)) and the base reflectance (mix(0.04, albedo, metal)) each averaged, both linear in the BRDF, and the one albedo and metal that give both back worked out (`albedo`, `metal`, for a program with metal, `createShellMaterial` far); a program without it takes the scattered light alone (`diffuse`). DO NOT average albedo and metal apart: the mullions' bright metal then scatters, doubling the glass's diffuse;
  * - its roughness its texels' median, not their mean: a glossy lobe and a matte one do not blend to a lobe, the glass's panes and mullions averaged went matte.
  */
-type FarLook = { readonly diffuse: readonly [number, number, number]; readonly albedo: readonly [number, number, number]; readonly rough: number; readonly metal: number };
+export type FarLook = { readonly diffuse: readonly [number, number, number]; readonly albedo: readonly [number, number, number]; readonly rough: number; readonly metal: number };
 let farLooks: Record<Finish, FarLook> | null = null;
-function finishFar(): Record<Finish, FarLook> {
+export function finishFar(): Record<Finish, FarLook> {
   if (farLooks) return farLooks;
   const out = {} as Record<Finish, FarLook>;
   for (const finish of FINISHES) {

@@ -17,7 +17,7 @@ export interface MassingChunk {
   readonly colour: Float32Array;
   /** Per vertex: metres along its face, the face's bay width */
   readonly facade: Float32Array;
-  /** Per vertex: the share of a bay its windows take across (1: a curtain wall), and the building's seed */
+  /** Per vertex: the share of a bay its windows take across (on a curtain wall `CURTAIN_WALL` more), and the building's seed */
   readonly glazing: Float32Array;
   /** Per vertex: its windows' sill and head in the storey (`windowCode`). */
   readonly window: Float32Array;
@@ -34,8 +34,10 @@ export interface MassDetail {
   readonly boxes: boolean;
 }
 export const CELL_DETAIL: MassDetail = { drop: 0, boxes: false };
-/** A tile's: under 3 m (a machine room, `MACHINE_ROOM_H`; a parapet; an arcade's set-back, `ARCADE`). */
-export const TILE_DETAIL: MassDetail = { drop: m(3), boxes: false };
+/** A tile's: under 1.4 m (a parapet, a solar panel, a skylight, a relief); what stands higher on a roof kept (a machine room, `MACHINE_ROOM_H`; a
+ *  lift room, a tank, an air handler; an attic, `ATTIC_H`). DO NOT leave the roofs bare: under 3 m it left every roof of a tile flat and empty, half
+ *  of the box look of downtown from the Home view (the owner, 2026-10-25). Its error stays the far level's own (`FAR_ERROR`, 1.5 m) at least. */
+export const TILE_DETAIL: MassDetail = { drop: m(1.4), boxes: false };
 /** A plate's: under 8 m, the pitched roofs of houses and low blocks flattened too. */
 export const PLATE_DETAIL: MassDetail = { drop: m(8), boxes: true };
 
@@ -213,7 +215,11 @@ export const LOT_COLOURS: Readonly<Record<LotSurface, number>> = {
   asphalt: 0x515457, concrete: 0xb9b6ae, pavers: 0x9a958c, tiles: 0xb4785a,
 };
 
-/** The share of a bay its window takes across, by what the bay holds (a curtain wall is all glass). */
+/** What a curtain wall's glass share is over its windows' share (`buildingMesh.ts` recordBlock): an ordinary wall's is under 1, a curtain
+ *  wall's 1 and its windows' share (`massingMaterial.ts` draws the rest of it in its finish, the glass's look from afar). */
+export const CURTAIN_WALL = 1;
+
+/** The share of a bay its window takes across, by what the bay holds where the bay says nothing of its opening (a pillar's arcade). */
 export const GLASS_SHARE: Partial<Record<BayComponent, number>> = {
   window: 0.5, sashWindow: 0.5, shutteredWindow: 0.5, brise: 0.5,
   wideWindow: 0.75, ribbon: 0.8, bayWindow: 0.75,

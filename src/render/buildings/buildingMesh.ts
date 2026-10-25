@@ -107,7 +107,7 @@ import { type BuildingKit, PART_KINDS, PORCH_LAMP, type PartKind } from './kit';
 import { FACADE_FLIP, FACADE_KIND, FACADE_STREAK, STREAK_SILL } from './facadeLevel';
 import { gpuOnlyAttributes } from '../mesh/gpuOnly';
 import { facadeProps } from './facadeProps';
-import { GLASS_SHARE, LOT_COLOURS, MASS_HEAD, MASS_SILL, SAW_GLASS_RGB, TERRACE_RGB, massColours, rgbOf, shadeOf as massShade } from './massing';
+import { CURTAIN_WALL, GLASS_SHARE, LOT_COLOURS, MASS_HEAD, MASS_SILL, SAW_GLASS_RGB, TERRACE_RGB, massColours, rgbOf, shadeOf as massShade } from './massing';
 import { recordBase, recordBaseLots } from './massBase';
 import { type BuildingProgram, type LotsProgram, MASS_FLATTENED, MASS_KEEP, MASS_PITCHED, type MassBay, MassRecorder, type MassSide, type ProgramSummary, summaryOf } from './program';
 import { PARASOL_HALF, PARASOL_HIGH, PARASOL_LOW, ROOF_COLOURS, TANK_COLOURS, machineRooms, roofPlantOf, terraceDeck, terraceParasols, terraceSeed } from './roofPlan';
@@ -1527,9 +1527,12 @@ function recordBlock(e: Emitter, b: Building, v: Volume, floor: number): void {
     const share = opening ? (opening.a1 - opening.a0) / bay.width : GLASS_SHARE[bay.component] ?? 0;
     const sill = opening ? opening.h0 / bay.height : MASS_SILL, head = opening ? opening.h1 / bay.height : MASS_HEAD;
     const key = bay.level * 4096 + bay.side;
+    // A curtain wall (its finish glass) keeps its windows too, as the detail cuts them: its storeys' spandrels between them, in its finish
+    // (`massingMaterial.ts`, `CURTAIN_WALL`). DO NOT draw it all one pane: the glass towers stood as flat grey boxes once their cells went to
+    // their masses, the detail's and the facade level's storeys gone (the owner, 2026-10-25).
     const one: MassBay = {
       side: bay.side, start: bay.start, width: bay.width, z0: floor + bay.z, height: bay.height,
-      d: bay.component === 'pillar' ? -ARCADE : bay.push, share, glass: spec.finish === 'glass' ? 1 : share, rgb: rgb(spec),
+      d: bay.component === 'pillar' ? -ARCADE : bay.push, share, glass: spec.finish === 'glass' ? CURTAIN_WALL + share : share, rgb: rgb(spec),
       ground: v.base === 0 && bay.storey === 0, sill, head,
     };
     const row = rows.get(key);

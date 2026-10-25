@@ -38,7 +38,7 @@ export interface MassBay {
   readonly z0: number;
   readonly height: number;
   readonly d: number;
-  /** The share of the bay its opening takes (`GLASS_SHARE`) as the bays alike are joined by, and the glass the shader draws (1 on a curtain wall). */
+  /** The share of the bay its opening takes (`GLASS_SHARE`) as the bays alike are joined by, and the glass the shader draws (on a curtain wall `CURTAIN_WALL` more, `massing.ts`). */
   readonly share: number;
   readonly glass: number;
   readonly rgb: readonly [number, number, number];
