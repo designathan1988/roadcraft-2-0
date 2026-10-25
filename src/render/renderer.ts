@@ -1204,12 +1204,17 @@ export function createSceneRenderer(
   /** DO NOT ask the next frame at once while the world's job waits on a worker: the unseen opening's frames come without the display's pace (`frameLoop.ts`), and it spun the page at 2,000 frames a second, starving the workers it waited on (2026-10-16); looked at again a display frame later. */
   const WAIT_LOOK_MS = 16;
   /** How long the unseen opening runs the world's job before letting the page take the workers' answers (`pumpWorld`). */
-  /** The frame's steps as marks on the DevTools timeline: in a development build only, and let go every `FRAME_MARKS_KEPT` frames. DO NOT mark them in every build and keep them all: the browser keeps every mark until it is cleared, thirteen a frame, and nothing reads them but a trace (~1 s of the page in the opening of the step-70k city, 2026-10-22). */
+  /** The frame's steps as marks on the DevTools timeline: in a development build asked for them (`?marks` in the page's address), let go every
+   *  `FRAME_MARKS_KEPT` frames. DO NOT mark them in every build and keep them all: the browser keeps every mark until it is cleared, thirteen a
+   *  frame, and nothing reads them but a trace (~1 s of the page in the opening of the step-70k city, 2026-10-22). DO NOT mark them in every
+   *  development frame either: the lab's profile of the dev build put 2.6 s of the main thread's self time in them over one session, second
+   *  only to `draw` (the F7 audit, `reports/audit-f7/AUDIT.md` P3, 2026-10-25). */
+  const FRAME_MARKS = import.meta.env.DEV && new URLSearchParams(globalThis.location?.search ?? '').has('marks');
   const FRAME_MARK_NAMES = new Set<string>();
   const FRAME_MARKS_KEPT = 600;
   let frameMarksDrawn = 0;
   const frameMark = (name: string): void => {
-    if (!import.meta.env.DEV) return;
+    if (!FRAME_MARKS) return;
     FRAME_MARK_NAMES.add(name);
     performance.mark(name);
   };
@@ -3332,7 +3337,7 @@ export function createSceneRenderer(
     resize,
     // Wall-clock time between drawn frames, for things that age as they are watched.
     draw(net, sim, alpha, delta, options) {
-      if (import.meta.env.DEV && ++frameMarksDrawn % FRAME_MARKS_KEPT === 0) for (const name of FRAME_MARK_NAMES) performance.clearMarks(name);
+      if (FRAME_MARKS && ++frameMarksDrawn % FRAME_MARKS_KEPT === 0) for (const name of FRAME_MARK_NAMES) performance.clearMarks(name);
       frameMark('frame:draw-start');
       renderer.info.reset();
       groundDiary = net.doc.changes;
