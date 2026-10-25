@@ -6,6 +6,8 @@ import { BufferAttribute, BufferGeometry, CylinderGeometry } from 'three';
 export interface Caps {
   readonly top: boolean;
   readonly bottom: boolean;
+  /** The side (default kept): left out for a cap alone, a far level of a disc whose rim spans under a pixel (`signals.ts`). */
+  readonly side?: boolean;
 }
 
 /** three r186 `CylinderGeometry`'s groups: the side is material 0, the top cap 1, the bottom cap 2. */
@@ -15,13 +17,14 @@ const SIDE = 0, TOP = 1, BOTTOM = 2;
  *  DO NOT draw a cap that stands buried, inside another solid or against a housing - a closed post was a quarter caps no one saw. */
 export function cylinderWith(radiusTop: number, radiusBottom: number, height: number, radialSegments: number, caps: Caps): BufferGeometry {
   const full = new CylinderGeometry(radiusTop, radiusBottom, height, radialSegments);
-  if (caps.top && caps.bottom) return full;
+  if (caps.top && caps.bottom && caps.side !== false) return full;
   const index = full.index!;
   const kept: number[] = [];
   for (const group of full.groups) {
     const material = group.materialIndex ?? SIDE;
     if (material === TOP && !caps.top) continue;
     if (material === BOTTOM && !caps.bottom) continue;
+    if (material === SIDE && caps.side === false) continue;
     for (let i = group.start; i < group.start + group.count; i++) kept.push(index.getX(i));
   }
   // The vertices the kept triangles use, renumbered in the order they were made.

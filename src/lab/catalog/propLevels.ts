@@ -5,7 +5,7 @@ import { barrierModel } from '../../render/barriers';
 import { PROP_PICTURES, sceneryPictures, type PlantImpostors } from '../../render/plantImpostors';
 import { BUSH_KINDS, TREE_SPECIES } from '../../render/propGeometry';
 import { createSceneryKit } from '../../render/scenery';
-import { signalHeadModel } from '../../render/signals';
+import { signalHeadModel } from '../../render/signalShapes';
 import { propLadder } from '../../render/streetFurnitureLayer';
 import type { ItemSpec, PieceSpec } from './items';
 
@@ -63,7 +63,7 @@ export async function propLevelItems(add: Add): Promise<void> {
   // The lamp's lit parts: one level each, drawn at any size.
   const lit: [string, BufferGeometry, Material][] = [['lamp lens', kit.lampLens, kit.glow], ['lamp light pool', kit.pool, kit.poolGlow], ['lamp light beam', kit.beam, kit.beamGlow]];
   for (const [name, geometry, material] of lit) item(name, 0, [{ label: name, geometry, material }], ['one level, drawn at any size']);
-  item('signal head', 0, [{ label: 'signal head (red lit)', geometry: signalHeadModel('red'), material: null }], ['one level (`signals.ts`), drawn at any size']);
+  item('signal head', 0, [{ label: 'signal head (red lit)', geometry: signalHeadModel('red'), material: null }], ['in full near; its lenses and halos their face alone once their rim spans under a pixel, its visors out under a pixel across (`signals.ts`)']);
   for (const kind of BARRIER_KINDS) item(`barrier ${kind}`, 0, [{ label: kind, geometry: barrierModel(kind, 4), material: null }], ['4 m run; one level (`barriers.ts`)']);
   const plants = sceneryPictures(kit);
   const plant = (name: string, body: BufferGeometry, bodyMaterial: Material, cards: BufferGeometry | undefined, cardMaterial: Material, at: number): void => {

@@ -1316,6 +1316,8 @@ export function createSceneRenderer(
   agents.keepPeople();
 
   const crowdFrustum: KeptFrustum = new Frustum();
+  /** Where the signals' levels are chosen from (`signals.ts` `SignalView`), written each frame: DO NOT make one a frame. */
+  const signalView = { x: 0, y: 0, z: 0, pxAtMetre: 0, orthoPx: null as number | null };
   /** The box the sun's cascades cover (`crowdFrustum.keep`), and the margin past it, world units. */
   const cascadeCover = new Box3();
   const CASCADE_KEEP_MARGIN = m(24);
@@ -3751,7 +3753,12 @@ export function createSceneRenderer(
       }
       // Falls off with the distance in world units: the same lamp in metres at any unit.
       for (const light of roomLights) light.intensity = cutSpec && light.userData['used'] ? 55 * TUNED_UNIT ** light.decay * (0.25 + 0.75 * lastDark) : 0;
-      signals.sync(sim.signals, net, detailed, crowdFrustum);
+      // Each cell's heads at the level their error on the screen allows (`signals.ts`): the camera where it stands, the pixels a unit spans.
+      const signalFov = rig.perspective ? (rig.camera as PerspectiveCamera).fov : PERSPECTIVE_FOV;
+      signalView.x = rig.camera.position.x; signalView.y = rig.camera.position.y; signalView.z = rig.camera.position.z;
+      signalView.pxAtMetre = css.h / (2 * Math.tan((signalFov * Math.PI) / 360));
+      signalView.orthoPx = rig.perspective ? null : rig.viewport.zoom;
+      signals.sync(sim.signals, net, detailed, crowdFrustum, signalView);
 
       target.copy(rig.target);
       const halfHeight = css.h / Math.max(0.001, rig.viewport.zoom * 2);

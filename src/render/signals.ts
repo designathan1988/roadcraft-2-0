@@ -2,7 +2,6 @@ import { applyPartSway, applyStructureSway } from './wind';
 import { castBySize, casterTexel } from './shadowCasters';
 import { holdStill } from './stillTree';
 import {
-  BoxGeometry,
   BufferAttribute,
   Color,
   DynamicDrawUsage,
@@ -23,7 +22,7 @@ import {
   type Material,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { cylinderWith } from './mesh/cylinder';
+import { ARM_HEIGHT, ARM_LENGTH, FACES, HEAD_CENTRE, HEAD_WIDTH, LAMPS, LENS_DEPTH, POST_HEIGHT, VISOR_REACH, signalHeadShapes, type Lamp } from './signalShapes';
 
 import { signalPostPlace } from '@world/signalPosts';
 import { JournalCursor } from '@world/derived';
@@ -35,32 +34,24 @@ import { m } from '@world/units';
 
 /** Physical traffic signal heads. ## Why every head is double-sided A real signal aims its lenses at the traffic it */
 
-/** Signal heads at life size, like everything else in the scene */
-const SIGNAL_SCALE = 1;
-const u = (metres: number): number => m(metres) * SIGNAL_SCALE;
+/** A level is left for a coarser one once that one's error is under this share of a pixel, and taken back at a whole one (`partCells.ts` COARSEN). */
+const COARSEN = 0.85;
 
-const POST_HEIGHT = u(6.2);
-const POST_RADIUS = u(0.09);
-const ARM_LENGTH = u(3.5);
-const ARM_RADIUS = u(0.06);
-const HEAD_HEIGHT = u(1.05);
-const HEAD_WIDTH = u(0.42);
-const HEAD_DEPTH = u(0.3);
-const LAMP_RADIUS = u(0.15);
-const VISOR_DEPTH = u(0.18);
-const HEAD_CENTRE = u(5.5);
-/** Vertical spacing between lens centres. */
-const LAMP_PITCH = HEAD_HEIGHT * 0.3;
 
-type Lamp = 'red' | 'amber' | 'green';
-const LAMPS: readonly Lamp[] = ['red', 'amber', 'green'];
-/** Which way each lens cluster looks, along the housing's local Z. */
-const FACES = [1, -1] as const;
+/** Where the eye stands (three's world: x, up, z) and the pixels a world unit spans at a unit's distance, or everywhere (`orthoPx`, the view from above). */
+export interface SignalView {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly pxAtMetre: number;
+  readonly orthoPx: number | null;
+}
 
 export interface SignalHeads {
   readonly group: Group;
-  /** `frustum`: what the camera sees this frame; the lamps of cells out of it wait until they come in. */
-  sync(feed: SignalFeed, net: Network, detailed: boolean, frustum?: Frustum): void;
+  /** `frustum`: what the camera sees this frame; the lamps of cells out of it wait until they come in. `view`: each cell's heads drawn at the
+   *  level their error on the screen allows (none given: every head in full). */
+  sync(feed: SignalFeed, net: Network, detailed: boolean, frustum?: Frustum, view?: SignalView): void;
   dispose(): void;
 }
 
@@ -87,8 +78,8 @@ interface Junction {
   stage: string;
 }
 
-/** The kinds of a head's parts, each a batch: the frame (post, arm and housing as one geometry, one instance a head), the visors, every lens lit or not, the lit lenses' halos. */
-type BatchName = 'frame' | 'visors' | 'lenses' | 'halos';
+/** The kinds of a head's parts, each a batch: the frame (post, arm and housing as one geometry, one instance a head), the visors, every lens lit or not, the lit lenses' halos; the lenses and halos of the cells seen from afar at their far level (their face alone). */
+type BatchName = 'frame' | 'visors' | 'lenses' | 'halos' | 'lensesFar' | 'halosFar';
 
 interface Cell {
   readonly key: number;
@@ -99,87 +90,13 @@ interface Cell {
   lit: number;
   /** A head's state changed: its lenses are written again (this cell's only). */
   stale: boolean;
+  /** Its lenses and halos drawn at their far level (`LENS_DEPTH` under a pixel), and its visors drawn at all (`VISOR_REACH` over one). */
+  far: boolean;
+  visors: boolean;
+  /** Its visors' matrices, kept to draw them again when they come back. */
+  readonly shields: Float32Array;
 }
 
-/** A head's shapes and where each sits in it, relative to the foot of its post: the post, the arm and the housing (the frame), the lenses,
- *  the lit lenses' halos and the visors; each lens's, halo's and visor's place by lamp and face. What `createSignalHeads` draws, and what a
- *  sheet of the head draws (`signalHeadModel`). */
-export function signalHeadShapes(): {
-  readonly postGeometry: BufferGeometry; readonly armGeometry: BufferGeometry; readonly housingGeometry: BufferGeometry;
-  readonly lensGeometry: BufferGeometry; readonly haloGeometry: BufferGeometry; readonly visorGeometry: BufferGeometry;
-  readonly POST: Matrix4; readonly ARM: Matrix4; readonly BOX: Matrix4;
-  readonly lens: Record<Lamp, Matrix4[]>; readonly halos: Record<Lamp, Matrix4[]>; readonly visors: Matrix4[];
-} {
-  // The post's foot stands on the footway (its cap faces the ground); the arm's ends lie inside the post (wider) and inside the housing.
-  const postGeometry = cylinderWith(POST_RADIUS, POST_RADIUS, POST_HEIGHT, 8, { top: true, bottom: false });
-  const armGeometry = cylinderWith(ARM_RADIUS, ARM_RADIUS, ARM_LENGTH, 8, { top: false, bottom: false });
-  const housingGeometry = new BoxGeometry(HEAD_WIDTH, HEAD_HEIGHT, HEAD_DEPTH);
-  // A flat disc rather than a sphere; its back against the housing's face never shows (the face -1 lenses are turned half round, `lens`).
-  const lensGeometry = cylinderWith(LAMP_RADIUS, LAMP_RADIUS, u(0.06), 12, { top: true, bottom: false }).rotateX(
-    Math.PI / 2,
-  );
-  // DO NOT make it wider than the housing's face: a disc past its sides hung off the head, a lens out of its can (look 21-street-zoom, 2026-10-18).
-  const HALO_RADIUS = Math.min(LAMP_RADIUS * 1.8, HEAD_WIDTH / 2 - u(0.015));
-  // Closed at its back too: it stands 1.3 cm off the housing's face (`halos`, z * 0.96), and seen along the face through that gap an open
-  // back showed the sky through the halo (the face audit, `src/lab/propHoleSheet.ts` "signal housing", 2026-10-25).
-  const haloGeometry = cylinderWith(HALO_RADIUS, HALO_RADIUS, u(0.02), 12, { top: true, bottom: true })
-    .rotateX(Math.PI / 2);
-  const visorGeometry = new BoxGeometry(LAMP_RADIUS * 2.5, u(0.06), VISOR_DEPTH);
-
-  // Where each part sits in its head, relative to the foot of the post.
-  const at = (x: number, y: number, z: number, rotateZ = 0): Matrix4 =>
-    new Matrix4().makeRotationZ(rotateZ).setPosition(x, y, z);
-  const POST = at(0, POST_HEIGHT / 2, 0);
-  const ARM = at(ARM_LENGTH / 2, POST_HEIGHT - u(0.3), 0, -Math.PI / 2);
-  const BOX = at(ARM_LENGTH, HEAD_CENTRE, 0);
-  const lens: Record<Lamp, Matrix4[]> = { red: [], amber: [], green: [] };
-  const halos: Record<Lamp, Matrix4[]> = { red: [], amber: [], green: [] };
-  const visors: Matrix4[] = [];
-  /** A lens or a halo, its open back towards the housing: the face -1 ones turned half round (the disc is the same turned). */
-  const facing = (y: number, z: number, face: number): Matrix4 =>
-    face < 0 ? new Matrix4().makeRotationY(Math.PI).setPosition(ARM_LENGTH, y, z) : at(ARM_LENGTH, y, z);
-  LAMPS.forEach((name, index) => {
-    const y = HEAD_CENTRE + LAMP_PITCH * (1 - index);
-    for (const face of FACES) {
-      const z = (HEAD_DEPTH / 2 + u(0.03)) * face;
-      halos[name].push(facing(y, z * 0.96, face));
-      lens[name].push(facing(y, z, face));
-      // A hood over each lens.
-      visors.push(at(ARM_LENGTH, y + LAMP_RADIUS * 1.15, z + (VISOR_DEPTH / 2) * face));
-    }
-  });
-
-  return { postGeometry, armGeometry, housingGeometry, lensGeometry, haloGeometry, visorGeometry, POST, ARM, BOX, lens, halos, visors };
-}
-
-/** One head at the origin as one geometry, its parts placed as `createSignalHeads` places them (`signalHeadShapes`), the lamp `lit` with its
- *  halos: what a sheet of the head looks at (its faces, `src/lab/propHoleSheet.ts`). Vertex colours: the frame's, the visors', each lens's. */
-export function signalHeadModel(lit: Lamp | null): BufferGeometry {
-  const shapes = signalHeadShapes();
-  const parts: BufferGeometry[] = [];
-  const put = (shape: BufferGeometry, at: Matrix4, colour: number): void => {
-    const g = (shape.index ? shape.toNonIndexed() : shape.clone()).applyMatrix4(at);
-    for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal') g.deleteAttribute(name);
-    const c = new Color(colour), n = g.getAttribute('position').count;
-    g.setAttribute('color', new BufferAttribute(new Float32Array(n * 3).map((_, i) => (i % 3 === 0 ? c.r : i % 3 === 1 ? c.g : c.b)), 3));
-    parts.push(g);
-  };
-  put(shapes.postGeometry, shapes.POST, 0x2b302d);
-  put(shapes.armGeometry, shapes.ARM, 0x2b302d);
-  put(shapes.housingGeometry, shapes.BOX, 0x15191a);
-  for (const visor of shapes.visors) put(shapes.visorGeometry, visor, 0x15191a);
-  const lensColour: Record<Lamp, number> = { red: 0x8d221c, amber: 0x8a6410, green: 0x1d6b33 };
-  const litColour: Record<Lamp, number> = { red: 0xff4034, amber: 0xffb219, green: 0x3bf06a };
-  for (const name of LAMPS) {
-    for (const at of shapes.lens[name]) put(shapes.lensGeometry, at, name === lit ? litColour[name] : lensColour[name]);
-    if (name === lit) for (const at of shapes.halos[name]) put(shapes.haloGeometry, at, litColour[name]);
-  }
-  const merged = mergeGeometries(parts)!;
-  for (const g of parts) g.dispose();
-  merged.computeBoundingBox();
-  merged.computeBoundingSphere();
-  return merged;
-}
 
 /** Builds and updates the physical signal heads used by the Three.js renderer. */
 export function createSignalHeads(
@@ -192,7 +109,7 @@ export function createSignalHeads(
   holdStill(group);
   scene.add(group);
 
-  const { postGeometry, armGeometry, housingGeometry, lensGeometry, haloGeometry, visorGeometry, POST, ARM, BOX, lens, halos, visors } = signalHeadShapes();
+  const { postGeometry, armGeometry, housingGeometry, lensGeometry, haloGeometry, visorGeometry, lensFarGeometry, haloFarGeometry, POST, ARM, BOX, lens, halos, visors } = signalHeadShapes();
 
   // A signal post sways a few centimetres at the top in a gust, its arm and heads with it (`applyStructureSway`).
   const SWAY = m(0.05);
@@ -223,7 +140,7 @@ export function createSignalHeads(
   };
   const frameParts = [
     framePart(postGeometry, POST, STEEL, POST_HEIGHT / 2),
-    framePart(armGeometry, ARM, STEEL, POST_HEIGHT - u(0.3)),
+    framePart(armGeometry, ARM, STEEL, ARM_HEIGHT),
     framePart(housingGeometry, BOX, HOUSING, HEAD_CENTRE),
   ];
   const frameGeometry = mergeGeometries(frameParts)!;
@@ -311,10 +228,13 @@ export function createSignalHeads(
     visors: [visorGeometry, housing, LAMPS.length * FACES.length, shading, false],
     lenses: [lensGeometry, lenses, LAMPS.length * FACES.length, glow, true],
     halos: [haloGeometry, halo, FACES.length, glow, true],
+    lensesFar: [lensFarGeometry, lenses, LAMPS.length * FACES.length, glow, true],
+    halosFar: [haloFarGeometry, halo, FACES.length, glow, true],
   };
-  const NAMES = Object.keys(KINDS) as BatchName[];
   const FIXED: readonly BatchName[] = ['frame', 'visors'];
-  const LENSES: readonly BatchName[] = ['lenses', 'halos'];
+  const LENSES: readonly BatchName[] = ['lenses', 'halos', 'lensesFar', 'halosFar'];
+  /** The kinds whose instances carry a glow each (`aLensGlow`): the lenses, near and far. */
+  const glowing = (name: BatchName): boolean => name === 'lenses' || name === 'lensesFar';
   /** A geometry holding `shape`'s attributes and index themselves (three uploads an attribute once, whatever holds it). */
   const sharing = (shape: BufferGeometry): BufferGeometry => {
     const geometry = new BufferGeometry();
@@ -341,7 +261,7 @@ export function createSignalHeads(
 
     constructor(private readonly name: BatchName) {
       const [shape] = KINDS[name];
-      this.geometry = name === 'lenses' ? sharing(shape) : shape;
+      this.geometry = glowing(name) ? sharing(shape) : shape;
       this.reserve(16);
     }
 
@@ -399,19 +319,20 @@ export function createSignalHeads(
         if (this.colours) colours.set(this.colours.subarray(0, this.count * 3));
         this.colours = colours;
       }
-      if (this.name === 'lenses') {
+      if (glowing(this.name)) {
+        const shape = KINDS[this.name][0];
         const glows = new Float32Array(capacity * 4);
         if (this.glows) glows.set(this.glows.subarray(0, this.count * 4));
         this.glows = glows;
         // The glows are the instances': a geometry of the batch's own over the shape's arrays (never copied, one buffer on the GPU).
         const previous = this.geometry;
-        this.geometry = sharing(KINDS.lenses[0]);
+        this.geometry = sharing(shape);
         const attribute = new InstancedBufferAttribute(glows, 4);
         attribute.setUsage(DynamicDrawUsage);
         this.geometry.setAttribute('aLensGlow', attribute);
-        if (previous !== KINDS.lenses[0]) {
+        if (previous !== shape) {
           previous.setIndex(null);
-          for (const key of Object.keys(KINDS.lenses[0].attributes)) previous.deleteAttribute(key);
+          for (const key of Object.keys(shape.attributes)) previous.deleteAttribute(key);
           previous.dispose();
         }
       }
@@ -501,15 +422,19 @@ export function createSignalHeads(
   /** THE HEADS IN BLOCKS OF THE PLANE: each kind's batch a block, its bounds the block's heads, culled by three out of the view. DO NOT keep one batch a kind for the town: its bounds were the city's, never culled, and every head of a large city drawn at every frame (7,638 lenses, 20,196 visors, 1 M triangles at a close view and as many cast, 2026-10-20). */
   // A world tile (`world/tiles.ts` TILE): four world cells a side.
   const BLOCK = m(1_000);
-  const blocks = new Map<string, Record<BatchName, SignalBatch>>();
+  /** A block's batches, each made at its first instances: a block whose heads are all near has no far batch. */
+  type Block = Partial<Record<BatchName, SignalBatch>>;
+  const blocks = new Map<string, Block>();
+  /** A block's batch of a kind, made now if it has none. */
+  const batchOf = (batches: Block, name: BatchName): SignalBatch => (batches[name] ??= new SignalBatch(name));
   /** Each cell's block, taken at its first heads and kept: its runs never split between two. */
-  const cellBlock = new Map<number, Record<BatchName, SignalBatch>>();
-  const batchesOf = (key: number, sphere: Sphere): Record<BatchName, SignalBatch> => {
+  const cellBlock = new Map<number, Block>();
+  const batchesOf = (key: number, sphere: Sphere): Block => {
     let batches = cellBlock.get(key);
     if (batches) return batches;
     const at = `${Math.floor(sphere.center.x / BLOCK)},${Math.floor(-sphere.center.z / BLOCK)}`;
     batches = blocks.get(at);
-    if (!batches) blocks.set(at, batches = Object.fromEntries(NAMES.map((name) => [name, new SignalBatch(name)])) as Record<BatchName, SignalBatch>);
+    if (!batches) blocks.set(at, batches = {});
     cellBlock.set(key, batches);
     return batches;
   };
@@ -544,8 +469,8 @@ export function createSignalHeads(
   const dropCell = (cell: Cell): void => {
     const batches = cellBlock.get(cell.key);
     if (!batches) return;
-    for (const name of NAMES) batches[name].remove(cell.key);
-    for (const name of NAMES) batches[name].flush();
+    for (const batch of Object.values(batches)) batch.remove(cell.key);
+    for (const batch of Object.values(batches)) batch.flush();
     cellBlock.delete(cell.key);
   };
   const dropCells = (): void => {
@@ -587,9 +512,12 @@ export function createSignalHeads(
       }
     }
     const batches = batchesOf(cell.key, cell.sphere);
-    batches.lenses.add(cell.key, matrices, colours, glows, cell.sphere);
-    batches.halos.add(cell.key, Float32Array.from(haloMatrices), Float32Array.from(haloColours), null, cell.sphere);
-    for (const name of LENSES) batches[name].flush();
+    // At the cell's level; out of the other level's batches.
+    batches[cell.far ? 'lenses' : 'lensesFar']?.remove(cell.key);
+    batches[cell.far ? 'halos' : 'halosFar']?.remove(cell.key);
+    batchOf(batches, cell.far ? 'lensesFar' : 'lenses').add(cell.key, matrices, colours, glows, cell.sphere);
+    batchOf(batches, cell.far ? 'halosFar' : 'halos').add(cell.key, Float32Array.from(haloMatrices), Float32Array.from(haloColours), null, cell.sphere);
+    for (const name of LENSES) batches[name]?.flush();
     cell.stale = false;
   };
 
@@ -634,9 +562,10 @@ export function createSignalHeads(
     let r = 0;
     for (const h of heads) r = Math.max(r, Math.hypot(h.x - cx, h.height - cy, -h.y - cz));
     const sphere = new Sphere(new Vector3(cx, cy, cz), r + HEAD_REACH);
-    const cell: Cell = { key, junctions, heads, sphere, lit: 0, stale: true };
     const frames = new Float32Array(heads.length * 16);
     const shields = new Float32Array(heads.length * visors.length * 16);
+    // The level it had, kept: a junction changed does not draw its neighbours' heads in full for a frame.
+    const cell: Cell = { key, junctions, heads, sphere, lit: 0, stale: true, far: was?.far ?? false, visors: was?.visors ?? true, shields };
     let f = 0, v = 0;
     for (const head of heads) {
       rootOf(head);
@@ -645,12 +574,11 @@ export function createSignalHeads(
       for (const visor of visors) { put(shields, v, visor); v += 16; }
     }
     const batches = batchesOf(key, sphere);
-    batches.frame.add(key, frames, null, null, sphere);
-    batches.visors.add(key, shields, null, null, sphere);
-    for (const name of FIXED) batches[name].flush();
-    batches.lenses.remove(key);
-    batches.halos.remove(key);
-    for (const name of LENSES) batches[name].flush();
+    batchOf(batches, 'frame').add(key, frames, null, null, sphere);
+    if (cell.visors) batchOf(batches, 'visors').add(key, shields, null, null, sphere);
+    for (const name of FIXED) batches[name]?.flush();
+    for (const name of LENSES) batches[name]?.remove(key);
+    for (const name of LENSES) batches[name]?.flush();
     cells.set(key, cell);
   };
   const countLamps = (): void => {
@@ -703,9 +631,25 @@ export function createSignalHeads(
     countLamps();
   };
 
+  const eye = new Vector3();
+  /** A cell's lenses' and visors' levels for the pixels a world unit spans at its nearest point: the lenses written again at a change (`writeLenses`,
+   *  the cell made stale), the visors drawn or let go at once. */
+  const levelOf = (cell: Cell, view: SignalView): void => {
+    const perUnit = view.orthoPx ?? view.pxAtMetre / Math.max(cell.sphere.distanceToPoint(eye.set(view.x, view.y, view.z)), 1);
+    const far = LENS_DEPTH * perUnit < (cell.far ? 1 : COARSEN);
+    if (far !== cell.far) { cell.far = far; cell.stale = true; }
+    const visorsOn = VISOR_REACH * perUnit >= (cell.visors ? COARSEN : 1);
+    if (visorsOn === cell.visors) return;
+    cell.visors = visorsOn;
+    const batches = batchesOf(cell.key, cell.sphere);
+    if (visorsOn) batchOf(batches, 'visors').add(cell.key, cell.shields, null, null, cell.sphere);
+    else batches.visors?.remove(cell.key);
+    batches.visors?.flush();
+  };
+
   return {
     group,
-    sync(feed, net, detailed, frustum) {
+    sync(feed, net, detailed, frustum, view) {
       if (!detailed) {
         group.visible = false;
         return;
@@ -734,6 +678,7 @@ export function createSignalHeads(
       let litLenses = 0;
       for (const cell of cells.values()) {
         if (frustum && !frustum.intersectsSphere(cell.sphere)) continue;
+        if (view) levelOf(cell, view);
         for (const junction of cell.junctions) {
           const stage = feed.stage(junction.node);
           if (junction.stage === stage && junction.heads[0]!.state !== null) continue;
@@ -754,7 +699,7 @@ export function createSignalHeads(
     dispose() {
       scene.remove(group);
       dropCells();
-      for (const batches of blocks.values()) for (const name of NAMES) batches[name].dispose();
+      for (const batches of blocks.values()) for (const batch of Object.values(batches)) batch.dispose();
       blocks.clear();
       group.clear();
       shown.clear();
@@ -766,6 +711,8 @@ export function createSignalHeads(
         lensGeometry,
         haloGeometry,
         visorGeometry,
+        lensFarGeometry,
+        haloFarGeometry,
       ]) {
         geometry.dispose();
       }

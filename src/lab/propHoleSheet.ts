@@ -6,7 +6,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { barrierModel } from '../render/barriers';
 import { createSceneryKit } from '../render/scenery';
-import { signalHeadModel } from '../render/signals';
+import { signalHeadModel } from '../render/signalShapes';
 
 /**
  * THE PROPS' FACE AUDIT (`scripts/prop-ladder-sheet.mjs holes`): every street prop's model drawn alone with its own material (one side, as the

@@ -100,6 +100,39 @@ describe('signal heads batched over the map', () => {
     heads.dispose();
   });
 
+  it('draws a cell seen from afar with its lenses and halos at their face alone, its visors out under a pixel, and in full again near', () => {
+    const { net, node, segments } = crossing();
+    const heads = createSignalHeads(new Scene());
+    const feed = feedOf(node, segments, ['green', 'red']);
+    const n = segments.length;
+    const drawn = (name: string): number => heads.group.children
+      .filter((c): c is InstancedMesh => c instanceof InstancedMesh && c.name === name).reduce((sum, m) => sum + m.count, 0);
+    const triangles = (name: string): number => {
+      const mesh = heads.group.children.find((c): c is InstancedMesh => c instanceof InstancedMesh && c.name === name)!;
+      return mesh.geometry.index!.count / 3;
+    };
+    // The eye 1,000 m over the heads, 1,000 px a metre there: a lens's 6 cm rim spans 60 px, a visor's 42 cm diagonal 420.
+    heads.sync(feed, net, true, undefined, { x: 0, y: 1_000, z: 0, pxAtMetre: 1_000_000, orthoPx: null });
+    expect([drawn('signal-lenses'), drawn('signal-halos'), drawn('signal-visors')]).toEqual([n * 6, n * 2, n * 6]);
+    expect([drawn('signal-lensesFar'), drawn('signal-halosFar')]).toEqual([0, 0]);
+    // 10 px a metre there: the rim 0.6 px, the face alone; the visor 4.2 px, still drawn.
+    heads.sync(feed, net, true, undefined, { x: 0, y: 1_000, z: 0, pxAtMetre: 10_000, orthoPx: null });
+    expect([drawn('signal-lenses'), drawn('signal-halos'), drawn('signal-visors')]).toEqual([0, 0, n * 6]);
+    expect([drawn('signal-lensesFar'), drawn('signal-halosFar')]).toEqual([n * 6, n * 2]);
+    // 1 px a metre there: the visor 0.42 px, out of the drawing.
+    heads.sync(feed, net, true, undefined, { x: 0, y: 1_000, z: 0, pxAtMetre: 1_000, orthoPx: null });
+    expect([drawn('signal-lenses'), drawn('signal-halos'), drawn('signal-visors')]).toEqual([0, 0, 0]);
+    expect([drawn('signal-lensesFar'), drawn('signal-halosFar')]).toEqual([n * 6, n * 2]);
+    // The face alone: 12 triangles where the lens drew 36 and the halo 48.
+    expect([triangles('signal-lensesFar'), triangles('signal-halosFar'), triangles('signal-lenses'), triangles('signal-halos')]).toEqual([12, 12, 36, 48]);
+    expect(heads.group.userData.litLamps).toBe(n * 2);
+    // Near again: all in full.
+    heads.sync(feed, net, true, undefined, { x: 0, y: 1_000, z: 0, pxAtMetre: 1_000_000, orthoPx: null });
+    expect([drawn('signal-lenses'), drawn('signal-halos'), drawn('signal-visors')]).toEqual([n * 6, n * 2, n * 6]);
+    expect([drawn('signal-lensesFar'), drawn('signal-halosFar')]).toEqual([0, 0]);
+    heads.dispose();
+  });
+
   it('paints each lens as its own mesh did: lit in its pure colour, the dark ones with their filter and glow', () => {
     const { net, node, segments } = crossing();
     const heads = createSignalHeads(new Scene());
