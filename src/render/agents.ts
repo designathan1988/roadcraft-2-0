@@ -59,6 +59,7 @@ import { NIGHT_LUMINANCE, nightGain } from './lightLevels';
 import { DOOR_SWING, createKerbFigure, kerbFigure, occupantPlays, type Play } from './occupants';
 import { blobInto, blobMesh } from './blobShadows';
 import { ERROR_PIXELS, LEVELS, LEVEL_ERRORS, PartLevelMaker, SHED, levelFor, type Weld } from './vehicleLevels';
+import { lodPool } from './people/lodPool';
 import { withoutHidden } from './vehicleHidden';
 import { VEHICLE_WHOLE_CAP, type QualitySettings } from './quality';
 import { jobPort } from '../jobs/jobPool';
@@ -670,6 +671,8 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
   /** Moves when levels arrive: a parked car's kept instances name the parts it was drawn with (`VehicleDraw` kept). */
   let levelsVersion = 0;
   const ladderParts: Part[] = [];
+  /** Every ladder made: its levels asked once every part is made (after `allParts`). */
+  const ladders: Ladder[] = [];
   /** The levels of `source`, made once; `copies` of it on a vehicle (`PartLevelMaker`); `occluders`, for a part that casts no shadow, the
    *  vehicle's opaque triangles its levels are seen past (`vehicleSeen.ts`), worked out when first asked. */
   const levelsFor = (source: BufferGeometry, weld: Weld, copies = 1, occluders: (() => Float64Array) | null = null): Promise<BufferGeometry[]> => {
@@ -691,6 +694,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
       ladderParts.push(part);
     }
     const made: Ladder = { parts, route: new Array<number>(LEVELS).fill(0), ask: null };
+    ladders.push(made);
     made.ask = () => void levelsFor(base.mesh.geometry, weld, copies, occluders).then((all) => {
       for (let k = 1; k < all.length; k++) {
         const geometry = all[k]!;
@@ -744,6 +748,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
     const parts: Part[] = [];
     for (let k = 0; k < LEVELS; k++) parts.push(panelPart(k ? `${name}@${k}` : name, base, casts));
     const made: Ladder = { parts, route: new Array<number>(LEVELS).fill(0), ask: null };
+    ladders.push(made);
     made.ask = () => void Promise.all(bodyParts.map((p) => (p ? levelsFor(p.geometry, p.weld, SHED, p.occluders) : Promise.resolve(null)))).then((all) => {
       const at = (k: number): (BufferGeometry | null)[] => all.map((levels) => (levels ? levels[Math.min(k, levels.length - 1)]! : null));
       const trianglesAt = (k: number): number => at(k).reduce((n, g) => n + (g ? (g.index ? g.index.count : g.getAttribute('position').count) / 3 : 0), 0);
@@ -885,6 +890,13 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
   const twoWheelerPartList: Part[] = [...twoWheelerParts.values()].flatMap((t) =>
     [t.body.parts[0]!, t.trim.parts[0]!, t.steering.parts[0]!, ...(t.cranks ? [t.cranks.parts[0]!] : [])]);
   const allParts: readonly Part[] = [...parts, ...carPartList, ...twoWheelerPartList, ...ladderParts, ...panelParts];
+  // EVERY PART'S LEVELS ASKED NOW, in the levels' worker (`lodPool.ts`), not the first time a car is drawn at a coarser one (`rung`): until a
+  // ladder's levels come, every level of it draws the whole model, and the worker is one queue with the people's. DO NOT wait for the first
+  // coarse draw: the near cars' bodies (`car-*-body`, ~12,000 triangles) still drew whole at every level after a long session, hundreds of cars
+  // at their full model, and again in the shadows (the F7 audit's capture, 6.76 M triangles of vehicles downtown, 2026-10-25). Only off the
+  // page: with no levels' worker (`lodPool` null) every level is made on the page, and all at once they held it for seconds - there they are
+  // made as they are first drawn.
+  if (lodPool()) for (const l of ladders) rung(l, 1);
 
   // The scenery's people: the few bodies of the scenery cast
   const pedestrians = createRiggedCitizens(CROWD_IDS, onAssetsReady);
