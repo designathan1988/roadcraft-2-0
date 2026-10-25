@@ -158,7 +158,12 @@ export function createGpuProbe(renderer: WebGLRenderer, scene: Scene): GpuProbe 
     const instances = o.isInstancedMesh ? o.count ?? 1 : o.isBatchedMesh ? o._multiDrawCount ?? o.instanceCount ?? 1 : 1;
     const program = (renderer.properties.get(material) as { currentProgram?: { name: string; cacheKey: string; id: number } }).currentProgram;
     const counted = geometry.index ? geometry.index.count : (geometry.attributes['position']?.count ?? 0);
-    const vertices = Math.max(0, Math.min(counted, geometry.drawRange.count) - geometry.drawRange.start);
+    // A batch's multi-draw draws its draws' own counts (r186 `BatchedMesh._multiDrawCounts`, `_multiDrawCount` of them). DO NOT take its whole
+    // index once a draw: the town's walls read 46,116,742 vertices for 418 k triangles (the F7 audit, `reports/audit-f7/AUDIT.md` P8, 2026-10-25).
+    const multi = o.isBatchedMesh ? (o as { _multiDrawCounts?: Int32Array })._multiDrawCounts : undefined;
+    let drawn = 0;
+    if (multi) for (let i = 0; i < (o._multiDrawCount ?? 0); i++) drawn += multi[i]!;
+    const vertices = multi ? drawn : Math.max(0, Math.min(counted, geometry.drawRange.count) - geometry.drawRange.start) * instances;
     return {
       index: drawIndex++,
       object,
@@ -176,7 +181,7 @@ export function createGpuProbe(renderer: WebGLRenderer, scene: Scene): GpuProbe 
       triangles,
       lines,
       points,
-      vertices: vertices * instances,
+      vertices,
       calls,
       pass: shadowLight !== null ? 'shadows' : passes[passes.length - 1] ?? 'outside chain',
       target: targetName(),
