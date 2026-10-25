@@ -161,7 +161,7 @@ import { wantAllTexels } from './surfaceTextures';
 import { BLUEPRINTS, instantiate } from '@world/buildings/blueprints';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { GEOMETRY_BUDGETS, type GeometryBudget, QUALITY, type QualityLevel, type QualitySettings } from './quality';
-import { countMemory } from './memoryCounters';
+import { geometryBytesOf } from './memoryCounters';
 import { ViewCells } from '@world/viewCells';
 import { type GroundRecord, type Rect, unionRect } from './groundChanges';
 import { FOREST_SPECIES, createGroundCoverKit } from './groundCover';
@@ -1419,14 +1419,14 @@ export function createSceneRenderer(
   };
   applyGeometryBudget();
   /**
-   * THE TIER'S GEOMETRY UNDER ITS WHOLE BUDGET (`GEOMETRY_BUDGETS.totalMB`), read off the scene every `GOVERN_FRAMES` (`countMemory`, what
+   * THE TIER'S GEOMETRY UNDER ITS WHOLE BUDGET (`GEOMETRY_BUDGETS.totalMB`), read off the scene every `GOVERN_FRAMES` (`geometryBytesOf`, the geometry of what
    * `__roadcraft.memory()` reports): what is out of the view has gone first by its own budgets (the masses' levels, the view cells), and
    * what is still over comes off the buildings' detail budget, the farthest cells stepping down to their facade level and masses
    * (`MassCells.cap`) - never a hole. Given back as the rest shrinks, up to the tier's `detailMemoryMB`. The lab's own detail budget
    * (`buildingChoices.detailMemoryMB`) is left as it is set. Returns the geometry counted, bytes.
    */
   const governGeometry = (): number => {
-    const geometry = countMemory(scene).geometryBytes;
+    const geometry = geometryBytesOf(scene);
     if (buildingChoices.detailMemoryMB >= 0) return geometry;
     const total = budgetNow().totalMB * 1048576;
     const tierDetail = quality.detailMemoryMB * 1048576;

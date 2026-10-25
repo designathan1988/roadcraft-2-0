@@ -29,6 +29,65 @@ export interface CountOptions {
   readonly uniformsOf?: (material: object) => Record<string, { value: unknown }> | undefined;
 }
 
+/** A buffer as the scene holds it: an interleaved attribute is a view into a buffer other attributes share, counted once. */
+type Owner = { readonly array: (ArrayLike<number> & { byteLength?: number }) | null; readonly keptBytes?: number; readonly isGLBufferAttribute?: boolean };
+const ownerOf = (a: Attribute): Owner => (a.isInterleavedBufferAttribute && a.data ? a.data : a) as unknown as Owner;
+const isAttribute = (value: unknown): value is Attribute =>
+  (value as Attribute | null)?.isBufferAttribute === true || (value as Attribute | null)?.isInterleavedBufferAttribute === true;
+
+/** A buffer's bytes on the GPU: its array's; the size kept when its array was let go after upload (`gpuOnly.ts`) or never held
+ *  (`GLBufferAttribute`, the shell batches' `gpuBatchedMesh.ts`); -1 when it was let go with no size kept. DO NOT guess a buffer let go
+ *  without its size at 4 bytes an item: `roadResidency.ts` lets a far block's go AND disposes it - nothing held anywhere, and it was counted
+ *  as GPU memory (report TST-09). */
+function bufferBytes(owner: Owner): number {
+  const kept = owner.keptBytes;
+  if (owner.isGLBufferAttribute || !owner.array) return kept ?? -1;
+  return owner.array.byteLength ?? owner.array.length * 4;
+}
+
+/** Calls `object` with every object under `root`, shown or not (a hidden mesh holds its memory all the same), and `material` with each of
+ *  their materials the first time one is reached, with the object it was reached from: a material many meshes share is read once. */
+function eachHolder(root: Object3D, object: (o: Object3D) => void, material: (m: object, holder: Object3D) => void): void {
+  const seen = new Set<object>();
+  const once = (m: object, holder: Object3D): void => {
+    if (seen.has(m)) return;
+    seen.add(m);
+    material(m, holder);
+  };
+  root.traverse((o) => {
+    object(o);
+    const m = (o as { material?: object | object[] }).material;
+    if (Array.isArray(m)) for (const one of m) once(one as object, o);
+    else if (m) once(m, o);
+  });
+}
+
+/** The buffers of an object's geometry: its attributes, its index and its morph targets. */
+function geometryBuffers(o: Object3D, add: (a: Attribute) => void): void {
+  const geometry = (o as { geometry?: { attributes: Record<string, Attribute>; index: Attribute | null; morphAttributes: Record<string, Attribute[]> } }).geometry;
+  if (!geometry) return;
+  for (const a of Object.values(geometry.attributes)) add(a);
+  if (geometry.index) add(geometry.index);
+  for (const list of Object.values(geometry.morphAttributes)) for (const a of list) add(a);
+}
+
+/** The scene's geometry on the GPU, bytes (`MemoryCounters.geometryBytes`) and nothing else: what the tier's governor reads of the
+ *  scene every second (`renderer.ts` governGeometry), with none of the names, the textures and the uniforms the full count works out. */
+export function geometryBytesOf(root: Object3D): number {
+  const buffers = new Set<object>();
+  let bytes = 0;
+  const add = (a: Attribute): void => {
+    const owner = ownerOf(a);
+    if (buffers.has(owner)) return;
+    buffers.add(owner);
+    bytes += Math.max(0, bufferBytes(owner));
+  };
+  // The buffers an object or a material holds as its own fields (an instanced mesh's matrices).
+  const fields = (holder: object): void => { for (const value of Object.values(holder)) if (isAttribute(value)) add(value); };
+  eachHolder(root, (o) => { fields(o); geometryBuffers(o, add); }, fields);
+  return bytes;
+}
+
 /** Counts every object under `root`, shown or not: a hidden mesh holds its memory all the same. */
 export function countMemory(root: Object3D, options: CountOptions = {}): MemoryCounters {
   const buffers = new Set<object>();
@@ -42,28 +101,16 @@ export function countMemory(root: Object3D, options: CountOptions = {}): MemoryC
   const bytesByName = new Map<string, number>();
   let holder = '';
 
-  const addBuffer = (a: Attribute | null | undefined): void => {
-    if (!a) return;
-    // An interleaved attribute is a view into a buffer other attributes share.
-    const owner: { array: ArrayLike<number> | null; count: number; itemSize?: number; stride?: number } = a.isInterleavedBufferAttribute && a.data ? a.data : a;
+  const addBuffer = (a: Attribute): void => {
+    const owner = ownerOf(a);
     if (buffers.has(owner)) return;
     buffers.add(owner);
-    const array = owner.array as (ArrayLike<number> & { byteLength?: number }) | null;
-    // Let go after upload with its size kept (`gpuOnly.ts`): on the GPU, off the CPU.
-    const kept = (owner as { keptBytes?: number }).keptBytes;
-    // A buffer three never held an array for (`GLBufferAttribute`, the shell batches' `gpuBatchedMesh.ts`): on the GPU, its size kept.
-    if ((owner as { isGLBufferAttribute?: boolean }).isGLBufferAttribute) {
-      if (kept === undefined) { releasedBuffers++; return; }
-      geometryBytes += kept;
-      bytesByName.set(holder, (bytesByName.get(holder) ?? 0) + kept);
-      return;
-    }
-    // DO NOT guess a buffer let go without its size at 4 bytes an item: `roadResidency.ts` lets a far block's go AND disposes it - nothing held anywhere, and it was counted as GPU memory (report TST-09).
-    if (!array && kept === undefined) { releasedBuffers++; return; }
-    const bytes = array ? array.byteLength ?? array.length * 4 : kept!;
+    const bytes = bufferBytes(owner);
+    if (bytes < 0) { releasedBuffers++; return; }
     geometryBytes += bytes;
     bytesByName.set(holder, (bytesByName.get(holder) ?? 0) + bytes);
-    if (array) {
+    // Let go after upload with its size kept (`gpuOnly.ts`), or never held (`GLBufferAttribute`): on the GPU, off the CPU.
+    if (owner.array && !owner.isGLBufferAttribute) {
       geometryCpuBytes += bytes;
       cpuByName.set(holder, (cpuByName.get(holder) ?? 0) + bytes);
     }
@@ -75,31 +122,25 @@ export function countMemory(root: Object3D, options: CountOptions = {}): MemoryC
       textureHolder.set(value as Texture, holder);
     }
   };
-  /** Textures a material or an object holds as its own fields (maps, a BatchedMesh's matrices). */
-  const scanFields = (holder: object): void => {
-    for (const value of Object.values(holder)) {
+  /** Textures a material or an object holds as its own fields (maps, a BatchedMesh's matrices), and buffers. */
+  const scanFields = (fields: object): void => {
+    for (const value of Object.values(fields)) {
       addTexture(value);
-      if ((value as Attribute | null)?.isBufferAttribute || (value as Attribute | null)?.isInterleavedBufferAttribute) addBuffer(value as Attribute);
+      if (isAttribute(value)) addBuffer(value);
     }
   };
 
-  root.traverse((object) => {
+  eachHolder(root, (object) => {
     holder = object.name || object.type;
     scanFields(object);
-    const geometry = (object as { geometry?: { attributes: Record<string, Attribute>; index: Attribute | null; morphAttributes: Record<string, Attribute[]> } }).geometry;
-    if (geometry) {
-      for (const a of Object.values(geometry.attributes)) addBuffer(a);
-      addBuffer(geometry.index);
-      for (const list of Object.values(geometry.morphAttributes)) for (const a of list) addBuffer(a);
-    }
-    const material = (object as { material?: object | object[] }).material;
-    for (const m of Array.isArray(material) ? material : material ? [material] : []) {
-      scanFields(m);
-      const uniforms = (m as { uniforms?: Record<string, { value: unknown }> }).uniforms;
-      if (uniforms) for (const u of Object.values(uniforms)) addTexture(u?.value);
-      const compiled = options.uniformsOf?.(m);
-      if (compiled) for (const u of Object.values(compiled)) addTexture(u?.value);
-    }
+    geometryBuffers(object, addBuffer);
+  }, (m, reached) => {
+    holder = reached.name || reached.type;
+    scanFields(m);
+    const uniforms = (m as { uniforms?: Record<string, { value: unknown }> }).uniforms;
+    if (uniforms) for (const u of Object.values(uniforms)) addTexture(u?.value);
+    const compiled = options.uniformsOf?.(m);
+    if (compiled) for (const u of Object.values(compiled)) addTexture(u?.value);
   });
 
   let textureBytes = 0;
