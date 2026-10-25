@@ -3,11 +3,13 @@ import { Box3, type BufferGeometry, Group, InstancedBufferAttribute, InstancedIn
 import { CELL } from '@world/cells';
 
 import { HYSTERESIS } from '../cellInstances';
+import { PICTURE_PX } from '../plantImpostors';
 import { ERROR_PIXELS } from '../propLevels';
 import { COLOURED_PARTS } from './cellArrays';
 import { partLook } from './fade';
 import { PART_KINDS, type BuildingKit, type PartKind, type PartLevel } from './kit';
 import { BAR_PIXELS, type PartCell, widestBar } from './partCells';
+import { PICTURE_ORDER } from './partPictures';
 import type { PartFiling } from './partFiling';
 import { POSE_FLOATS, letGoPosed, partPoseDepth, posedCopy } from './partPose';
 import { SHELL_PARTS } from './shellParts';
@@ -21,7 +23,8 @@ import { SHELL_PARTS } from './shellParts';
 // drawn only where their measured error spans under `ERROR_PIXELS` at every instance (`choose`): DO NOT draw a prop at its coarsest
 // level whatever the distance, a balcony's plants lost their leaves and its pots were crumpled 3.8 px off at 300 m (the far batch's
 // sheets, 2026-10-24). The shell's own parts (lot boxes, rails, slabs) stay per cell: their coarse level is a top face, and a
-// yard's wall at a facade cell is still tens of pixels tall.
+// yard's wall at a facade cell is still tens of pixels tall. A prop with a picture (`partPictures.ts`) is drawn as it where the nearest cell's
+// instances span under `PICTURE_PX`, as the near cells draw it; its shadow is still its model's level's, cast by a caster of its own.
 
 /** A cell's instances of one kind in the batch: a contiguous run of the kind's buffers. */
 interface Run {
@@ -42,8 +45,12 @@ interface KindBatch {
   readonly kind: PartKind;
   /** The level it is drawn at unless a measured one is within the bound (`choose`): the kit's own coarsest (a card, a top face; a small prop's finest). */
   readonly base: PartLevel;
-  /** The level drawn now: its model, and its triangles an instance for the view's budget. */
+  /** The level drawn now: its model or its picture, and its triangles an instance for the view's budget. */
   level: PartLevel;
+  /** Its model's level now (`level` unless that is its picture): what it casts. */
+  model: PartLevel;
+  /** Its model's level cast while its picture is drawn (a picture casts nothing): drawn into the near cascades alone (`castShadow`); null until first needed. */
+  caster: InstancedMesh | null;
   /** Each level's copy posed by `poses` made so far, by its model: the one drawn is the mesh's geometry, the others kept for the eye's way back. */
   readonly copies: Map<BufferGeometry, BufferGeometry>;
   readonly material: Material;
@@ -55,10 +62,10 @@ interface KindBatch {
   readonly runs: Run[];
 }
 
-/** A kind's coarsest level of the kit's own: the last with no measured error (the simplified levels of a small prop are measured, `kit.ts`). */
+/** A kind's coarsest level of the kit's own: the last with no measured error (the simplified levels of a small prop are measured, `kit.ts`), not its picture. */
 function baseLevel(levels: readonly PartLevel[]): PartLevel {
   let base = levels[0]!;
-  for (const level of levels) if (level.measured === undefined) base = level;
+  for (const level of levels) if (level.measured === undefined && !level.picture) base = level;
   return base;
 }
 
@@ -117,7 +124,7 @@ export class FarPartBatch {
       }
       this.group.add(mesh);
       this.kinds.set(kind, {
-        kind, base: level, level, copies: new Map([[level.geometry, geometry]]), material, mesh, poses: poseBuffer,
+        kind, base: level, level, model: level, caster: null, copies: new Map([[level.geometry, geometry]]), material, mesh, poses: poseBuffer,
         colours: mesh.instanceColor, capacity, used: 0, runs: [],
       });
     }
@@ -128,34 +135,58 @@ export class FarPartBatch {
    *  bound narrowed by the band a level is held in (`cellInstances.ts` HYSTERESIS) and held up to it. The levels are read as the kit has them now:
    *  a small prop's simplified ones come in once the simplifier has loaded (`kit.ts` levelsReady). */
   private choose(batch: KindBatch, worst: number): void {
+    const levels = this.kit.screen[batch.kind].levels;
     let pick = batch.base;
-    for (const level of this.kit.screen[batch.kind].levels) {
+    for (const level of levels) {
       if (level.measured === undefined) continue;
-      const bound = level === batch.level ? ERROR_PIXELS : ERROR_PIXELS / (1 + HYSTERESIS);
+      const bound = level === batch.model ? ERROR_PIXELS : ERROR_PIXELS / (1 + HYSTERESIS);
       if (level.measured * worst <= bound) pick = level;
     }
-    if (pick !== batch.level) this.draw(batch, pick);
+    // Its picture (its last level) where its instances span under `PICTURE_PX` at the most (held up to it, entered under the band narrowed as
+    // above), once taken, and never faded (the faded material draws a model).
+    const last = levels[levels.length - 1]!, picture = last.picture;
+    const shown = picture && !this.faded && picture.ready() && picture.across * worst < PICTURE_PX / (last === batch.level ? 1 : 1 + HYSTERESIS) ? last : pick;
+    if (shown !== batch.level || pick !== batch.model) this.draw(batch, shown, pick);
   }
 
-  /** `batch` drawn at `level`: its copy posed by the batch's poses (made once, kept), each cell's triangles counted again at it (`trianglesOf`). */
-  private draw(batch: KindBatch, level: PartLevel): void {
+  /** `level`'s copy posed by the batch's poses: made once, kept. */
+  private copyOf(batch: KindBatch, level: PartLevel): BufferGeometry {
     let copy = batch.copies.get(level.geometry);
     if (!copy) {
       copy = posedCopy(level.geometry, batch.poses, 0);
       batch.copies.set(level.geometry, copy);
     }
-    batch.mesh.geometry = copy;
+    return copy;
+  }
+
+  /** `batch` drawn at `level` (its model's level `model`): its copy posed by the batch's poses, its material, what casts; each cell's triangles
+   *  counted again at it (`trianglesOf`). */
+  private draw(batch: KindBatch, level: PartLevel, model: PartLevel): void {
+    batch.mesh.geometry = this.copyOf(batch, level);
+    const look = partLook(this.kit, batch.kind, this.faded);
+    batch.mesh.material = level.picture?.material ?? look.material;
+    // First of the blended things, over what is drawn solid, as its model is (`partPictures.ts` PICTURE_ORDER).
+    batch.mesh.renderOrder = level.picture ? PICTURE_ORDER : look.renderOrder;
     batch.level = level;
-    batch.mesh.castShadow = this.kit.castsShadow.has(batch.kind) && !level.card;
+    batch.model = model;
+    const casts = this.kit.castsShadow.has(batch.kind) && !model.card;
+    // A picture casts nothing: its model's level does, by the caster.
+    batch.mesh.castShadow = casts && !level.picture;
+    if (level.picture && casts && !batch.caster) batch.caster = this.makeCaster(batch);
+    if (batch.caster) {
+      batch.caster.geometry = this.copyOf(batch, model);
+      batch.caster.castShadow = casts && level.picture !== undefined;
+    }
     // Every instance of the kind drawn otherwise casts another shadow: the sun's kept stores told so over the cells' boxes. DO NOT leave it to
     // the geometry's id the casters' signature hashes: a batch that keeps a `castBox` is taken by that box alone, empty since the last pass, and
     // the stores kept the shadows of the level drawn before (`renderer.ts` casterChanges).
     const whole = new Box3();
     for (const box of this.boxes.values()) whole.union(box);
     if (!whole.isEmpty()) {
-      const data = batch.mesh.userData;
-      const kept = data['castBox'] as Box3 | undefined;
-      if (kept) kept.union(whole); else data['castBox'] = whole.clone();
+      for (const mesh of meshesOf(batch)) {
+        const kept = mesh.userData['castBox'] as Box3 | undefined;
+        if (kept) kept.union(whole); else mesh.userData['castBox'] = whole.clone();
+      }
     }
     for (const cell of this.drawn.keys()) this.drawn.set(cell, 0);
     for (const each of this.kinds.values()) for (const run of each.runs) this.drawn.set(run.cell, (this.drawn.get(run.cell) ?? 0) + run.count * each.level.triangles);
@@ -200,12 +231,35 @@ export class FarPartBatch {
     }
   }
 
+  /** A kind's caster (`KindBatch.caster`): its instances at its model's level, its depth material, drawn into the near cascades alone. */
+  private makeCaster(batch: KindBatch): InstancedMesh {
+    const material = partLook(this.kit, batch.kind, false).material;
+    const caster = new InstancedMesh(this.copyOf(batch, batch.model), material, 0);
+    caster.name = `building-${batch.kind}-caster`;
+    caster.customDepthMaterial = partPoseDepth(material);
+    // Drawn in the cascades alone: the casters' signature reads it hidden (`renderer.ts` casterChanges).
+    caster.userData['shadowOnly'] = true;
+    caster.castShadow = true;
+    caster.receiveShadow = false;
+    caster.frustumCulled = false;
+    // Its bounds the batch's (`tellBoxes`), as its mesh's.
+    caster.boundingBox = batch.mesh.boundingBox!.clone();
+    caster.boundingSphere = batch.mesh.boundingSphere!.clone();
+    caster.userData['wholeBox'] = batch.mesh.userData['wholeBox'];
+    caster.matrixAutoUpdate = false;
+    caster.updateMatrix();
+    caster.count = batch.used;
+    caster.visible = false;
+    this.group.add(caster);
+    return caster;
+  }
+
   /** Every instance let go (a lost context's cells asked again): the buffers kept, nothing drawn until cells land. */
   clear(): void {
     for (const batch of this.kinds.values()) {
       batch.used = 0;
       batch.runs.length = 0;
-      batch.mesh.count = 0;
+      for (const mesh of meshesOf(batch)) mesh.count = 0;
       batch.mesh.visible = false;
     }
     this.cells.clear();
@@ -219,13 +273,15 @@ export class FarPartBatch {
     const whole = new Box3();
     for (const box of this.boxes.values()) whole.union(box);
     for (const batch of this.kinds.values()) {
-      const data = batch.mesh.userData;
-      data['wholeBox'] = whole;
-      batch.mesh.boundingBox!.copy(whole);
-      if (whole.isEmpty()) batch.mesh.boundingSphere!.set(new Vector3(), 0); else whole.getBoundingSphere(batch.mesh.boundingSphere!);
-      if (changed) {
-        const kept = data['castBox'] as Box3 | undefined;
-        if (kept) kept.union(changed); else data['castBox'] = changed.clone();
+      for (const mesh of meshesOf(batch)) {
+        const data = mesh.userData;
+        data['wholeBox'] = whole;
+        mesh.boundingBox!.copy(whole);
+        if (whole.isEmpty()) mesh.boundingSphere!.set(new Vector3(), 0); else whole.getBoundingSphere(mesh.boundingSphere!);
+        if (changed) {
+          const kept = data['castBox'] as Box3 | undefined;
+          if (kept) kept.union(changed); else data['castBox'] = changed.clone();
+        }
       }
     }
   }
@@ -235,6 +291,8 @@ export class FarPartBatch {
     if (faded === this.faded) return;
     this.faded = faded;
     for (const batch of this.kinds.values()) {
+      // A picture is not drawn faded: its model's level is (`choose` takes the picture back once shown again).
+      if (faded && batch.level.picture) this.draw(batch, batch.model, batch.model);
       const look = partLook(this.kit, batch.kind, faded);
       batch.mesh.material = look.material;
       batch.mesh.customDepthMaterial = partPoseDepth(look.material);
@@ -243,8 +301,10 @@ export class FarPartBatch {
     }
   }
 
-  /** The far cascades take the buildings by their masses alone: the batch casts nothing (`layer.ts` `castInto`). */
-  castShadow(cast: boolean): void {
+  /** The far cascades take the buildings by their masses alone: the batch casts nothing (`layer.ts` `castInto`). `over`: the passes are over -
+   *  a kind drawn as its picture casts by its caster, shown for the near cascades' passes alone and hidden between them, as its signature reads it. */
+  castShadow(cast: boolean, over = false): void {
+    for (const batch of this.kinds.values()) if (batch.caster) batch.caster.visible = cast && !over && batch.mesh.visible && batch.level.picture !== undefined;
     if (cast === this.casting) return;
     this.casting = cast;
     this.group.visible = cast;
@@ -258,7 +318,7 @@ export class FarPartBatch {
   dispose(): void {
     for (const batch of this.kinds.values()) {
       this.letGoCopies(batch);
-      batch.mesh.dispose();
+      for (const mesh of meshesOf(batch)) mesh.dispose();
     }
     this.group.clear();
     this.cells.clear();
@@ -302,7 +362,7 @@ export class FarPartBatch {
       const s = band.scale, last = s.length - 3;
       batch.runs.push({ cell, i, j, start, count, bar, scale: Math.max(s[last]!, s[last + 1]!, s[last + 2]!) });
       batch.used += count;
-      batch.mesh.count = batch.used;
+      for (const mesh of meshesOf(batch)) mesh.count = batch.used;
       batch.mesh.visible = true;
       dirty(batch, start, count);
       triangles += count * batch.level.triangles;
@@ -332,7 +392,7 @@ export class FarPartBatch {
         }
         batch.runs.splice(i, 1);
         batch.used -= run.count;
-        batch.mesh.count = batch.used;
+        for (const mesh of meshesOf(batch)) mesh.count = batch.used;
         batch.mesh.visible = batch.used > 0;
         dirty(batch, run.start, Math.max(0, batch.used - run.start));
         if (tail < 0) break;
@@ -356,6 +416,7 @@ export class FarPartBatch {
     batch.copies.set(batch.level.geometry, copy);
     batch.mesh.geometry = copy;
     batch.poses = poseBuffer;
+    if (batch.caster) batch.caster.geometry = this.copyOf(batch, batch.model);
     if (batch.colours) {
       const colours = new Uint16Array(capacity * 3);
       colours.set(batch.colours.array as Uint16Array);
@@ -368,6 +429,9 @@ export class FarPartBatch {
 }
 
 const reachPoint = new Vector3();
+
+/** A batch's meshes: the one drawn, and its caster once made. */
+const meshesOf = (batch: KindBatch): InstancedMesh[] => (batch.caster ? [batch.mesh, batch.caster] : [batch.mesh]);
 
 /** The run's poses and colours sent to the GPU, its range only. DO NOT clear the ranges a change already added: every cell added or taken out this frame adds its own, and three merges and clears them once, after the upload (r186 `WebGLAttributes.updateBuffer`). */
 function dirty(batch: KindBatch, start: number, count: number): void {

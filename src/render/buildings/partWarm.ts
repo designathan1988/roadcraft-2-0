@@ -18,6 +18,12 @@ export function partWarmMeshes(kit: BuildingKit): Mesh[] {
   const faded = new InstancedMesh(kit.geometry.lotBox, kit.dimShell, 1);
   faded.setColorAt(0, new Color(1, 1, 1));
   out.push(faded);
+  // The small props' far pictures (`partPictures.ts`): one program for every set, each set's material its own uniforms, tinted as the props are.
+  for (const picture of kit.pictures.of.values()) {
+    const mesh = new InstancedMesh(picture.quad, picture.material, 1);
+    mesh.setColorAt(0, new Color(1, 1, 1));
+    out.push(mesh);
+  }
   const furniture = kit.furniture();
   for (const kind of FURNITURE_KINDS) {
     const mesh = new InstancedMesh(furniture.geometry[kind], furniture.material, 1);

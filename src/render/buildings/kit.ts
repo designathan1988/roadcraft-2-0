@@ -35,6 +35,7 @@ import { m } from '@world/units';
 import { pullTowardEye } from '../depthConvention';
 import { SHELL_PART_FACES, SHELL_PART_KINDS, type ShellPartFace, type ShellPartKind } from './shellParts';
 import { simplerLevels, trianglesOf } from './partSimplify';
+import { PICTURE_PX, type PartPicture, type PartPictures, createPartPictures } from './partPictures';
 
 /** Share of people awake, by hour from midnight: 100 % less the share asleep in the American Time Use Survey 2007-11 */
 const AWAKE_BY_HOUR = [
@@ -123,6 +124,11 @@ function scheduleOutsideLight(material: Material, key: string, after: string, ap
 /** Three lengths along a part model's own axes (x along the wall, y up, z out of it): metres once scaled by an instance's matrix. */
 export type Axes = readonly [number, number, number];
 
+/** Pixels a coarser level's error may span before a finer one is drawn (`partCells.ts` levelAt). 1.5, not 1: the parts were 47 % of the district's
+ *  triangles (9.3 M of 20 M, `npm run diagnose`, 2026-10-22), and the full-resolution occlusion of the top tier is paid from them. Whether a part
+ *  is drawn at all is still judged by a pixel (`levelAt`). */
+export const PART_ERROR_PX = 1.5;
+
 /** A part's geometry at one level of detail. */
 export interface PartLevel {
   readonly geometry: BufferGeometry;
@@ -133,6 +139,8 @@ export interface PartLevel {
   readonly error: Axes;
   /** A simplified level's (`SIMPLIFIED`) two-sided distance from the finest, measured (`propLevels.ts` surfaceOff both ways), model units. */
   readonly measured?: number;
+  /** Its far picture, its last level (`partPictures.ts`): drawn by its set's material, casting nothing (its coarsest model level casts for it). */
+  readonly picture?: PartPicture;
 }
 
 /** How a part kind is drawn by the error on the screen (`partCells.ts`). */
@@ -180,6 +188,8 @@ export interface BuildingKit {
   readonly facadeNear: MeshStandardMaterial;
   /** Parts that cast shadows; the small ones do not, to spare the shadow pass. */
   readonly castsShadow: ReadonlySet<PartKind>;
+  /** The small props' far pictures (`PICTURED`), each its kind's last level once `levelsReady` settles. */
+  readonly pictures: PartPictures;
   /** The furniture models, built the first time an interior is drawn. */
   furniture(): { readonly geometry: Readonly<Record<FurnitureKind, BufferGeometry>>; readonly material: MeshStandardMaterial };
   setGhostValid(valid: boolean): void;
@@ -191,6 +201,9 @@ export interface BuildingKit {
 /** The props given simplified levels by meshoptimizer (`simplerLevels`): modelled in metres, their curves and leaves reducible. */
 // Not the louvres and brises: boxes of slats the simplifier cannot reduce within the error (measured); they have levels of their own.
 const SIMPLIFIED: readonly PartKind[] = ['bike', 'foliage', 'bush', 'airer', 'table', 'dish', 'pot', 'chair', 'lounger'];
+/** The props drawn from afar as their pictures (`partPictures.ts`): every kind whose coarsest model is over 24 triangles, the shell's parts and
+ *  the bars aside (a pot's 14, an awning's or a column's 24 kept; the levels measured after `levelsReady`, 2026-10-25). */
+const PICTURED = ['acUnit', 'foliage', 'bush', 'chair', 'table', 'airer', 'dish', 'lounger', 'bike'] as const;
 
 /** A box's top face alone, its sides left out: a unit square at y = 0.5 facing up, for a thin plate seen from afar. */
 function topFaceGeometry(): BufferGeometry {
@@ -585,6 +598,8 @@ export function createBuildingKit(anisotropy = 4): BuildingKit {
   prefilterThinParts(own, THIN_PROPS);
   scheduleOutsideLight(own.lamp, 'outside-lamp-lot', '#include <emissivemap_fragment>', 'totalEmissiveRadiance *= step(vLampLot, outsideOn);');
   scheduleOutsideLight(own.wash, 'outside-wash-lot', '#include <color_fragment>', 'diffuseColor.a *= step(vLampLot, outsideOn);');
+  // Taken with their near materials as they stand when the pictures are taken (every patch on, `posePart` last).
+  const pictures = createPartPictures(PICTURED, geometry, own);
   // The furniture's models, made once
   const furnitureGeometry = createFurnitureGeometries();
   const tones = furnitureTones(furnitureGeometry);
@@ -702,7 +717,13 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
       levels[kind].push(level);
       geometries.add(level.geometry);
     }
-  })).then(() => {}, (error: unknown) => { console.error('Simplified prop levels failed', error); });
+  })).then(() => {}, (error: unknown) => { console.error('Simplified prop levels failed', error); }).then(() => {
+    // Their pictures last, whatever the simplifier made: drawn where a picture spans under `PICTURE_PX`, its error that share of `PART_ERROR_PX` there.
+    for (const [kind, picture] of pictures.of) {
+      const error = (picture.across * PART_ERROR_PX) / PICTURE_PX;
+      if (!disposed) levels[kind].push({ geometry: picture.quad, triangles: trianglesOf(picture.quad), error: [error, error, error], picture });
+    }
+  });
   let furniture: { geometry: Record<FurnitureKind, BufferGeometry>; material: MeshStandardMaterial } | null = null;
 
   // DO NOT give the parts' instanced meshes three's matrices: every material a part is drawn with makes it from the part's pose, after all its own patches (`partPose.ts`); its meshes that are not instanced draw as before.
@@ -728,6 +749,7 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
     // Glass, doors and shutters close the openings for the sun
     // And the shell's parts, as the shell they were laid in casts.
     castsShadow: new Set<PartKind>(['glass', 'glassDark', 'frame', 'door', 'shutter', 'concrete', 'railing', 'awning', 'column', 'roofRailing', 'fin', 'louvre', 'brise', ...SHADOWED_PROPS, ...SHELL_PART_KINDS]),
+    pictures,
     furniture() {
       if (!furniture) {
         furniture = { geometry: furnitureGeometry, material: posePart(createFurnitureMaterial()) };
@@ -767,6 +789,7 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
       disposed = true;
       for (const g of geometries) g.dispose();
       for (const m of unique) m.dispose();
+      pictures.dispose();
     },
   };
 }

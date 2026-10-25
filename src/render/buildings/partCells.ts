@@ -3,8 +3,9 @@ import { gpuOnlyAttributes } from '../mesh/gpuOnly';
 import { gateUntilBuilt } from '../uploads';
 import { FINISH_ATTRIBUTE } from './cellArrays';
 import { GROUND_ATTRIBUTE, LOOK_FLOATS, SHELL_PARTS, shellPartError } from './shellParts';
-import type { Axes, BuildingKit, PartKind, PartScreen } from './kit';
+import { type Axes, type BuildingKit, PART_ERROR_PX, type PartKind, type PartScreen } from './kit';
 import { partLook } from './fade';
+import { PICTURE_ORDER } from './partPictures';
 import { POSE_FLOATS, letGoPosed, partPoseDepth, posedCopy } from './partPose';
 import { DRAW_TRIANGLES, LEAVES, type PartFiling } from './partFiling';
 
@@ -19,10 +20,7 @@ import { DRAW_TRIANGLES, LEAVES, type PartFiling } from './partFiling';
 
 /** A level is left for a coarser one once that one's error is under this share of a pixel (a shadow under this share of a texel), and taken back at a whole one. */
 const COARSEN = 0.85;
-/** Pixels a coarser level's error may span before a finer one is drawn. 1.5, not 1: the parts were 47 % of the district's triangles
- *  (9.3 M of 20 M, `npm run diagnose`, 2026-10-22), and the full-resolution occlusion of the top tier is paid from them. Whether a part
- *  is drawn at all is still judged by a pixel (`levelAt`). */
-export const PART_ERROR_PX = 1.5;
+export { PART_ERROR_PX } from './kit';
 /** A sub-cell not drawn: every instance in it under a pixel. */
 const NONE = 127;
 /** A part made of bars (a frame's rails and stiles, a railing's, a brise's blades: its `pieces`) leaves the drawing once its bars span under this many pixels: what it covers is its bars, not its box. DO NOT keep it until its whole diagonal is under a pixel: 300 thousand window frames of 6 cm bars were drawn to 1-2 km as lines a fifth of a pixel wide, 6 M triangles of shimmer (2026-10-20). */
@@ -188,6 +186,12 @@ export class PartCell {
         }
         // A run's posed copy of its level: a shell's part too, now that it has a coarse level (`kit.ts`).
         mesh.geometry = this.posedLevel(band, mesh, level);
+        // A picture drawn by its set's material (`partPictures.ts`) first of the blended things, a model by its kind's; a shell's part by `drawFar`'s.
+        if (!SHELL_PARTS.has(band.kind)) {
+          const picture = band.screen.levels[level]!.picture, look = partLook(this.kit, band.kind, this.faded);
+          mesh.material = picture?.material ?? look.material;
+          mesh.renderOrder = picture ? PICTURE_ORDER : look.renderOrder;
+        }
         // The runs cast nothing: the band's caster does (`castInto`), at the cascade's level, whatever the camera chose here.
         mesh.castShadow = false;
         mesh.visible = visible;
@@ -307,7 +311,8 @@ export class PartCell {
     level = NONE;
     for (let m = 0; m < LEAVES; m++) {
       if (band.start[m + 1] === band.start[m]) continue;
-      level = Math.min(level, this.levelAt(band, m, 1 / texel, band.screen.levels.length));
+      // Its models' levels alone: a picture casts nothing, its shadow its model's as before it (`partPictures.ts`).
+      level = Math.min(level, this.levelAt(band, m, 1 / texel, band.screen.levels.length, false));
     }
     // A card's face would cast whole (`kit.ts` cards): the coarsest level of bars before it casts for it.
     while (level !== NONE && level > 0 && band.screen.levels[level]!.card) level--;
@@ -359,9 +364,17 @@ export class PartCell {
   setFaded(faded: boolean): void {
     if (faded === this.faded) return;
     this.faded = faded;
+    // Its levels chosen again at the next view: a picture is not drawn faded (`levelAt`).
+    this.chosenFor.x = Number.NaN;
     for (const band of this.bands) {
       const look = partLook(this.kit, band.kind, faded);
       for (const [key, mesh] of band.meshes) {
+        // A run drawn as its kind's picture: at its coarsest model, which the faded material draws.
+        const at = band.drawn.get(key);
+        if (faded && at !== undefined && band.screen.levels[at]!.picture) {
+          mesh.geometry = this.posedLevel(band, mesh, at - 1);
+          band.drawn.set(key, at - 1);
+        }
         // A shell's part drawn from afar keeps its far program once shown again (`drawFar`).
         mesh.material = !faded && mesh.userData['far'] === true ? this.kit.farShell : look.material;
         if (faded) mesh.userData['far'] = false;
@@ -417,23 +430,34 @@ export class PartCell {
     this.group.clear();
   }
 
-  /** A sub-cell's level for the pixels a metre spans there: the coarsest whose error is under a pixel, NONE when an instance is. */
-  private levelAt(band: Band, m: number, perMetre: number, held: number): number {
+  /** A sub-cell's level for the pixels a metre spans there: the coarsest whose error is under a pixel, NONE when an instance is; with
+   *  `pictured`, its picture where it is drawn and spans under `PICTURE_PX` (`partPictures.ts`). */
+  private levelAt(band: Band, m: number, perMetre: number, held: number, pictured = true): number {
     const { levels, extent } = band.screen;
+    // Its models' levels: all but its picture, the last; its picture held counts as its coarsest model held (its models' levels, and where it
+    // leaves the drawing, as before the pictures).
+    const picture = levels[levels.length - 1]!.picture;
+    const count = picture ? levels.length - 1 : levels.length;
+    const was = picture && held === count ? count - 1 : held;
     // A shell's part: the sides its top-only level leaves out are as tall as its height or as wide as its thinnest plan
     // (a post's width, not its metre of height), so that face's smaller side is its error (`shellPartError`).
     const shell = SHELL_PARTS.has(band.kind);
     let k = 0;
-    for (; k < levels.length; k++) {
+    for (; k < count; k++) {
       const next = k + 1;
-      const bars = next === levels.length && band.screen.pieces[0] !== extent;
-      const metres = next < levels.length
+      const bars = next === count && band.screen.pieces[0] !== extent;
+      const metres = next < count
         ? (shell ? shellPartError(band.scale, m * 3) : largest(levels[next]!.error, band.scale, m * 3))
         : bars ? barsAcross(band, m) : diagonal(extent, band.scale, m * 3);
-      if (metres * perMetre >= (next < levels.length ? PART_ERROR_PX : bars ? BAR_PIXELS : 1) * (next <= held ? 1 : COARSEN)) break;
+      if (metres * perMetre >= (next < count ? PART_ERROR_PX : bars ? BAR_PIXELS : 1) * (next <= was ? 1 : COARSEN)) break;
     }
     // Under a pixel across its diagonal: not drawn, a shell's part too; nor a level of no triangles (a top-less part from afar, `kit.ts`).
-    return k === levels.length || levels[k]!.triangles === 0 ? NONE : k;
+    const level = k === count || levels[k]!.triangles === 0 ? NONE : k;
+    // Its picture wherever it is drawn and its error (its diagonal's share `PART_ERROR_PX / PICTURE_PX`) spans under `PART_ERROR_PX`: under
+    // `PICTURE_PX`, whatever its coarser models leave out there (a bike's coarsest leaves out 14 cm, its picture's bound 6). Entered under the
+    // bound narrowed by `COARSEN`, held up to it; once its set's pictures are taken, and never faded (the faded material draws a model).
+    if (level === NONE || !pictured || !picture || this.faded || !picture.ready()) return level;
+    return largest(levels[count]!.error, band.scale, m * 3) * perMetre < PART_ERROR_PX * (count <= held ? 1 : COARSEN) ? count : level;
   }
 
   /** The most pixels a metre spans over a run's sub-cells (its nearest). */

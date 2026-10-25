@@ -1105,7 +1105,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       const partTexel = texel === null ? null : Math.max(texel, CAST_RADIUS_SHARE * half);
       // DO NOT draw hundreds of detail meshes into a far cascade: a cell's masses are its silhouette at those texels, one mesh. Only the cells whose masses stand in: the detail of any other (none landed yet, a town drawn whole) still casts, never a hole.
       if (texel === null || !coarse) {
-        farParts.castShadow(true);
+        farParts.castShadow(true, texel === null);
         shellBatch.castShadow(true);
         if (shadowCoarse) {
           shadowCoarse = false;

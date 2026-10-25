@@ -150,7 +150,7 @@ const VARYINGS = /* glsl */ `
 `;
 
 /** The vertex shader's declarations; `shadow`: the shadow pass's; `still`: a still set's (its far batches' band, `PictureLook.band`). */
-const vertexPars = (shadow: boolean, still: boolean): string => /* glsl */ `
+export const vertexPars = (shadow: boolean, still: boolean): string => /* glsl */ `
   ${IMPOSTOR_FRAMES_GLSL}
   attribute vec4 aSphere;
   attribute vec2 aBlock;
@@ -166,7 +166,7 @@ const vertexPars = (shadow: boolean, still: boolean): string => /* glsl */ `
  * In place of three's `begin_vertex`: `transformed` is the picture's corner in the model's own frame
  * (three's instancing and the wind place it), facing the eye - or the light, in the shadow pass.
  */
-const vertexMain = (shadow: boolean, still: boolean): string => /* glsl */ `
+export const vertexMain = (shadow: boolean, still: boolean): string => /* glsl */ `
   vec3 transformed = vec3(0.0);
   {
     vec3 foot = instanceMatrix[3].xyz;
@@ -231,7 +231,7 @@ const vertexMain = (shadow: boolean, still: boolean): string => /* glsl */ `
   }
 `;
 
-const FRAGMENT_PARS = /* glsl */ `
+export const FRAGMENT_PARS = /* glsl */ `
   ${IMPOSTOR_READ_GLSL}
   uniform vec2 uBlocks;
   ${VARYINGS}
@@ -271,7 +271,7 @@ const COLOUR_MAP = /* glsl */ `
  * multisampled model is resolved - its sample tests the picture's texels. DO NOT read it filtered over the pixel (trilinear, or a box each
  * quarter of it): the picture came out a pixel wider and as much paler than its model, a thin dark leg grey (the ladder sheets, 2026-10-25).
  */
-const STILL_READ_GLSL = /* glsl */ `
+export const STILL_READ_GLSL = /* glsl */ `
   vec2 stillUv() { return vWeights.x > 0.5 ? vFrameUv1 : vWeights.y > 0.5 ? vFrameUv2 : vFrameUv3; }
   vec2 stillFrame() { return vWeights.x > 0.5 ? vFrame1 : vWeights.y > 0.5 ? vFrame2 : vFrame3; }
   // The texel of mip level \`level\` under a point of a frame (held inside the frame, \`atlasUv\`), unfiltered.
@@ -312,12 +312,12 @@ const STILL_SLOPES = /* glsl */ `
   vec2 stillAt = stillUv(), stillIn = stillFrame();
   vec2 stillUx = dFdx(stillAt), stillUy = dFdy(stillAt);
 `;
-const stillOf = (atlas: string): string => `stillRead(${atlas}, stillAt, stillIn, stillUx, stillUy)`;
+export const stillOf = (atlas: string): string => `stillRead(${atlas}, stillAt, stillIn, stillUx, stillUy)`;
 
 /** A still set's colour (`createImpostors`, no wind): its cover the mips' own - each texel's share of the model as rasterised, multisampled
  *  as the game draws (`bake`), box-filtered down the mips - straight into alpha to coverage. DO NOT grow it as the plants' is grown (`COLOUR_MAP`:
  *  a foliage's cover kept as its mips thin it): a bench's bars and a lamp's column came out bolder and paler than the models they stand for. */
-const COLOUR_MAP_STILL = /* glsl */ `
+export const COLOUR_MAP_STILL = /* glsl */ `
   ${STILL_SLOPES}
   vec4 impostorColour = ${stillOf('uAlbedo')};
   {
@@ -342,7 +342,7 @@ const COLOUR_MAP_STILL = /* glsl */ `
 `;
 
 /** After three's `normal_fragment_begin`: the pictures' normal, from the model's frame to the view's; `read`: how a picture is read. */
-const colourNormal = (read: string, still: boolean): string => still ? /* glsl */ `
+export const colourNormal = (read: string, still: boolean): string => still ? /* glsl */ `
   {
     // A still picture's normal its texel's mean, NOT made a unit again: the mean of a lit top and a shaded side, made a unit, lit the pair as
     // one face turned half to the light, brighter than the two (the ladder sheets, 2026-10-25). Its length kept, a Lambert light on it is the
@@ -375,13 +375,13 @@ const SHADOW_CUT = /* glsl */ `
   }
 `;
 
-interface Picture {
+export interface Picture {
   readonly centre: Vector3;
   readonly radius: number;
 }
 
 /** A model's sphere: round the box of its parts, its leaf cards reaching out from their centres. */
-function pictureOf(model: PictureModel): Picture {
+export function pictureOf(model: PictureModel): Picture {
   const min = new Vector3(Infinity, Infinity, Infinity), max = new Vector3(-Infinity, -Infinity, -Infinity);
   const grow = (g: BufferGeometry, reach: number): void => {
     const p = g.getAttribute('position');
@@ -403,13 +403,75 @@ function pictureOf(model: PictureModel): Picture {
 }
 
 /** Blocks across and down for `n` models: the fewest texels, no side over 4 blocks (2,048 texels). */
-function layoutOf(n: number): { x: number; y: number } {
+export function layoutOf(n: number): { x: number; y: number } {
   let best = { x: 4, y: Math.ceil(n / 4) };
   for (let x = 4; x >= 1; x--) {
     const y = Math.ceil(n / x);
     if (y <= 4 && x * y < best.x * best.y) best = { x, y };
   }
   return best;
+}
+
+/** A model's quad (`createImpostors`, `buildings/partPictures.ts`): four corners, its sphere and its block on an atlas `blocks` across in its
+ *  attributes; `measure` (model units across, `PictureModel.measure`): a still set's, its half read by its far batches' band (`vertexMain`). */
+export function pictureQuad(picture: Picture, k: number, blocks: { readonly x: number }, measure: number | null): BufferGeometry {
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
+  g.setAttribute('normal', new BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]), 3));
+  const sphere = [picture.centre.x, picture.centre.y, picture.centre.z, picture.radius];
+  g.setAttribute('aSphere', new BufferAttribute(new Float32Array([...sphere, ...sphere, ...sphere, ...sphere]), 4));
+  const at = [k % blocks.x, Math.floor(k / blocks.x)];
+  g.setAttribute('aBlock', new BufferAttribute(new Float32Array([...at, ...at, ...at, ...at]), 2));
+  if (measure !== null) g.setAttribute('aMeasure', new BufferAttribute(new Float32Array(4).fill(measure / 2), 1));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  // The model's own sphere: what the instances are culled by.
+  g.boundingSphere = new Sphere(picture.centre.clone(), picture.radius);
+  return g;
+}
+
+/** What a set's frames are taken with: the scene and the camera they are drawn by, each model's sphere, the atlas's blocks across. */
+export interface PictureFrames { readonly scene: Scene; readonly camera: OrthographicCamera; readonly pictures: readonly Picture[]; readonly blocks: { readonly x: number } }
+
+/** Every frame of every model of `frames` drawn into `target`, a frame `framePx` texels across (`createImpostors`, `buildings/partPictures.ts`):
+ *  model `k`'s meshes put in the cleared scene by `fill`, `atLast` run before the last frame is drawn. */
+export function takePictureFrames(renderer: WebGLRenderer, target: WebGLRenderTarget, framePx: number, frames: PictureFrames, fill: (k: number) => void, atLast: (() => void) | null): void {
+  const { scene, camera, pictures, blocks } = frames;
+  const direction = new Vector3(), tangent = new Vector3(), bitangent = new Vector3();
+  // Made with every mip level (three allocates them by `generateMipmaps` when the target is first set), made once after the last picture.
+  target.scissorTest = false;
+  target.viewport.set(0, 0, target.width, target.height);
+  renderer.setRenderTarget(target);
+  for (const t of target.textures) t.generateMipmaps = false;
+  renderer.clear(true, true, true);
+  target.scissorTest = true;
+  const last = pictures.length * FRAMES * FRAMES - 1;
+  let taken = 0;
+  pictures.forEach(({ centre, radius: r }, k) => {
+    scene.clear();
+    fill(k);
+    camera.left = -r; camera.right = r; camera.top = r; camera.bottom = -r;
+    camera.near = 0.01 * r; camera.far = 4 * r;
+    camera.updateProjectionMatrix();
+    const bx = (k % blocks.x) * FRAMES * framePx, by = Math.floor(k / blocks.x) * FRAMES * framePx;
+    for (let row = 0; row < FRAMES; row++) {
+      for (let col = 0; col < FRAMES; col++) {
+        hemiOctaDirection(col / (FRAMES - 1), row / (FRAMES - 1), direction);
+        frameBasis(direction, tangent, bitangent);
+        camera.position.copy(centre).addScaledVector(direction, 2 * r);
+        camera.up.copy(bitangent);
+        camera.lookAt(centre);
+        camera.updateMatrixWorld();
+        const x = bx + col * framePx, y = by + row * framePx;
+        target.viewport.set(x, y, framePx, framePx);
+        target.scissor.set(x, y, framePx, framePx);
+        renderer.setRenderTarget(target);
+        if (taken++ === last && atLast) atLast();
+        renderer.render(scene, camera);
+      }
+    }
+  });
+  target.scissorTest = false;
+  target.viewport.set(0, 0, target.width, target.height);
 }
 
 export interface PlantImpostors {
@@ -439,6 +501,12 @@ const waiting = new Set<(renderer: WebGLRenderer) => void>();
 /** Takes the pictures of every set made since, between draws (`farForest.ts` `update`, as it takes its own): never inside a draw. */
 export function takeWaitingPictures(renderer: WebGLRenderer): void {
   for (const take of [...waiting]) take(renderer);
+}
+
+/** A set of pictures made outside this file (`buildings/partPictures.ts`) taken with the others at the next `takeWaitingPictures`; what it gives back takes it off the list. */
+export function waitForPictures(take: (renderer: WebGLRenderer) => void): () => void {
+  waiting.add(take);
+  return () => { waiting.delete(take); };
 }
 
 /** The pictures of these plants, taken at the next `takeWaitingPictures`, swaying in `wind`; `key` says whose; `ownModels`: the models' geometries let go once taken. */
@@ -527,20 +595,7 @@ export function createImpostors(models: readonly PictureModel[], look: PictureLo
   };
   depth.customProgramCacheKey = () => `${program}-depth`;
 
-  const quads = pictures.map((picture, k) => {
-    const g = new BufferGeometry();
-    g.setAttribute('position', new BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
-    g.setAttribute('normal', new BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]), 3));
-    const sphere = [picture.centre.x, picture.centre.y, picture.centre.z, picture.radius];
-    g.setAttribute('aSphere', new BufferAttribute(new Float32Array([...sphere, ...sphere, ...sphere, ...sphere]), 4));
-    const at = [k % blocks.x, Math.floor(k / blocks.x)];
-    g.setAttribute('aBlock', new BufferAttribute(new Float32Array([...at, ...at, ...at, ...at]), 2));
-    if (still) g.setAttribute('aMeasure', new BufferAttribute(new Float32Array(4).fill(measures[k]! / 2), 1));
-    g.setIndex([0, 1, 2, 0, 2, 3]);
-    // The model's own sphere: what the instances are culled by.
-    g.boundingSphere = new Sphere(picture.centre.clone(), picture.radius);
-    return g;
-  });
+  const quads = pictures.map((picture, k) => pictureQuad(picture, k, blocks, still ? measures[k]! : null));
 
   let baked = false;
   /** The pictures taken, once, between draws (the far woods' own way, `farForest.ts` `takePictures`). */
@@ -560,56 +615,21 @@ export function createImpostors(models: readonly PictureModel[], look: PictureLo
     renderer.setClearColor(0x000000, 0);
     renderer.autoClear = false;
     renderer.shadowMap.autoUpdate = false;
-    const direction = new Vector3(), tangent = new Vector3(), bitangent = new Vector3();
     // The colour and normal pictures drawn with a depth buffer that lives only as long as the drawing: copied onto the atlas after.
     // A still set's multisampled as the game draws (its edges' texels hold their rasterised share: the cover `COLOUR_MAP_STILL` reads); an
     // alpha-cut set's (`PictureLook.perMip`) a sample a texel, its levels read at half a pixel a texel, four taps a pixel: the game's four
     // samples, not four times four (its far clover came out smoother and paler than the model's, 2026-10-25); the plants' as they always were.
     const samples = still && look.perMip !== true ? BAKE_SAMPLES : 0;
     const drawn = new WebGLRenderTarget(atlas.width, atlas.height, { count: atlas.textures.length, depthBuffer: true, generateMipmaps: false, samples });
-    /** Every frame of every model drawn into `target`, a frame `framePx` texels across. */
-    const takeFrames = (target: WebGLRenderTarget, pass: 'colour' | 'shadow', framePx: number): void => {
-      // Made with every mip level (three allocates them by `generateMipmaps` when the target is first set), made once after the last picture.
-      target.scissorTest = false;
-      target.viewport.set(0, 0, target.width, target.height);
-      renderer.setRenderTarget(target);
-      for (const t of target.textures) t.generateMipmaps = false;
-      renderer.clear(true, true, true);
-      target.scissorTest = true;
-      const last = models.length * FRAMES * FRAMES - 1;
-      let taken = 0;
-      models.forEach((model, k) => {
-        scene.clear();
-        model.parts.forEach((part, p) => {
-          const drawnWith = pass === 'colour' ? colours[k]![p]! : shadows[k]![p];
-          if (drawnWith) scene.add(new Mesh(part.geometry, drawnWith));
-        });
-        const { centre, radius: r } = pictures[k]!;
-        camera.left = -r; camera.right = r; camera.top = r; camera.bottom = -r;
-        camera.near = 0.01 * r; camera.far = 4 * r;
-        camera.updateProjectionMatrix();
-        const bx = (k % blocks.x) * FRAMES * framePx, by = Math.floor(k / blocks.x) * FRAMES * framePx;
-        for (let row = 0; row < FRAMES; row++) {
-          for (let col = 0; col < FRAMES; col++) {
-            hemiOctaDirection(col / (FRAMES - 1), row / (FRAMES - 1), direction);
-            frameBasis(direction, tangent, bitangent);
-            camera.position.copy(centre).addScaledVector(direction, 2 * r);
-            camera.up.copy(bitangent);
-            camera.lookAt(centre);
-            camera.updateMatrixWorld();
-            const x = bx + col * framePx, y = by + row * framePx;
-            target.viewport.set(x, y, framePx, framePx);
-            target.scissor.set(x, y, framePx, framePx);
-            renderer.setRenderTarget(target);
-            // The outline's mips made after its last picture; the colour's on the atlas, once copied.
-            if (taken++ === last && target === outline) outline.texture.generateMipmaps = true;
-            renderer.render(scene, camera);
-          }
-        }
+    const frames: PictureFrames = { scene, camera, pictures, blocks };
+    /** Every frame of every model drawn into `target`, a frame `framePx` texels across (`takePictureFrames`): each part with its pass's material;
+     *  the outline's mips made after its last picture, the colour's on the atlas, once copied. */
+    const takeFrames = (target: WebGLRenderTarget, pass: 'colour' | 'shadow', framePx: number): void => takePictureFrames(renderer, target, framePx, frames, (k) => {
+      models[k]!.parts.forEach((part, p) => {
+        const drawnWith = pass === 'colour' ? colours[k]![p]! : shadows[k]![p];
+        if (drawnWith) scene.add(new Mesh(part.geometry, drawnWith));
       });
-      target.scissorTest = false;
-      target.viewport.set(0, 0, target.width, target.height);
-    };
+    }, target === outline ? () => { outline.texture.generateMipmaps = true; } : null);
     takeFrames(drawn, 'colour', FRAME_PX);
     takeFrames(outline, 'shadow', FRAME_PX);
     scene.clear();
