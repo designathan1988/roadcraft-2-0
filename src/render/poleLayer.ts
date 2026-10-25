@@ -125,17 +125,21 @@ export class ScreenScale {
     this.texel = sun && screen.shadowWidth > 0 ? (sun.right - sun.left) / sun.zoom / screen.shadowWidth : 0;
   }
 
-  /** Pixels a unit spans at the sphere's nearest depth: Infinity when the eye is level with it or inside it. */
+  /** Pixels a unit spans at the sphere's nearest depth: Infinity when the eye is level with it or inside it, 0 when all of it is behind the eye. */
   at(sphere: Sphere): number {
     return this.atPoint(sphere.center.x, sphere.center.y, sphere.center.z, sphere.radius);
   }
 
-  /** Pixels a unit spans at a box's nearest corner (three's axes: x0, y0, z0, x1, y1, z1): Infinity when the eye is in it or level with it. */
+  /** Pixels a unit spans at a box's nearest corner (three's axes: x0, y0, z0, x1, y1, z1): Infinity when the eye is in it or level with it, 0
+   *  when all of it is behind the eye. */
   atBox(box: ArrayLike<number>): number {
     if (!this.perspective) return this.pixels;
     if (!(box[0]! <= box[3]!)) return 0;
     const e = this.eye, a = this.ahead;
     if (e.x >= box[0]! && e.x <= box[3]! && e.y >= box[1]! && e.y <= box[4]! && e.z >= box[2]! && e.z <= box[5]!) return Infinity;
+    // Its farthest corner along the view behind the eye: none of it is drawn (`atPoint`).
+    const far = ((a.x >= 0 ? box[3]! : box[0]!) - e.x) * a.x + ((a.y >= 0 ? box[4]! : box[1]!) - e.y) * a.y + ((a.z >= 0 ? box[5]! : box[2]!) - e.z) * a.z;
+    if (far < 0) return 0;
     // The corner nearest along the view: each axis's end the view's direction comes to first.
     const depth = ((a.x >= 0 ? box[0]! : box[3]!) - e.x) * a.x + ((a.y >= 0 ? box[1]! : box[4]!) - e.y) * a.y + ((a.z >= 0 ? box[2]! : box[5]!) - e.z) * a.z;
     return depth > 1e-3 ? this.pixels / depth : Infinity;
@@ -153,7 +157,12 @@ export class ScreenScale {
   atPoint(x: number, y: number, z: number, radius: number): number {
     if (!this.perspective) return this.pixels;
     const e = this.eye, a = this.ahead;
-    const depth = (x - e.x) * a.x + (y - e.y) * a.y + (z - e.z) * a.z - radius;
+    const along = (x - e.x) * a.x + (y - e.y) * a.y + (z - e.z) * a.z;
+    // All of it behind the eye: nothing of it on the screen (0, its block measured by its other poles). DO NOT take it for one the eye stands
+    // in: a pole behind the camera made its whole block of a kilometre the nearest there is - every wire of it a tube, every insulator whole,
+    // at the district's view (the F7 audit: 97 k triangles of wires in 4 draws, 2026-10-25).
+    if (along + radius < 0) return 0;
+    const depth = along - radius;
     return depth > 1e-3 ? this.pixels / depth : Infinity;
   }
 }

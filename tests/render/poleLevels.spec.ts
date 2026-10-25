@@ -93,6 +93,23 @@ describe('the pole layer as the camera sees it', () => {
     layer.dispose();
   });
 
+  it('measures a block by its poles in front of the eye: one with every pole behind it draws nothing in colour', () => {
+    const doc = twoLines();
+    const net = new Network(doc);
+    net.rebuild();
+    const layer = buildUtilities(net, () => 0, createSceneryKit());
+    // 30 m past the near line's last pole (x 140 m), looking on along it: every pole of the line behind the eye.
+    const c = new PerspectiveCamera(35, 16 / 9, 0.1, 20_000);
+    c.position.set(m(170), m(10), 0);
+    c.lookAt(m(600), 0, 0);
+    c.updateMatrixWorld();
+    c.updateProjectionMatrix();
+    layer.group.update(c);
+    // DO NOT take a pole behind the eye for one the eye stands in: its block's wires were drawn as tubes and its pieces whole.
+    for (const name of ['utility-insulators', 'utility-caps', 'utility-wires']) expect(drawn(named(layer.group, name)[0]!)).toBe(false);
+    layer.dispose();
+  });
+
   it('draws the round pieces with fewer sides where their roundness is under a pixel, and whole close up', () => {
     const doc = twoLines();
     const net = new Network(doc);
