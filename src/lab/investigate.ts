@@ -35,6 +35,17 @@ function queriesOf(subject: LabSubject): string[] {
   if (/frame: cpu/i.test(subject.name)) q.push('frameTimer.begin()', 'function frame(now');
   if (origin.includes('laststepms') || /simulation/i.test(subject.name)) q.push('lastStepMs');
   if (origin.includes('gpuledger')) q.push(`gpuLedger.set('${plain}'`, plain);
+  // A layer of the scene (the diagnosis's "buildings-layer / building-part-cells"): where each of its objects is named, the deepest first, and the
+  // heaviest object the item cites. DO NOT fall back to the words of its title: "Building cell parts" found the i18n's 'Building' and a save's
+  // 'parts', never the layer (the F7 audit, `reports/audit-f7/AUDIT.md` P2, 2026-10-25).
+  const layer = origin.split(' / ').map((s) => s.trim()).filter((s) => /^[a-z][\w-]*$/.test(s));
+  if (origin.includes(' / ') || (layer.length === 1 && layer[0]!.includes('-'))) {
+    q.push(...layer.reverse());
+    for (const [, value] of subject.fields) {
+      const heaviest = /heaviest object:\s*([\w@-]+)/.exec(value);
+      if (heaviest) q.push(heaviest[1]!);
+    }
+  }
   if (!q.length) q.push(plain, ...plain.split(/[\s/:]+/).filter((w) => w.length >= 5).slice(0, 2));
   return [...new Set(q)].filter((s) => s.length >= 2 && s.length <= 200);
 }
