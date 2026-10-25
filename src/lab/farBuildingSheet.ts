@@ -15,9 +15,9 @@ import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, massFloor, mas
 import type { PartView } from '../render/buildings/partCells';
 import { SHELL_PARTS } from '../render/buildings/shellParts';
 import { type SceneEnvironment, createEnvironment, sunShadowChunks } from '../render/environment';
-import { createGpuTimer } from '../render/gpuTimer';
 import { takeWaitingPictures } from '../render/plantImpostors';
 import { buildingFilings, facadeBatch, nearCells } from './partLadderSheet';
+import { type SteadyTiming, timeFrame } from './steadyTiming';
 
 /**
  * THE FAR BUILDINGS' SHEET (`scripts/far-building-sheet.mjs`): a glass tower and a masonry tower drawn by every level of the building layer, each
@@ -43,8 +43,6 @@ const DISTANCES = [350, 900, 1400, 2000, 2400].map(m);
 const V0_DISTANCE = m(1975), V5_DISTANCE = m(1041);
 /** The hour the game opens on (its clock at the V0 to V5 shots, 06:35). */
 const GAME_MINUTES = 6 * 60 + 35;
-/** The scene pass timed under a steady load (`partLadderSheet.ts`): `WARM` passes back to back, then `TIMED` samples of `BLOCK` passes each. */
-const WARM = 200, TIMED = 30, BLOCK = 10;
 
 export const FAR_LEVELS = ['L0', 'L1', 'cell', 'tile', 'plate', 'base'] as const;
 export type FarLevel = (typeof FAR_LEVELS)[number];
@@ -75,8 +73,9 @@ export interface FarDistrictFrame {
   readonly png: string;
   readonly drawCalls: number;
   readonly triangles: number;
-  /** The scene pass's GPU time, ms a pass: its median and its 10th and 90th centiles over `TIMED` samples, the shadow maps kept. */
-  readonly gpu: { readonly supported: boolean; readonly label: string; readonly samples: number; readonly median: number; readonly p10: number; readonly p90: number };
+  /** The scene pass's GPU time, the shadow maps kept (`steadyTiming.ts`), and an identical copy of the frame timed in turn with it: the method's own spread. */
+  readonly gpu: SteadyTiming;
+  readonly gpuCheck: SteadyTiming;
 }
 
 /** The stage: the renderer, the game's environment (sky, its sky as the environment map, the sun's cascades, the fill and the sky light). */
@@ -348,27 +347,6 @@ async function towerShots(kit: BuildingKit, at: Stage): Promise<FarTowerShot[]> 
   return out;
 }
 
-/** The scene pass's GPU time under a steady load (`partLadderSheet.ts` shoot). */
-async function timed(at: Stage, camera: PerspectiveCamera): Promise<FarDistrictFrame['gpu']> {
-  const timer = createGpuTimer(at.renderer);
-  const frame = (): Promise<void> => new Promise((done) => { requestAnimationFrame(() => done()); });
-  for (let i = 0; i < WARM; i++) {
-    at.renderer.render(at.scene, camera);
-    if (i % BLOCK === BLOCK - 1) await frame();
-  }
-  for (let i = 0; i < TIMED; i++) {
-    timer.poll();
-    timer.begin();
-    for (let k = 0; k < BLOCK; k++) at.renderer.render(at.scene, camera);
-    timer.end();
-    await frame();
-  }
-  for (let i = 0; i < 30 && timer.samples.size < TIMED; i++) { await frame(); timer.poll(); }
-  const times = timer.samples.toArray().map((ms) => ms / BLOCK).sort((a, b) => a - b);
-  const centile = (q: number): number => times.length ? times[Math.min(times.length - 1, Math.floor(q * times.length))]! : Number.NaN;
-  return { supported: timer.supported, label: timer.label, samples: times.length, median: centile(0.5), p10: centile(0.1), p90: centile(0.9) };
-}
-
 /** A district of 12 x 12 towers 90 m apart round the origin, of 16 kinds (the offices and the blocks of flats of the high density, seeds 1 to 8:
  *  five of them glass), drawn by its masses, tiles and facade level from the V0 and V5 eyes, and an empty frame (the floor and the sky) for the
  *  timer's own spread; each timed. */
@@ -390,7 +368,8 @@ async function districtFrames(kit: BuildingKit, at: Stage): Promise<FarDistrictF
     else { for (const other of levels.values()) other.group.visible = false; at.renderer.render(at.scene, camera); }
     const png = at.renderer.domElement.toDataURL('image/png');
     const { drawCalls, triangles } = drawn ? counts(at, camera, drawn.group) : { drawCalls: 0, triangles: 0 };
-    out.push({ name, png, drawCalls, triangles, gpu: await timed(at, camera) });
+    const { gpu, check: gpuCheck } = await timeFrame(at.renderer, at.scene, camera);
+    out.push({ name, png, drawCalls, triangles, gpu, gpuCheck });
   };
   await frame('district-cell-V0', 'cell', V0_DISTANCE);
   await frame('district-tile-V0', 'tile', V0_DISTANCE);

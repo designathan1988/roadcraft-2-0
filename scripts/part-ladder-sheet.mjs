@@ -3,9 +3,11 @@
 // game's own part cells, batch, shells and materials at the screen's own size (1920 x 1080, a 35° view), on the development server's page
 // (`src/lab/partLadderSheet.ts`); the page draws whatever checkout serves it: one tree's frames against another's.
 //
-// `node scripts/part-ladder-sheet.mjs shoot <out folder> --url=http://127.0.0.1:<port>/ [--kinds=acUnit,chair,...] [--no-town]`
+// `node scripts/part-ladder-sheet.mjs shoot <out folder> --url=http://127.0.0.1:<port>/ [--kinds=acUnit,chair,...] [--no-town] [--only=tower-sw,...]`
 //   writes `<out>/<frame>.png` and `<out>/frames.json` (three's draws and triangles of the frame and of the parts alone, the scene pass's GPU
-//   time, where each part stands on the frame and its diagonal there in pixels).
+//   time and an identical copy's timed in turn with it (`src/lab/steadyTiming.ts`), the GPU's clocks meanwhile, where each part stands on the
+//   frame and its diagonal there in pixels), and `<out>/clocks.csv` (`nvidia-smi`, read only: `scripts/gpu-clocks.mjs`). `--only`: the town's
+//   frames of those names alone.
 // `node scripts/part-ladder-sheet.mjs compare <before out> <after out> <out folder> --url=...`
 //   writes `<out>/<frame>.png`: before and after side by side, their difference pixel by pixel (the largest channel's, as red), and the parts
 //   at the sizes the levels change at (a ladder) or the parts marked (the tower) enlarged 8 times, nearest pixel (`src/lab/propLadderSheet.ts`
@@ -13,6 +15,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { clocksDuring, startClockLog } from './gpu-clocks.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -40,14 +43,21 @@ try {
     if (!plain[1]) throw new Error('usage: part-ladder-sheet.mjs shoot <out folder> --url=...');
     const out = resolve(plain[1]);
     mkdirSync(out, { recursive: true });
-    const frames = await page.evaluate(async ([module, kinds, town]) => (await import(module)).partSheetFrames(kinds, town), ['/src/lab/partLadderSheet.ts', KINDS, !args.includes('--no-town')]);
+    const only = flag('only')?.split(',') ?? null;
+    const clocks = startClockLog(join(out, 'clocks.csv'));
+    const frames = await page.evaluate(async ([module, kinds, town, names]) => (await import(module)).partSheetFrames(kinds, town, names),
+      ['/src/lab/partLadderSheet.ts', flag('kinds') === '' ? [] : KINDS, !args.includes('--no-town'), only]);
+    const rows = await clocks.stop();
     const numbers = [];
     for (const f of frames) {
       writeFileSync(join(out, `${f.name}.png`), Buffer.from(f.png.slice(f.png.indexOf(',') + 1), 'base64'));
       const { png: _png, ...rest } = f;
       void _png;
-      numbers.push(rest);
-      console.log(`${f.name}: ${f.triangles} triangles in ${f.drawCalls} draws, the parts ${f.partTriangles} in ${f.partDraws}; scene pass ${f.gpu.median.toFixed(3)} ms (${f.gpu.samples} samples, ${f.gpu.label})`);
+      const clock = clocksDuring(rows, { start: f.gpu.window.start, end: f.gpuCheck.window.end });
+      numbers.push({ ...rest, clocks: clock });
+      const ms = (g) => `${g.median.toFixed(3)} (p10 ${g.p10.toFixed(3)}, p90 ${g.p90.toFixed(3)}; ${g.samples} x ${g.passes} passes)`;
+      const core = clock.core ? `core ${clock.core.min}-${clock.core.max} MHz, memory ${clock.memory.min}-${clock.memory.max} MHz, ${clock.pstates.join('/')}, load ${clock.load.min}-${clock.load.max} %` : 'no clock log';
+      console.log(`${f.name}: ${f.triangles} triangles in ${f.drawCalls} draws, the parts ${f.partTriangles} in ${f.partDraws}; scene pass ${ms(f.gpu)}, its copy ${ms(f.gpuCheck)}; ${core}`);
     }
     writeFileSync(join(out, 'frames.json'), JSON.stringify({ url, made: new Date().toISOString(), frames: numbers }, null, 1));
     console.log(`-> ${out}`);

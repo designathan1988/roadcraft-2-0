@@ -5,13 +5,15 @@
 //
 // `node scripts/far-building-sheet.mjs shoot <out folder> --url=http://127.0.0.1:<port>/ [--no-district] [--no-towers]`
 //   writes `<out>/towers/<tower>-<level>-<distance>.png` (each tower's crop), `<out>/<frame>.png` (the district's frames), `<out>/towers.png`
-//   (the towers' levels side by side, a row a distance, each face's mean colour under its crop) and `<out>/sheet.json` (the numbers).
+//   (the towers' levels side by side, a row a distance, each face's mean colour under its crop), `<out>/sheet.json` (the numbers: each district
+//   frame timed beside an identical copy, `src/lab/steadyTiming.ts`, with the GPU's clocks meanwhile) and `<out>/clocks.csv` (`nvidia-smi`, read only).
 // `node scripts/far-building-sheet.mjs compare <out folder> <label>=<shoot folder> <label>=<shoot folder> ... --url=...`
 //   writes `<out>/compare-<distance>.png`: each level of each tower in each folder side by side, enlarged, and its difference from the first
 //   folder's (`diffImage`); `<out>/compare.json` and `<out>/summary.md` (triangles, draws, the faces' mean colours, the district's GPU time).
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
+import { clocksDuring, startClockLog } from './gpu-clocks.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -44,16 +46,21 @@ try {
     if (!plain[1]) throw new Error('usage: far-building-sheet.mjs shoot <out folder> --url=...');
     const out = resolve(plain[1]);
     mkdirSync(join(out, 'towers'), { recursive: true });
+    const clocks = startClockLog(join(out, 'clocks.csv'));
     const sheet = await page.evaluate(async ([module, district, towers]) => (await import(module)).farBuildingSheet(district, towers), [MODULE, !args.includes('--no-district'), !args.includes('--no-towers')]);
     const towers = sheet.towers.map(({ png, ...rest }) => {
       const file = `${rest.tower}-${rest.level}-${rest.distance}.png`;
       writePng(join(out, 'towers', file), png);
       return { ...rest, file };
     });
+    const logged = await clocks.stop();
     const districts = sheet.districts.map(({ png, ...rest }) => {
       writePng(join(out, `${rest.name}.png`), png);
-      console.log(`${rest.name}: ${rest.triangles} triangles in ${rest.drawCalls} draws; scene pass ${rest.gpu.median.toFixed(3)} ms (p10 ${rest.gpu.p10.toFixed(3)}, p90 ${rest.gpu.p90.toFixed(3)}, ${rest.gpu.samples} samples, ${rest.gpu.label})`);
-      return rest;
+      const clock = clocksDuring(logged, { start: rest.gpu.window.start, end: rest.gpuCheck.window.end });
+      const ms = (g) => `${g.median.toFixed(3)} (p10 ${g.p10.toFixed(3)}, p90 ${g.p90.toFixed(3)}; ${g.samples} x ${g.passes} passes)`;
+      const core = clock.core ? `core ${clock.core.min}-${clock.core.max} MHz, memory ${clock.memory.min}-${clock.memory.max} MHz, ${clock.pstates.join('/')}, load ${clock.load.min}-${clock.load.max} %` : 'no clock log';
+      console.log(`${rest.name}: ${rest.triangles} triangles in ${rest.drawCalls} draws; scene pass ${ms(rest.gpu)}, its copy ${ms(rest.gpuCheck)}; ${core}`);
+      return { ...rest, clocks: clock };
     });
     for (const t of towers) console.log(`${t.tower} ${t.level} at ${t.distance} m: ${t.triangles} triangles in ${t.drawCalls} draws; +x ${rgb(t.faces.x.rgb)} (${t.faces.x.pixels} px), +z ${rgb(t.faces.z.rgb)} (${t.faces.z.pixels} px), roof ${rgb(t.faces.roof.rgb)} (${t.faces.roof.pixels} px)`);
     writeFileSync(join(out, 'sheet.json'), JSON.stringify({ url, made: new Date().toISOString(), towers, districts }, null, 1));

@@ -21,9 +21,9 @@ import { DETAIL_CELL, type PartFiling, fileParts, partBandings } from '../render
 import { POSE_FLOATS } from '../render/buildings/partPose';
 import { SHELL_PARTS } from '../render/buildings/shellParts';
 import { sunShadowChunks } from '../render/environment';
-import { createGpuTimer } from '../render/gpuTimer';
 import { takeWaitingPictures } from '../render/plantImpostors';
 import { SUN_CASCADES } from '../render/sunCascades';
+import { type SteadyTiming, timeFrame } from './steadyTiming';
 
 /**
  * THE BUILDING PARTS' LADDER SHEETS (`scripts/part-ladder-sheet.mjs`), drawn by the game's own part cells (`partCells.ts`), facade level's batch
@@ -35,7 +35,7 @@ import { SUN_CASCADES } from '../render/sunCascades';
  *   where a picture's depth meets the wall, the slab and the glass;
  * - the study's tower (the made-to-measure 25-floor residential building) from four corners at a slant;
  * - a district of nine towers, its parts at the detail level (the near cells) and at the facade level (the batch).
- * Each frame: three's draws and triangles (the scene's, and the parts' alone), the scene pass's GPU time (`gpuTimer.ts`), and where the parts
+ * Each frame: three's draws and triangles (the scene's, and the parts' alone), the scene pass's GPU time (`steadyTiming.ts`), and where the parts
  * stand on it. Whatever checkout serves the page draws its own parts: the same sheet draws one commit's and another's.
  */
 
@@ -52,9 +52,6 @@ const ROW_Y = m(5);
 const TINT: Readonly<Partial<Record<PartKind, number>>> = {
   acUnit: 0xe9e7df, foliage: 0x4f7a3a, bush: 0x58803f, chair: 0x3a62a8, table: 0x8a5a36, airer: 0xf0f0ec, dish: 0xd9d4c8, lounger: 0x2f3a46, bike: 0xc0392b, pot: 0xb5643c,
 };
-/** The scene pass timed under a steady load (a GPU's clock falls between frames of a light page, and an idle one doubled a frame's time,
- *  2026-10-25): `WARM` passes drawn back to back first, then `TIMED` samples, each `BLOCK` passes back to back in one query. */
-const WARM = 200, TIMED = 30, BLOCK = 10;
 
 /** One frame of the sheet. */
 export interface PartSheetFrame {
@@ -66,8 +63,9 @@ export interface PartSheetFrame {
   readonly triangles: number;
   readonly partDraws: number;
   readonly partTriangles: number;
-  /** The scene pass's GPU time, ms a pass: its median and its 10th and 90th centiles over `TIMED` samples, the shadow map kept. */
-  readonly gpu: { readonly supported: boolean; readonly label: string; readonly samples: number; readonly median: number; readonly p10: number; readonly p90: number };
+  /** The scene pass's GPU time, the shadow map kept (`steadyTiming.ts`), and an identical copy of the frame timed in turn with it: the method's own spread. */
+  readonly gpu: SteadyTiming;
+  readonly gpuCheck: SteadyTiming;
   /** Parts placed: what they are, their distance, their middle on the frame (pixels from the top left) and their diagonal there, pixels. */
   readonly props: readonly { readonly label: string; readonly distance: number; readonly x: number; readonly y: number; readonly px: number }[];
   /** Each part mesh drawn: its name, instances and triangles an instance. */
@@ -207,25 +205,9 @@ async function shoot(at: Stage, camera: PerspectiveCamera, eye: { x: number; y: 
     const mesh = o as InstancedMesh;
     if (mesh.isInstancedMesh && shown(mesh) && mesh.count > 0 && mesh.userData['shadowOnly'] !== true) meshes.push({ name: mesh.name, count: mesh.count, triangles: trianglesOf(mesh) });
   });
-  // The scene pass alone (the sun's map kept), timed by the GPU under a steady load.
-  const timer = createGpuTimer(renderer);
-  const frame = (): Promise<void> => new Promise((done) => { requestAnimationFrame(() => done()); });
-  for (let i = 0; i < WARM; i++) {
-    renderer.render(scene, camera);
-    if (i % BLOCK === BLOCK - 1) await frame();
-  }
-  for (let i = 0; i < TIMED; i++) {
-    timer.poll();
-    timer.begin();
-    for (let k = 0; k < BLOCK; k++) renderer.render(scene, camera);
-    timer.end();
-    await frame();
-  }
-  for (let i = 0; i < 30 && timer.samples.size < TIMED; i++) { await frame(); timer.poll(); }
-  const times = timer.samples.toArray().map((ms) => ms / BLOCK).sort((a, b) => a - b);
-  const centile = (q: number): number => times.length ? times[Math.min(times.length - 1, Math.floor(q * times.length))]! : Number.NaN;
-  const gpu = { supported: timer.supported, label: timer.label, samples: times.length, median: centile(0.5), p10: centile(0.1), p90: centile(0.9) };
-  return { name, png, drawCalls, triangles, partDraws, partTriangles, gpu, props, meshes };
+  // The scene pass alone (the sun's map kept), timed under a steady load beside an identical copy of itself (`steadyTiming.ts`).
+  const { gpu, check: gpuCheck } = await timeFrame(renderer, scene, camera);
+  return { name, png, drawCalls, triangles, partDraws, partTriangles, gpu, gpuCheck, props, meshes };
 }
 
 /** A part's middle on the frame and its diagonal there, pixels (its picture's measure, `partPictures.ts`). */
@@ -292,8 +274,9 @@ async function ladderFrames(kit: BuildingKit, at: Stage, kinds: readonly PartKin
 /** A wall in three's plane z = 0 (facing -z, the plan's +y), 160 m long and 20 m high: condensers hung on it as a bay hangs them (`facadeProps.ts`:
  *  the case's middle `AC.gap + AC.d / 2` out of the wall, its front out), and balconies (a slab 1.4 m deep, a glass parapet at its edge, the
  *  kit's own glass) with a plant and a chair on each against the wall; seen from two eyes at a slant. */
-async function wallFrames(kit: BuildingKit, at: Stage): Promise<PartSheetFrame[]> {
+async function wallFrames(kit: BuildingKit, at: Stage, wanted: (name: string) => boolean): Promise<PartSheetFrame[]> {
   const out: PartSheetFrame[] = [];
+  if (!wanted('wall-left') && !wanted('wall-right')) return out;
   const concrete = new MeshStandardMaterial({ color: 0xd8c8a8, roughness: 0.85 });
   const scenery = new Group();
   const wall = new Mesh(new BoxGeometry(m(160), m(20), m(0.3)), concrete);
@@ -335,6 +318,7 @@ async function wallFrames(kit: BuildingKit, at: Stage): Promise<PartSheetFrame[]
     camera.lookAt(look);
     camera.updateMatrixWorld();
     const diagonal = (kind: PartKind): number => Math.hypot(...kit.screen[kind].extent);
+    if (!wanted(name)) continue;
     const props = marks.map((p) => mark(camera, p.middle, diagonal(p.kind), p.kind, p.middle.distanceTo(camera.position)))
       .filter((p) => p.x > 40 && p.x < WIDTH - 40 && p.y > 40 && p.y < HEIGHT - 40);
     out.push(await shoot(at, camera, eye, drawn, texel, name, props));
@@ -394,7 +378,7 @@ function partsOf(kit: BuildingKit, filings: ReadonlyMap<string, PartFiling>, kin
 
 /** The tower from its four corners at a slant (its condensers and plants a few tens of pixels), then the district of nine towers at its detail
  *  level from 250 and 800 m and at its facade level from 800 m. */
-async function townFrames(kit: BuildingKit, at: Stage): Promise<PartSheetFrame[]> {
+async function townFrames(kit: BuildingKit, at: Stage, wanted: (name: string) => boolean): Promise<PartSheetFrame[]> {
   const out: PartSheetFrame[] = [];
   const ground = (): number => 0;
   const programOf = (b: Building): { near: BuildingChunk; far: BuildingChunk } => {
@@ -402,6 +386,7 @@ async function townFrames(kit: BuildingKit, at: Stage): Promise<PartSheetFrame[]
     return { near: p.near!, far: p.far! };
   };
   const draw = async (name: string, buildings: readonly Building[], level: 'detail' | 'facade', eye: { x: number; y: number; z: number }, look: Vector3, props: readonly PartKind[]): Promise<void> => {
+    if (!wanted(name)) return;
     const programs = buildings.map((b) => ({ b, ...programOf(b) }));
     const chunks = programs.map(({ b, near, far }) => ({ b, chunk: level === 'detail' ? near : far }));
     const filings = buildingFilings(kit, chunks);
@@ -445,14 +430,15 @@ async function townFrames(kit: BuildingKit, at: Stage): Promise<PartSheetFrame[]
   return out;
 }
 
-/** The sheet's frames: the ladders of `kinds`, then the tower and the district (`town`). The pictures are taken before anything is chosen, as
- *  the game's first frames take them (`farForest.ts` update). */
-export async function partSheetFrames(kinds: readonly PartKind[], town = true): Promise<PartSheetFrame[]> {
+/** The sheet's frames: the ladders of `kinds`, then the tower and the district (`town`); with `only`, the town's frames of those names alone. The
+ *  pictures are taken before anything is chosen, as the game's first frames take them (`farForest.ts` update). */
+export async function partSheetFrames(kinds: readonly PartKind[], town = true, only: readonly string[] | null = null): Promise<PartSheetFrame[]> {
+  const wanted = (name: string): boolean => only === null || only.includes(name);
   const kit = createBuildingKit(16);
   await kit.levelsReady;
   const at = stage();
   takeWaitingPictures(at.renderer);
-  const out = [...await ladderFrames(kit, at, kinds), ...(town ? [...await wallFrames(kit, at), ...await townFrames(kit, at)] : [])];
+  const out = [...await ladderFrames(kit, at, kinds), ...(town ? [...await wallFrames(kit, at, wanted), ...await townFrames(kit, at, wanted)] : [])];
   at.dispose();
   kit.dispose();
   return out;
