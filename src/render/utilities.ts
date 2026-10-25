@@ -1,6 +1,5 @@
 import {
   BufferGeometry,
-  CylinderGeometry,
   BoxGeometry,
   BufferAttribute,
   InstancedBufferGeometry,
@@ -134,10 +133,10 @@ export function polePartSpecs(kit: SceneryKit): readonly PolePartSpec[] {
   return [
     solid('utility-poles', mastLevels[0]!.geometry, timber, mastLevels),
     solid('utility-arms', boxGeometry, timber),
-    solid('utility-caps', capGeometry, steel),
+    solid('utility-caps', capGeometry, steel, PARTS.capLevels),
     solid('utility-braces', boxGeometry, steel),
-    solid('utility-insulators', insulatorGeometry, porcelain),
-    solid('utility-transformers', canGeometry, steel),
+    solid('utility-insulators', insulatorGeometry, porcelain, PARTS.insulatorLevels),
+    solid('utility-transformers', canGeometry, steel, PARTS.canLevels),
     solid('utility-lamp-arms', boxGeometry, metal),
     solid('utility-lamp-heads', boxGeometry, housing),
     lens,
@@ -459,9 +458,13 @@ interface UtilityParts {
   readonly steel: MeshStandardMaterial;
   /** The mast, finest first (`mastShape`). */
   readonly mastLevels: readonly PartLevel[];
-  readonly capGeometry: CylinderGeometry;
+  /** The cap, the insulator and the transformer's can, finest first (`roundShape`): their first level their geometry. */
+  readonly capLevels: readonly PartLevel[];
+  readonly insulatorLevels: readonly PartLevel[];
+  readonly canLevels: readonly PartLevel[];
+  readonly capGeometry: BufferGeometry;
   readonly insulatorGeometry: BufferGeometry;
-  readonly canGeometry: CylinderGeometry;
+  readonly canGeometry: BufferGeometry;
   readonly boxGeometry: BoxGeometry;
   readonly lensGeometry: BufferGeometry;
 }
@@ -469,7 +472,8 @@ interface UtilityParts {
 function makeUtilityParts(): UtilityParts {
   const parts = madeUtilityParts();
   // Each shape's bounds once, at load: the pole layer grows its meshes' bounds from the spheres, and sizes a piece on the screen from the boxes.
-  for (const geometry of [...parts.mastLevels.map((level) => level.geometry), parts.capGeometry, parts.insulatorGeometry, parts.canGeometry, parts.boxGeometry, parts.lensGeometry]) {
+  const levels = [parts.mastLevels, parts.capLevels, parts.insulatorLevels, parts.canLevels].flatMap((list) => list.map((level) => level.geometry));
+  for (const geometry of [...levels, parts.capGeometry, parts.insulatorGeometry, parts.canGeometry, parts.boxGeometry, parts.lensGeometry]) {
     geometry.computeBoundingSphere();
     geometry.computeBoundingBox();
   }
@@ -492,16 +496,21 @@ function madeUtilityParts(): UtilityParts {
   // The luminaire as seen from above: its housing.
   const housing = new MeshStandardMaterial({ color: 0xa9b0ad, roughness: 0.5, metalness: 0.3 });
   const wires = wireMaterials();
+  // Each round piece, finest first: its own sides, then fewer, each as wide on average (`roundShape`).
+  const cap = [10, 6, 4].map((sides) => roundShape(POLE_TOP_RADIUS * 0.4, POLE_TOP_RADIUS * 1.15, m(0.08), sides, 10, { top: true, bottom: true }));
+  // Its foot stands on the arm.
+  const insulator = [10, 6, 4].map((sides) => roundShape(INSULATOR_RADIUS * 0.55, INSULATOR_RADIUS, INSULATOR_TALL, sides, 10, { top: true, bottom: false }));
+  const can = [14, 8, 5].map((sides) => roundShape(CAN_RADIUS, CAN_RADIUS, m(0.95), sides, 14, { top: true, bottom: true }));
   return {
     metal, timber, housing, wireMaterial: wires.lit, wireDepth: wires.depth,
     // A pin insulator: a glazed porcelain bell on a short pin.
     porcelain: new MeshStandardMaterial({ color: 0xd8dcd6, roughness: 0.25, metalness: 0 }),
     steel: new MeshStandardMaterial({ color: 0x8c9590, roughness: 0.45, metalness: 0.55 }),
     mastLevels: [12, 6, 3].map(mastShape),
-    capGeometry: new CylinderGeometry(POLE_TOP_RADIUS * 0.4, POLE_TOP_RADIUS * 1.15, m(0.08), 10),
-    // Its foot stands on the arm.
-    insulatorGeometry: cylinderWith(INSULATOR_RADIUS * 0.55, INSULATOR_RADIUS, INSULATOR_TALL, 10, { top: true, bottom: false }),
-    canGeometry: new CylinderGeometry(CAN_RADIUS, CAN_RADIUS, m(0.95), 14),
+    capLevels: cap, insulatorLevels: insulator, canLevels: can,
+    capGeometry: cap[0]!.geometry,
+    insulatorGeometry: insulator[0]!.geometry,
+    canGeometry: can[0]!.geometry,
     boxGeometry: new BoxGeometry(1, 1, 1),
     // One face, looking down: a lens only shines down (see `lampLensGeometry`).
     lensGeometry: new PlaneGeometry(1, 1).rotateX(Math.PI / 2),
@@ -517,6 +526,20 @@ function mastShape(sides: number): PartLevel {
   // How far its outline strays from a round mast at the foot: outside at a corner, inside mid-face.
   const r = POLE_BASE_RADIUS, R = r * widen;
   const error = sides >= 12 ? 0 : Math.max(R - r, r - R * Math.cos(Math.PI / sides));
+  return { geometry, error };
+}
+
+/**
+ * A round piece (a frustum `tall` high, `top` and `bottom` radii) with `sides` sides and the ends `ends` keeps, as `mastShape` makes the mast's
+ * levels: under its own `full` sides as wide on average as the round one (a polygon's perimeter over pi), its error how far its outline strays
+ * from the round one at its widest (outside at a corner, inside mid-face). A piece of a few pixels drawn with 10 or 14 sides spent triangles
+ * on a roundness under a pixel (the F7 audit: caps 40, insulators 30, cans 56 triangles each at the district's view, 2026-10-25).
+ */
+function roundShape(top: number, bottom: number, tall: number, sides: number, full: number, ends: { readonly top: boolean; readonly bottom: boolean }): PartLevel {
+  const widen = sides >= full ? 1 : Math.PI / (sides * Math.sin(Math.PI / sides));
+  const geometry = cylinderWith(top * widen, bottom * widen, tall, sides, ends);
+  const r = Math.max(top, bottom), R = r * widen;
+  const error = sides >= full ? 0 : Math.max(R - r, r - R * Math.cos(Math.PI / sides));
   return { geometry, error };
 }
 

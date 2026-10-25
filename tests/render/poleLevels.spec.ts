@@ -89,6 +89,31 @@ describe('the pole layer as the camera sees it', () => {
     layer.dispose();
   });
 
+  it('draws the round pieces with fewer sides where their roundness is under a pixel, and whole close up', () => {
+    const doc = twoLines();
+    const net = new Network(doc);
+    net.rebuild();
+    const layer = buildUtilities(net, () => 0, createSceneryKit());
+    /** The triangles each round piece of the near line is drawn with, from a camera `height` up and `back` behind the pole at x 80 m. */
+    const seen = (height: number, back: number): number[] => {
+      const c = new PerspectiveCamera(35, 16 / 9, 0.1, 20_000);
+      c.position.set(m(80), height, back);
+      c.lookAt(m(80), 0, 0);
+      c.updateMatrixWorld();
+      c.updateProjectionMatrix();
+      layer.group.update(c);
+      return ['utility-caps', 'utility-insulators', 'utility-transformers'].map((name) => {
+        const mesh = named(layer.group, name)[0]!;
+        return drawn(mesh) ? mesh.geometry.index!.count / 3 : 0;
+      });
+    };
+    // A few metres from a pole: each at its own shape (a cap of 10 sides and both ends, an insulator of 10 and its top, a can of 14 and both ends).
+    expect(seen(m(8), m(2))).toEqual([40, 30, 56]);
+    // 120 m up: a cap of 4 sides, an insulator of 4, a can of 8, still drawn.
+    expect(seen(m(120), m(40))).toEqual([16, 12, 32]);
+    layer.dispose();
+  });
+
   it('picks the wires\' template by their width and sag on the screen', () => {
     // Wider than a pixel and a half: the tube.
     expect(wireLevel(2 / WIRE_WIDTH, m(1))).toBe(0);
