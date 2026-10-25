@@ -30,8 +30,9 @@ describe('the pole layer\'s wires as instances', () => {
     const layer = buildUtilities(net, () => 0, createSceneryKit());
     const wires = layer.group.getObjectByName('utility-wires') as Mesh;
     const geometry = wires.geometry as InstancedBufferGeometry;
-    // The template: one wire's tube, four faces a segment, whatever the number of wires.
-    expect(geometry.index!.count).toBe(WIRE_SEGMENTS * 24);
+    // The template: one wire's strip facing the eye, of the finest chords before any view (8), four triangles a chord (two halves along the
+    // crease of the tube's faces seen), whatever the number of wires (the tube drew four faces a segment, 8 * 24).
+    expect(geometry.index!.count).toBe(8 * 12);
     const start = geometry.getAttribute('aStart') as InterleavedBufferAttribute;
     const data = start.data.array as Float32Array;
     expect(start.data.stride).toBe(8);

@@ -4,7 +4,7 @@ import { RoadDoc } from '@world/doc';
 import { Network } from '@world/network';
 import { createSceneryKit } from '@render/scenery';
 import { buildUtilities } from '@render/poleLayer';
-import { WIRE_FADE, WIRE_WIDTH, wireLevel } from '@render/utilities';
+import { WIRE_MIN_PIXELS, WIRE_WIDTH, wireChords, wireLevel } from '@render/utilities';
 import { m } from '@world/units';
 
 /** THE POLE LAYER AS THE CAMERA SEES IT: one mesh a part a block of the plane (not a world cell, not the whole layer), each block by its own nearest pole: pieces under a pixel not drawn, wires coarser and gone far away */
@@ -59,11 +59,13 @@ describe('the pole layer as the camera sees it', () => {
     // The line a kilometre off, by its own nearest pole: its insulators under a pixel, not drawn.
     expect(drawn(farInsulators!)).toBe(false);
     const [wires, farWires] = named(layer.group, 'utility-wires');
-    // Near, the tube over every span of the near line; the far line's wires by a coarser template, their own.
+    // Near, a strip facing the eye over every span of the near line, of the chords its nearest wire needs: 40 m off, ~86 px a unit (half the
+    // screen 1080 px over tan 17.5 deg), a 30 m span's 0.54 m of sag 46 px, within a pixel at 8 chords (46 / 64), not at 4: 4 triangles a
+    // chord, creased between the tube's two faces seen (the tube drew 8 * 24). The far line's wires by a coarser template, their own.
     expect(drawn(wires!)).toBe(true);
-    expect((wires!.geometry as InstancedBufferGeometry).index!.count).toBe(8 * 24);
+    expect((wires!.geometry as InstancedBufferGeometry).index!.count).toBe(8 * 12);
     expect((wires!.geometry as InstancedBufferGeometry).instanceCount).toBe(9 * 4);
-    expect((farWires!.geometry as InstancedBufferGeometry).index!.count).toBeLessThan(8 * 24);
+    expect((farWires!.geometry as InstancedBufferGeometry).index!.count).toBeLessThan(8 * 12);
     // Near, the finest mast.
     const masts = named(layer.group, 'utility-poles')[0]!;
     expect(drawn(masts)).toBe(true);
@@ -135,15 +137,24 @@ describe('the pole layer as the camera sees it', () => {
     layer.dispose();
   });
 
-  it('picks the wires\' template by their width and sag on the screen', () => {
-    // Wider than a pixel and a half: the tube.
-    expect(wireLevel(2 / WIRE_WIDTH, m(1))).toBe(0);
-    // Under the fade: none.
-    expect(wireLevel((WIRE_FADE[1] * 0.9) / WIRE_WIDTH, m(1))).toBe(-1);
-    // Thin: as few chords as keep the sag's error under a pixel.
+  it('picks the wires\' template by their sag on the screen, none under the least width drawn', () => {
+    // Close, a big sag: the finest strip (8 chords, as many as the tube had segments; its sag 100 px).
+    expect(wireLevel(100 / m(1), m(1))).toBe(0);
+    // Thinner than the least width drawn: none.
+    expect(wireLevel((WIRE_MIN_PIXELS * 0.9) / WIRE_WIDTH, m(1))).toBe(-1);
+    // From 1.5 px wide the strip creased between the tube's two faces seen; thinner, plain (half the triangles).
+    expect(wireLevel(1.5 / WIRE_WIDTH, m(0.01))).toBe(3);
+    expect(wireLevel(1.4 / WIRE_WIDTH, m(0.01))).toBe(7);
+    // Thin: as few chords as keep the sag's error under a pixel; a wire under a pixel wide is still drawn (a pixel wide, covering its share).
     const thin = 0.5 / WIRE_WIDTH;
     const level = wireLevel(thin, m(1));
     expect(level).toBeGreaterThan(0);
     expect(wireLevel(thin, m(0.01))).toBeGreaterThanOrEqual(level);
+    // The fewest chords: within a pixel of the parabola (a chord of 1/n strays by sag / n^2), and half as many would not be, but at the finest.
+    for (const pixels of [0.05, 0.5, 2, 7, 30, 63, 64, 65, 250, 400]) {
+      const sag = m(1), n = wireChords(pixels / m(1), sag), error = pixels / (n * n);
+      expect(error < 1 || n === 8).toBe(true);
+      if (n > 1 && n < 8) expect(pixels / ((n / 2) * (n / 2))).toBeGreaterThanOrEqual(1);
+    }
   });
 });

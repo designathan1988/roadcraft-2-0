@@ -37,7 +37,6 @@ import {
   POLE_TOP_RADIUS,
   WIRE_COURSES,
   WIRE_OFFSETS,
-  WIRE_SEGMENTS,
   type PoleArms,
   spanSag,
 } from '@world/utilities';
@@ -59,12 +58,25 @@ const LAMP_TILT = (8 * Math.PI) / 180;
 const WIRE_SWING = m(0.35);
 /** Half-width of a drawn cable: thicker than life so it reads at play zoom. */
 const WIRE_RADIUS = m(0.035);
-/** A drawn cable's width as the eye sees it: the mean width of the tube's square section turned every way (perimeter / pi). */
+/** A drawn cable's width as the eye sees it: the mean width of a square section of `WIRE_RADIUS` turned every way (perimeter / pi), the tube
+ *  it was drawn as until 2026-10-25. */
 export const WIRE_WIDTH = (4 * Math.SQRT2 * WIRE_RADIUS) / Math.PI;
-/** A cable at least this many pixels wide is drawn as the tube; a thinner one as a strip square to the eye. */
-const WIRE_TUBE_PIXELS = 1.5;
-/** A cable keeps its width down to the first of these, in pixels, and none of it at the second: its coverage fades out (`WIRE_GLSL`). */
-export const WIRE_FADE = [1 / 8, 1 / 32] as const;
+/**
+ * The least width a cable is drawn on a target of `samples` a pixel, in pixels: a thinner one is drawn this wide, covering the share of it the
+ * cable fills (`WIRE_GLSL`; Humus's phone-wire AA, a pixel). With four samples or more, 0.6: the standard four sample places (0.375, 0.125),
+ * (0.875, 0.375), (0.125, 0.625), (0.625, 0.875) are a square grid turned 26.6 deg, its rows sqrt(5) / 4 = 0.559 px apart, so a strip 0.6 px wide
+ * holds a row of them whichever way it runs and is never broken; a pixel would spread a cable twice as wide as it need be and pale the
+ * wires of a span seen a pixel apart from the air (their shares overlapping: a third of their darkness lost, 2026-10-25). Sample places:
+ * https://registry.khronos.org/VulkanSC/specs/1.0-extensions/man/html/VkSampleLocationsInfoEXT.html,
+ * https://swiftshader.googlesource.com/SwiftShader.git/+/HEAD/src/Pipeline/Constants.hpp.
+ */
+export function wireClampPixels(samples: number): number {
+  return samples >= 4 ? 0.6 : 1;
+}
+/** A cable at least this many pixels wide shows the tube's two faces, creased between them; a thinner one their mean, flat (`WIRE_GLSL`). */
+const WIRE_CREASE_PIXELS = 1.5;
+/** A cable seen thinner than this many pixels is not drawn: it covers no more than this share of its pixels. */
+export const WIRE_MIN_PIXELS = 1 / 32;
 import type { UtilityPole, UtilitySpan } from '@world/utilities';
 
 /** The overhead utility network on screen: poles, cross-arms, wires and lamps. */
@@ -280,7 +292,7 @@ export function spanWires(
 /** Half-width of a drawn cable (`WIRE_GLSL`), for the wires' bounds. */
 export const WIRE_HALF_WIDTH = WIRE_RADIUS;
 
-/** One way of drawing a wire, shared by every cell's wires: a template of (t along the wire, t at the other end of its segment, corner). */
+/** One way of drawing a wire, shared by every cell's wires: a strip of (t along the wire, t again, corner) bent along each wire (`WIRE_GLSL`). */
 interface WireTemplate {
   readonly position: BufferAttribute;
   readonly normal: BufferAttribute;
@@ -289,57 +301,65 @@ interface WireTemplate {
   readonly segments: number;
 }
 
-/** The tube: four faces a segment, each lit flat (`normal.x` names the face), corners 0-3 round the wire. */
-function tubeTemplate(): WireTemplate {
-  const segments = WIRE_SEGMENTS;
-  const position = new Float32Array(segments * 16 * 3), normal = new Float32Array(segments * 16 * 3);
-  const index = new Uint16Array(segments * 24);
-  let v = 0, i = 0;
-  const put = (t: number, other: number, corner: number, face: number): number => {
-    position[v * 3] = t; position[v * 3 + 1] = other; position[v * 3 + 2] = corner;
-    normal[v * 3] = face;
-    return v++;
-  };
-  for (let s = 0; s < segments; s++) {
-    const t0 = s / segments, t1 = (s + 1) / segments;
-    for (let k = 0; k < 4; k++) {
-      const j = (k + 1) % 4;
-      const a = put(t0, t1, k, k), b = put(t1, t0, k, k), c = put(t1, t0, j, k), d = put(t0, t1, j, k);
-      index.set([a, b, c, a, c, d], i);
-      i += 6;
+/**
+ * A strip of `segments` chords square to the eye, `creased` in two halves along the crease between the tube's two faces the eye sees: four
+ * corners a column - 4 the `+side` edge, 6 the crease of the upper half, 7 the crease of the lower, 5 the `-side` edge - wound to face the eye
+ * (`WIRE_GLSL`), or the edges alone (for wires all thinner than `WIRE_CREASE_PIXELS`); `normal.x` holds `segments`, the most chords a wire
+ * drawn with it may keep (`wireChords`), `normal.y` 1 when creased. A cable is a ribbon facing the eye
+ * whatever its size on the screen, as wide as the tube's silhouette and each half lit by its face: DO NOT draw it as a tube again. The tube of
+ * four faces drew 8 triangles and 16 vertices a segment for what this strip draws with 4 triangles a chord, 2 once thinner than
+ * `WIRE_CREASE_PIXELS` (the camera-facing ribbon power lines are drawn as: https://www.humus.name/index.php?page=3D&ID=89,
+ * https://www.alanzucconi.com/?p=12724).
+ */
+function stripTemplate(segments: number, creased: boolean): WireTemplate {
+  const corners = creased ? [4, 6, 7, 5] : [4, 5];
+  const across = corners.length, vertices = (segments + 1) * across;
+  const position = new Float32Array(vertices * 3);
+  const normal = new Float32Array(vertices * 3);
+  const index = new Uint16Array(segments * (across / 2) * 6);
+  for (let s = 0; s <= segments; s++) {
+    const t = s / segments;
+    corners.forEach((corner, k) => {
+      position.set([t, t, corner], (s * across + k) * 3);
+      normal.set([segments, creased ? 1 : 0, 0], (s * across + k) * 3);
+    });
+    if (s === segments) continue;
+    // Each half (or the strip): its `+side` corner a, its `-side` corner b; a, b(next), a(next) and a, b, b(next) are anticlockwise as the eye
+    // sees them (`side` = tangent x view ray).
+    for (let half = 0; half < across / 2; half++) {
+      const a = s * across + half * 2, n = a + across;
+      index.set([a, n + 1, n, a, a + 1, n + 1], (s * (across / 2) + half) * 6);
     }
   }
   return { position: new BufferAttribute(position, 3), normal: new BufferAttribute(normal, 3), index: new BufferAttribute(index, 1), segments };
 }
 
-/** A strip of `segments` chords square to the eye, its two edges corners 4 and 5, wound to face the eye (`WIRE_GLSL`). */
-function stripTemplate(segments: number): WireTemplate {
-  const vertices = (segments + 1) * 2;
-  const position = new Float32Array(vertices * 3);
-  const index = new Uint16Array(segments * 6);
-  for (let s = 0; s <= segments; s++) {
-    const t = s / segments;
-    position.set([t, t, 4, t, t, 5], s * 6);
-    // Edge 4 is `+side`, edge 5 `-side`, `side` = tangent x view ray: this order is anticlockwise as the eye sees it.
-    if (s < segments) index.set([2 * s, 2 * s + 3, 2 * s + 2, 2 * s, 2 * s + 1, 2 * s + 3], s * 6);
+/** The chords of the ways of drawing a wire, finest first: the finest as many as the tube's segments. */
+const WIRE_CHORDS = [8, 4, 2, 1] as const;
+/** The ways of drawing a wire, finest first: creased strips of 8, 4, 2 and 1 chords, then plain ones. Made once, at load. */
+const WIRE_TEMPLATES: readonly WireTemplate[] = [...WIRE_CHORDS.map((n) => stripTemplate(n, true)), ...WIRE_CHORDS.map((n) => stripTemplate(n, false))];
+
+/**
+ * The fewest chords that bend a wire of `sag` seen at `pixelsPerUnit` within a pixel of its parabola (a chord of 1/n of it strays from it by
+ * sag / n^2), the finest at most. The vertex shader keeps the same for each wire (`WIRE_GLSL` wireChords).
+ */
+export function wireChords(pixelsPerUnit: number, sag: number): number {
+  for (let i = WIRE_CHORDS.length - 1; i > 0; i--) {
+    const n = WIRE_CHORDS[i]!;
+    if ((sag * pixelsPerUnit) / (n * n) < 1) return n;
   }
-  return { position: new BufferAttribute(position, 3), normal: new BufferAttribute(new Float32Array(vertices * 3), 3), index: new BufferAttribute(index, 1), segments };
+  return WIRE_CHORDS[0];
 }
 
-/** The ways of drawing a wire, finest first: the tube, then strips of 8, 4, 2 and 1 chords. Made once, at load. */
-const WIRE_TEMPLATES: readonly WireTemplate[] = [tubeTemplate(), stripTemplate(8), stripTemplate(4), stripTemplate(2), stripTemplate(1)];
-
-/** How to draw wires seen at `pixelsPerMetre` with at most `sag` of sag: a template (`wireGeometry`), or -1 when they have faded out. */
-export function wireLevel(pixelsPerMetre: number, sag: number): number {
-  const width = WIRE_WIDTH * pixelsPerMetre;
-  if (width < WIRE_FADE[1]) return -1;
-  if (width >= WIRE_TUBE_PIXELS) return 0;
-  // A strip's chords stray from the parabola by sag / segments squared: the fewest chords that keep that under a pixel.
-  for (let level = WIRE_TEMPLATES.length - 1; level > 1; level--) {
-    const n = WIRE_TEMPLATES[level]!.segments;
-    if ((sag * pixelsPerMetre) / (n * n) < 1) return level;
-  }
-  return 1;
+/**
+ * How to draw the wires of a block whose nearest point is seen at `pixelsPerUnit`, with at most `sag` of sag: the template of the chords its
+ * nearest wire needs (`wireGeometry`; each farther wire keeps fewer of them, `WIRE_GLSL`), creased while that wire is `WIRE_CREASE_PIXELS`
+ * wide or more, or -1 when even the nearest is too thin to draw.
+ */
+export function wireLevel(pixelsPerUnit: number, sag: number): number {
+  const wide = WIRE_WIDTH * pixelsPerUnit;
+  if (wide < WIRE_MIN_PIXELS) return -1;
+  return WIRE_CHORDS.indexOf(wireChords(pixelsPerUnit, sag) as (typeof WIRE_CHORDS)[number]) + (wide >= WIRE_CREASE_PIXELS ? 0 : WIRE_CHORDS.length);
 }
 
 /** A cell's wires drawn with one template: the template's shared attributes and the cell's instances (eight numbers a wire). */
@@ -363,90 +383,133 @@ export function releaseWireGeometry(geometry: InstancedBufferGeometry): void {
   geometry.dispose();
 }
 
-/** The screen the wires are drawn on: half its height in pixels, 0 before a layer has seen it (no fade). Set by `PoleLayer`. */
-export const wireScreen = { uWirePixels: { value: 0 } };
+/** The screen the wires are drawn on: half its height in pixels, 0 before a layer has seen it (no fade), and the least width a wire is drawn
+ *  there (`wireClampPixels`). Set by `PoleLayer`. */
+export const wireScreen = { uWirePixels: { value: 0 }, uWireClamp: { value: 1 } };
 
-/** A wire's vertex in the vertex shader, from its template and its instance (in three's axes) */
+/**
+ * A wire's vertex in the vertex shader, from its template and its instance (in three's axes): `wirePosition(pixels)` gives the vertex and
+ * sets `wireT` (its place along the wire), `wireCover` (the share of its pixels it covers) and `wireNormal`; `pixels` is half the screen's
+ * height, 0 for the sun's pass (the template's every chord, the wire's own width, all of it covering).
+ *
+ * The strip draws the tube the cable was drawn as until 2026-10-25 (a square section of `WIRE_RADIUS`, corners u, w, -u, -w round the wire)
+ * as the eye sees it: as wide as its silhouette, creased where its two faces seen meet, each half lit by its face (the crease an edge the
+ * multisampling smooths as it did the tube's): the cable as it looked, with 4 triangles a chord where the tube took 8 a segment.
+ *
+ * Each wire keeps the chords its own nearest point needs (`wireChords`), however near its block's nearest: a template's columns past them
+ * fall on the ones kept, their triangles of no area (none drawn by the rasterizer). Thinner than the least width its samples hold
+ * (`wireClampPixels`) a wire is drawn that wide, covering the share of it the wire fills (Humus, "Phone-wire AA", GPU Pro 5, 2014:
+ * https://www.humus.name/index.php?page=3D&ID=89): DO NOT shrink it below that again - its few samples came and went along it, a dotted wire
+ * crawling as the view moved.
+ */
 const WIRE_GLSL = `
+        uniform float uWireClamp;
         attribute vec3 aStart;
         attribute vec3 aEnd;
         attribute vec2 aSagPhase;
+        float wireT;
+        float wireCover;
+        vec3 wireNormal;
         vec3 wireAt(float t) {
           float u = t * 2.0 - 1.0;
           vec3 p = mix(aStart, aEnd, t);
           p.y -= aSagPhase.x * (1.0 - u * u);
           return p;
         }
-        vec3 wireCorner(vec3 u, vec3 w, float c) {
-          return c < 0.5 ? u : c < 1.5 ? w : c < 2.5 ? -u : -w;
+        // Pixels a unit spans at the wire's nearest point: its chord's nearest to the eye, less its sag (never farther than the wire).
+        float wireScale(float pixels) {
+          if (!isPerspectiveMatrix(projectionMatrix)) return pixels * projectionMatrix[1][1];
+          vec3 c = aEnd - aStart;
+          float k = clamp(dot(cameraPosition - aStart, c) / max(dot(c, c), 1e-8), 0.0, 1.0);
+          return pixels * projectionMatrix[1][1] / max(length(aStart + c * k - cameraPosition) - aSagPhase.x, 1e-4);
         }
-        // The share of its width a wire keeps where it is: all of it down to ${WIRE_FADE[0]} px wide, none at ${WIRE_FADE[1]} (pixels <= 0: all).
-        float wireKeep(vec3 p, float pixels) {
-          if (pixels <= 0.0) return 1.0;
-          float depth = isPerspectiveMatrix(projectionMatrix) ? max(-(modelViewMatrix * vec4(p, 1.0)).z, 1e-4) : 1.0;
-          float wide = ${WIRE_WIDTH.toFixed(6)} * pixels * projectionMatrix[1][1] / depth;
-          return smoothstep(${WIRE_FADE[1].toFixed(6)}, ${WIRE_FADE[0].toFixed(6)}, wide);
+        // The chords the wire keeps (wireChords on the CPU): the fewest powers of two keeping its sag within a pixel, at most the template's.
+        float wireChords(float scale, float finest) {
+          float need = sqrt(aSagPhase.x * scale);
+          return min(finest, need < 1.0 ? 1.0 : exp2(floor(log2(need)) + 1.0));
         }
-        vec3 wirePosition(out vec3 n, float pixels) {
-          vec3 p = wireAt(position.x);
-          float keep = wireKeep(p, pixels);
-          if (position.z > 3.5) {
-            // A strip across the curve's tangent, square to the ray from the eye; its normal leans out to its edges as a round cable's.
-            vec3 d = aEnd - aStart;
-            d.y += 4.0 * aSagPhase.x * (position.x * 2.0 - 1.0);
-            d = normalize(d);
-            vec3 ray = isPerspectiveMatrix(projectionMatrix) ? p - cameraPosition : -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
-            vec3 side = cross(d, ray);
-            float sl = length(side);
-            side = sl > 1e-6 ? side / sl : vec3(1.0, 0.0, 0.0);
-            float s = position.z < 4.5 ? 1.0 : -1.0;
-            n = normalize(normalize(cross(d, side)) + s * side);
-            return p + side * (s * ${(WIRE_WIDTH / 2).toFixed(6)} * keep);
-          }
-          // The tube: the frame of the vertex's segment, from its chord.
-          vec3 d = wireAt(max(position.x, position.y)) - wireAt(min(position.x, position.y));
-          float dl = length(d);
-          d /= dl > 0.0 ? dl : 1.0;
+        vec3 wirePosition(float pixels) {
+          float chords = pixels > 0.0 ? wireChords(wireScale(pixels), normal.x) : normal.x;
+          wireT = floor(position.x * chords + 0.5) / chords;
+          vec3 p = wireAt(wireT);
+          // A strip across the curve's tangent d, square to the ray from the eye.
+          vec3 d = aEnd - aStart;
+          d.y += 4.0 * aSagPhase.x * (wireT * 2.0 - 1.0);
+          d = normalize(d);
+          vec3 ray = isPerspectiveMatrix(projectionMatrix) ? p - cameraPosition : -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
+          vec3 side = cross(d, ray);
+          float sl = length(side);
+          side = sl > 1e-6 ? side / sl : vec3(1.0, 0.0, 0.0);
+          // The square tube round d (corners u, w, -u, -w, u level) seen across 'side': its silhouette's corners, at +-h radii across, and
+          // between them the corner facing the eye, at 'split' of h, the crease of the two faces the eye sees.
           vec3 u = vec3(-d.z, 0.0, d.x);
           float ul = length(u);
-          u = u / (ul > 0.0 ? ul : 1.0) * ${WIRE_RADIUS.toFixed(6)};
-          vec3 w = cross(u, d);
-          float wl = length(w);
-          w = w / (wl > 0.0 ? wl : 1.0) * ${WIRE_RADIUS.toFixed(6)};
-          n = normalize(wireCorner(u, w, normal.x) + wireCorner(u, w, mod(normal.x + 1.0, 4.0)));
-          return p + wireCorner(u, w, position.z) * keep;
+          u = ul > 1e-6 ? u / ul : vec3(1.0, 0.0, 0.0);
+          vec3 w = normalize(cross(u, d));
+          float au = dot(u, side), aw = dot(w, side);
+          bool level = abs(au) >= abs(aw);
+          vec3 edge = level ? (au >= 0.0 ? u : -u) : (aw >= 0.0 ? w : -w);
+          vec3 mid = level ? w : u;
+          mid = dot(mid, ray) <= 0.0 ? mid : -mid;
+          float h = max(abs(au), abs(aw));
+          float split = dot(mid, side) / h;
+          vec3 high = normalize(edge + mid), low = normalize(mid - edge);
+          float width = 2.0 * ${WIRE_RADIUS.toFixed(6)} * h;
+          // Its width on the screen here: under uWireClamp px drawn that wide, covering the share it fills; under ${WIRE_MIN_PIXELS.toFixed(4)} px none.
+          float wide = 1e6;
+          wireCover = 1.0;
+          if (pixels > 0.0) {
+            float depth = isPerspectiveMatrix(projectionMatrix) ? max(-(modelViewMatrix * vec4(p, 1.0)).z, 1e-4) : 1.0;
+            wide = width * pixels * projectionMatrix[1][1] / depth;
+            wireCover = wide < ${WIRE_MIN_PIXELS.toFixed(6)} ? 0.0 : min(wide / uWireClamp, 1.0);
+            width = wireCover > 0.0 ? width / wireCover : 0.0;
+          }
+          // Corners 4 and 6 the upper half, lit by the face at +side; 7 and 5 the lower. Under ${WIRE_CREASE_PIXELS} px the creases fall on the
+          // +side edge (the upper half of no area) and the strip is lit by the faces' mean, by their shares of it.
+          float corner = position.z;
+          bool creased = normal.y > 0.5 && wide >= ${WIRE_CREASE_PIXELS.toFixed(2)};
+          float across = corner < 4.5 ? 1.0 : corner < 5.5 ? -1.0 : creased ? split : 1.0;
+          wireNormal = creased ? (corner < 4.5 || corner > 5.5 && corner < 6.5 ? high : low) : normalize(high * (1.0 - split) + low * (1.0 + split));
+          return p + side * (across * 0.5 * width);
         }`;
 
 /** The wires' materials: lit with the wind, and the shadow's depth, both bending the template along each wire. */
 function wireMaterials(): { readonly lit: MeshStandardMaterial; readonly depth: MeshDepthMaterial } {
-  // A wire thinner than a pixel is a strip whose coverage fades (`WIRE_FADE`).
-  const lit = new MeshStandardMaterial({ color: 0x1e2224, roughness: 0.55, metalness: 0.3, side: DoubleSide });
+  // Blended: a wire under a pixel covers a share of the pixel it is drawn across (`WIRE_GLSL`); one pass for both faces (three draws a
+  // two-sided transparent material twice otherwise), the strip facing the eye.
+  const lit = new MeshStandardMaterial({ color: 0x1e2224, roughness: 0.55, metalness: 0.3, side: DoubleSide, transparent: true });
+  lit.forceSinglePass = true;
   lit.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, windUniforms, { uWireAmp: { value: WIRE_SWING } }, wireScreen);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>${WIRE_WIND_UNIFORMS_GLSL}
-        uniform float uWirePixels;${WIRE_GLSL}`)
+        uniform float uWirePixels;
+        varying float vWireCover;${WIRE_GLSL}`)
       .replace('#include <beginnormal_vertex>', `
-        vec3 wireNormal;
-        vec3 wirePoint = wirePosition(wireNormal, uWirePixels);
-        vec3 objectNormal = wireNormal;`)
+        vec3 wirePoint = wirePosition(uWirePixels);
+        vec3 objectNormal = wireNormal;
+        vWireCover = wireCover;`)
       .replace('#include <begin_vertex>', `
         vec3 transformed = wirePoint;
-        float wireT = position.x;
         float wireSwing = 4.0 * wireT * (1.0 - wireT);${wireWindGlsl('wireSwing', 'aSagPhase.y')}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vWireCover;`)
+      .replace('#include <alphamap_fragment>', `#include <alphamap_fragment>
+        diffuseColor.a *= vWireCover;`);
   };
-  lit.customProgramCacheKey = () => 'wire-instanced';
-  // The shadow as it was: the wire at rest, without the wind, at its full width.
+  lit.customProgramCacheKey = () => 'wire-ribbon';
+  // The shadow as it was: the wire at rest, without the wind, the tube's silhouette as the sun sees it.
   // // No colour: the sun's maps are read by their depth texture alone (three r186 PCF compares `shadow.map.depthTexture`), nothing reads the packed colour (AGT-35).
   const depth = new MeshDepthMaterial({ depthPacking: RGBADepthPacking, colorWrite: false });
   depth.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, wireScreen);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>${WIRE_GLSL}`)
       .replace('#include <begin_vertex>', `
-        vec3 wireNormal;
-        vec3 transformed = wirePosition(wireNormal, 0.0);`);
+        vec3 transformed = wirePosition(0.0);`);
   };
-  depth.customProgramCacheKey = () => 'wire-instanced-depth';
+  depth.customProgramCacheKey = () => 'wire-ribbon-depth';
   return { lit, depth };
 }
 

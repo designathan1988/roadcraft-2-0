@@ -50,6 +50,7 @@ import {
   polePartSpecs,
   releaseWireGeometry,
   spanWires,
+  wireClampPixels,
   wireGeometry,
   wireLevel,
   wireParts,
@@ -94,6 +95,13 @@ const drawingBuffer = new Vector2();
 function noteScreen(renderer: WebGLRenderer): void {
   renderer.getDrawingBufferSize(drawingBuffer);
   if (drawingBuffer.y > 0) screen.halfHeight = drawingBuffer.y / 2;
+}
+/** Before three draws a layer's wires: the screen (`noteScreen`), and the least width a wire is drawn on its target (`wireClampPixels`): by
+ *  the samples a pixel of it holds (a canvas asked for antialiasing holds four). */
+function noteWireScreen(renderer: WebGLRenderer): void {
+  noteScreen(renderer);
+  const target = renderer.getRenderTarget();
+  wireScreen.uWireClamp.value = wireClampPixels(target ? target.samples : renderer.getContext().getContextAttributes()?.antialias ? 4 : 0);
 }
 /** Before three casts one of the layer's meshes into a shadow map: the camera of that map (`WebGLShadowMap.renderObject`). */
 function noteShadow(renderer: WebGLRenderer, _object: Object3D, _camera: Camera, shadowCamera: Camera): void {
@@ -394,7 +402,7 @@ export class WireStore {
     mesh.customDepthMaterial = depth;
     mesh.castShadow = true;
     mesh.name = 'utility-wires';
-    mesh.onBeforeRender = noteScreen;
+    mesh.onBeforeRender = noteWireScreen;
     mesh.onBeforeShadow = noteShadow;
     // Cast into a cascade whose texel the wire's width spans (`castBySize`), as the parts (`PartStore.meshOf`).
     this.uncast = castBySize({ mesh, casts: true, radius: () => WIRE_WIDTH });
