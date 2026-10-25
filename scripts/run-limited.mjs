@@ -24,11 +24,15 @@ const joined = joinSessionJob();
 if (!joined.joined && windows) process.stderr.write(`[run-limited] not in the conversation's job: ${joined.why}\n`);
 try { setPriority(constants.priority.PRIORITY_BELOW_NORMAL); } catch (error) { console.error(`[run-limited] priority: ${error.message}`); }
 
-// Vitest's workers: as many as the share has processors (6 of 24 at 25 %), unless asked for fewer.
+// Vitest's workers: at most as many as the share has processors (6 of 24 at 25 %), fewer when asked, handed to the configs as
+// `ROADCRAFT_MAX_WORKERS` (`vitest.config.ts`). DO NOT hand it on as `VITEST_MAX_WORKERS`: Vitest reads that one itself after the config and
+// it overrides every config's own cap (vitest 4.1 `resolveConfig`) - the scale suite's one file at a time (`fileParallelism: false`) ran six
+// heavy files at once, ~1.4 GB each, past the job's 8 GB, and its workers died "out of memory" with 65 MB of heap (2026-10-25).
 const { percent } = share();
 const workers = Math.max(1, Math.floor((cpus().length * percent) / 100));
-const asked = Number(process.env.VITEST_MAX_WORKERS);
-const env = { ...process.env, VITEST_MAX_WORKERS: String(Number.isFinite(asked) ? Math.min(workers, Math.max(1, asked)) : workers), ROADCRAFT_IN_JOB: joined.joined ? '1' : '' };
+const asked = Number(process.env.ROADCRAFT_MAX_WORKERS ?? process.env.VITEST_MAX_WORKERS);
+const env = { ...process.env, ROADCRAFT_MAX_WORKERS: String(Number.isFinite(asked) ? Math.min(workers, Math.max(1, asked)) : workers), ROADCRAFT_IN_JOB: joined.joined ? '1' : '' };
+delete env.VITEST_MAX_WORKERS;
 
 const TIMEOUT_S = Number(process.env.RUN_LIMITED_TIMEOUT_S ?? 480);
 // DO NOT go back to `shell: true` with the arguments apart: Node joins them with spaces unquoted
