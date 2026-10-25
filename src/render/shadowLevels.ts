@@ -1,7 +1,7 @@
 import { BufferAttribute, BufferGeometry } from 'three';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { MeshoptSimplifier } from 'meshoptimizer';
-import { surfaceOff } from './propLevels';
+import { surfaceOff } from './mesh/surfaceOff';
 
 /**
  * A CASTER'S SHAPES FOR THE SUN'S CASCADES: its model, then lighter ones, each drawn into a cascade whose texel is wider than the farthest it
