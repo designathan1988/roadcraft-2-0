@@ -43,8 +43,11 @@ export interface MassBay {
   readonly glass: number;
   readonly rgb: readonly [number, number, number];
   readonly ground: boolean;
+  /** Its opening's sill and head, shares of the storey's height from its floor (`buildingMesh.ts` openingOf, the detail's and the facade level's own). */
+  readonly sill: number;
+  readonly head: number;
 }
-export const BAY_FLOATS = 12;
+export const BAY_FLOATS = 14;
 
 /** A side of a block on the plan, local: its start, its direction along it, its outward normal; its bay's width (the facade's grid). Held `SIDE_FLOATS` numbers, its side first (`MassProgram.sides`). */
 export interface MassSide {
@@ -162,7 +165,7 @@ export class MassRecorder {
     this.blockRows.push(this.rows.length);
     for (const row of rows) {
       this.rows.push(this.bays.length / BAY_FLOATS);
-      for (const q of row) this.bays.push(q.side, q.start, q.width, q.z0, q.height, q.d, q.share, q.glass, q.rgb[0], q.rgb[1], q.rgb[2], q.ground ? 1 : 0);
+      for (const q of row) this.bays.push(q.side, q.start, q.width, q.z0, q.height, q.d, q.share, q.glass, q.rgb[0], q.rgb[1], q.rgb[2], q.ground ? 1 : 0, q.sill, q.head);
     }
   }
 

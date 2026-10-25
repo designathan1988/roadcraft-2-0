@@ -19,6 +19,8 @@ export interface MassingChunk {
   readonly facade: Float32Array;
   /** Per vertex: the share of a bay its windows take across (1: a curtain wall), and the building's seed */
   readonly glazing: Float32Array;
+  /** Per vertex: its windows' sill and head in the storey (`windowCode`). */
+  readonly window: Float32Array;
   readonly index: Uint32Array;
   /** The tallest thing this level left out or laid flat, m (`MassDetail`): 0 at the cell's level. */
   readonly error: number;
@@ -50,9 +52,16 @@ export function rgbOf(hex: number, shade = 1): [number, number, number] {
 }
 
 export type Rgb = readonly [number, number, number];
-/** A facade's pattern at a vertex: along, bay, storey height, first storey's height; and the glass share. */
-interface Facade { readonly bay: number; readonly storey: number; readonly z0: number; readonly share: number }
-const NO_FACADE: Facade = { bay: 0, storey: 1, z0: 0, share: 0 };
+/** Where a window sits in its storey from afar when its bay says nothing of it (a pillar's arcade): shares of the storey height from its floor. */
+export const MASS_SILL = 0.3;
+export const MASS_HEAD = 0.85;
+/** A window's sill and head (shares of the storey) as one number a vertex: 32 steps each, an integer under 1,024 a half float holds exactly
+ *  (`cellArrays.ts` MASS_GRID's fourth, `massingMaterial.ts` reads it back). */
+export const windowCode = (sill: number, head: number): number =>
+  Math.round(Math.min(Math.max(sill, 0), 1) * 31) * 32 + Math.round(Math.min(Math.max(head, 0), 1) * 31);
+/** A facade's pattern at a vertex: along, bay, storey height, first storey's height; the glass share, the window's sill and head. */
+interface Facade { readonly bay: number; readonly storey: number; readonly z0: number; readonly share: number; readonly sill: number; readonly head: number }
+const NO_FACADE: Facade = { bay: 0, storey: 1, z0: 0, share: 0, sill: MASS_SILL, head: MASS_HEAD };
 
 /** A typed array written at its end, its room doubled as it fills: DO NOT gather numbers in a `number[]` (8 bytes each and its copies as it grows) for a typed array made at the end. */
 class Grown<T extends Float32Array | Uint32Array> {
@@ -66,6 +75,7 @@ class Grown<T extends Float32Array | Uint32Array> {
     }
     return this.array;
   }
+  push1(a: number): void { const t = this.room(1); t[this.length++] = a; }
   push2(a: number, b: number): void { const t = this.room(2); t[this.length++] = a; t[this.length++] = b; }
   push3(a: number, b: number, c: number): void { const t = this.room(3); t[this.length++] = a; t[this.length++] = b; t[this.length++] = c; }
   push4(a: number, b: number, c: number, d: number): void { const t = this.room(4); t[this.length++] = a; t[this.length++] = b; t[this.length++] = c; t[this.length++] = d; }
@@ -83,6 +93,7 @@ class MassWriter {
   readonly colour = new Grown(floats(96), floats);
   readonly facade = new Grown(floats(128), floats);
   readonly glazing = new Grown(floats(64), floats);
+  readonly window = new Grown(floats(32), floats);
   readonly index = new Grown(uints(96), uints);
   /** The tallest thing left out so far (`leaves`). */
   error = 0;
@@ -125,6 +136,7 @@ class MassWriter {
       this.colour.push3(rgb[0], rgb[1], rgb[2]);
       this.facade.push4(along?.[i] ?? 0, f.bay, f.storey, f.z0);
       this.glazing.push2(f.share, this.seed);
+      this.window.push1(windowCode(f.sill, f.head));
     }
     // Wound to face its normal (three's axes mirror the plan's y).
     const a = points[0]!, b = points[1]!, c = points[2]!;
@@ -145,6 +157,7 @@ class MassWriter {
       this.colour.push3(rgb[0], rgb[1], rgb[2]);
       this.facade.push4(0, NO_FACADE.bay, NO_FACADE.storey, NO_FACADE.z0);
       this.glazing.push2(NO_FACADE.share, this.seed);
+      this.window.push1(windowCode(NO_FACADE.sill, NO_FACADE.head));
     }
     for (let i = 0; i < tris.length; i += 3) {
       const ia = tris[i]!, ib = tris[i + 1]!, ic = tris[i + 2]!;
@@ -163,6 +176,7 @@ class MassWriter {
       colour: this.colour.done(),
       facade: this.facade.done(),
       glazing: this.glazing.done(),
+      window: this.window.done(),
       index: this.index.done(),
       error: this.error,
     };
@@ -212,7 +226,7 @@ export const GLASS_SHARE: Partial<Record<BayComponent, number>> = {
  *  (`massingMaterial.ts`); a relief or an arcade the level leaves out laid flat, its wall run on with its neighbours (one quad where they were coplanar). */
 function writeWalls(w: MassWriter, p: MassProgram, block: number, floor: number): void {
   /** One run of a storey, before the storeys alike are stacked into one. */
-  interface Run { side: number; a0: number; a1: number; d: number; z0: number; z1: number; zb: number; height: number; glass: number; colour: Rgb }
+  interface Run { side: number; a0: number; a1: number; d: number; z0: number; z1: number; zb: number; height: number; glass: number; sill: number; head: number; colour: Rgb }
   const runs: Run[] = [];
   const bays = p.bays;
   const offsetOf = (i: number): number => { const d = bays[i * BAY_FLOATS + 5]!; return w.leaves(Math.abs(d)) ? 0 : d; };
@@ -223,19 +237,20 @@ function writeWalls(w: MassWriter, p: MassProgram, block: number, floor: number)
       const f = i * BAY_FLOATS;
       let j = i + 1;
       while (j < end && Math.abs(offsetOf(j) - offsetOf(i)) < 1e-3 && bays[j * BAY_FLOATS + 6] === bays[f + 6]
+        && bays[j * BAY_FLOATS + 12] === bays[f + 12] && bays[j * BAY_FLOATS + 13] === bays[f + 13]
         && Math.abs(bays[j * BAY_FLOATS + 1]! - (bays[(j - 1) * BAY_FLOATS + 1]! + bays[(j - 1) * BAY_FLOATS + 2]!)) < 1e-3) j++;
       const l = (j - 1) * BAY_FLOATS;
       const z0 = bays[f + 3]! + floor, height = bays[f + 4]!;
       runs.push({
         side: bays[f]!, a0: bays[f + 1]!, a1: bays[l + 1]! + bays[l + 2]!, d: offsetOf(i), z0, z1: z0 + height,
-        zb: bays[f + 11] ? z0 - BURY : z0, height, glass: bays[f + 7]!, colour: [bays[f + 8]!, bays[f + 9]!, bays[f + 10]!],
+        zb: bays[f + 11] ? z0 - BURY : z0, height, glass: bays[f + 7]!, sill: bays[f + 12]!, head: bays[f + 13]!, colour: [bays[f + 8]!, bays[f + 9]!, bays[f + 10]!],
       });
       i = j;
     }
   }
   // DO NOT draw a quad a storey: the storeys alike, one above the other, are one wall.
   const alike = (p: Run, q: Run): boolean => p.side === q.side && Math.abs(p.a0 - q.a0) < 1e-3 && Math.abs(p.a1 - q.a1) < 1e-3 && Math.abs(p.d - q.d) < 1e-3
-    && Math.abs(p.height - q.height) < 1e-3 && p.glass === q.glass && p.colour[0] === q.colour[0] && p.colour[1] === q.colour[1] && p.colour[2] === q.colour[2];
+    && Math.abs(p.height - q.height) < 1e-3 && p.glass === q.glass && p.sill === q.sill && p.head === q.head && p.colour[0] === q.colour[0] && p.colour[1] === q.colour[1] && p.colour[2] === q.colour[2];
   runs.sort((p, q) => p.side - q.side || p.a0 - q.a0 || p.d - q.d || p.z0 - q.z0);
   for (let i = 0; i < runs.length;) {
     const first = runs[i]!;
@@ -247,7 +262,7 @@ function writeWalls(w: MassWriter, p: MassProgram, block: number, floor: number)
     while (p.sides[o] !== side) o += SIDE_FLOATS;
     const sx = p.sides[o + 1]!, sy = p.sides[o + 2]!, tx = p.sides[o + 3]!, ty = p.sides[o + 4]!, nx = p.sides[o + 5]!, ny = p.sides[o + 6]!;
     const at = (a: number, out: number, z: number): [number, number, number] => w.P(sx + tx * a + nx * out, sy + ty * a + ny * out, z);
-    const facade = { bay: p.sides[o + 7]!, storey: first.height, z0, share: first.glass };
+    const facade = { bay: p.sides[o + 7]!, storey: first.height, z0, share: first.glass, sill: first.sill, head: first.head };
     w.face([at(a0, d, zb), at(a1, d, zb), at(a1, d, z1), at(a0, d, z1)], w.N(nx, ny), colour, facade, [a0, a1, a1, a0]);
     if (Math.abs(d) > 1e-3) {
       // Its cheeks at both ends and its head: a box standing out, or a recess.

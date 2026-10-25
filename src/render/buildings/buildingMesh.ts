@@ -107,7 +107,7 @@ import { type BuildingKit, PART_KINDS, PORCH_LAMP, type PartKind } from './kit';
 import { FACADE_FLIP, FACADE_KIND, FACADE_STREAK, STREAK_SILL } from './facadeLevel';
 import { gpuOnlyAttributes } from '../mesh/gpuOnly';
 import { facadeProps } from './facadeProps';
-import { GLASS_SHARE, LOT_COLOURS, SAW_GLASS_RGB, TERRACE_RGB, massColours, rgbOf, shadeOf as massShade } from './massing';
+import { GLASS_SHARE, LOT_COLOURS, MASS_HEAD, MASS_SILL, SAW_GLASS_RGB, TERRACE_RGB, massColours, rgbOf, shadeOf as massShade } from './massing';
 import { recordBase, recordBaseLots } from './massBase';
 import { type BuildingProgram, type LotsProgram, MASS_FLATTENED, MASS_KEEP, MASS_PITCHED, type MassBay, MassRecorder, type MassSide, type ProgramSummary, summaryOf } from './program';
 import { PARASOL_HALF, PARASOL_HIGH, PARASOL_LOW, ROOF_COLOURS, TANK_COLOURS, machineRooms, roofPlantOf, terraceDeck, terraceParasols, terraceSeed } from './roofPlan';
@@ -1520,17 +1520,22 @@ function recordBlock(e: Emitter, b: Building, v: Volume, floor: number): void {
       sides.set(bay.side, { x: st.x, y: st.y, tx: st.tx, ty: st.ty, nx: f.nx, ny: f.ny, bay: bayWidth(b, v, bay.side) });
     }
     const spec = wallMaterial(b, v, bay.side, bay.storey);
-    const share = GLASS_SHARE[bay.component] ?? 0;
+    // Its window as the detail and the facade level cut it (`openingOf`, the face's own geometry): its width, sill and head. DO NOT draw the
+    // masses' windows by a share a component: a wide window of 94 % by 82 % of its bay drew 75 % by 55 %, and the black glass towers stood as
+    // pale walls with small windows once their cells went to their masses (the player, F7 audit 2026-10-25).
+    const opening = bay.component === 'pillar' ? null : openingOf(bay.component, bay.width, bay.height, v.facadeGeometry?.[bay.side]);
+    const share = opening ? (opening.a1 - opening.a0) / bay.width : GLASS_SHARE[bay.component] ?? 0;
+    const sill = opening ? opening.h0 / bay.height : MASS_SILL, head = opening ? opening.h1 / bay.height : MASS_HEAD;
     const key = bay.level * 4096 + bay.side;
     const one: MassBay = {
       side: bay.side, start: bay.start, width: bay.width, z0: floor + bay.z, height: bay.height,
       d: bay.component === 'pillar' ? -ARCADE : bay.push, share, glass: spec.finish === 'glass' ? 1 : share, rgb: rgb(spec),
-      ground: v.base === 0 && bay.storey === 0,
+      ground: v.base === 0 && bay.storey === 0, sill, head,
     };
     const row = rows.get(key);
     if (row) row.push(one); else rows.set(key, [one]);
   }
-  // Each storey's bays in order along their side, the bays alike side by side (the same offset and share) kept as one: every level of the
+  // Each storey's bays in order along their side, the bays alike side by side (the same offset, share and window) kept as one: every level of the
   // masses joins them alike (`massing.ts` writeWalls, the first's look for the run), so the program holds the runs, not every bay.
   const kept: MassBay[][] = [];
   for (const row of rows.values()) {
@@ -1538,7 +1543,7 @@ function recordBlock(e: Emitter, b: Building, v: Volume, floor: number): void {
     const joined: MassBay[] = [];
     for (const one of row) {
       const last = joined[joined.length - 1];
-      if (last && last.d === one.d && last.share === one.share && Math.abs(one.start - (last.start + last.width)) < 1e-3) {
+      if (last && last.d === one.d && last.share === one.share && last.sill === one.sill && last.head === one.head && Math.abs(one.start - (last.start + last.width)) < 1e-3) {
         joined[joined.length - 1] = { ...last, width: one.start + one.width - last.start };
       } else joined.push(one);
     }

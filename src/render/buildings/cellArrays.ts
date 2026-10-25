@@ -236,7 +236,7 @@ export interface CellMass {
   readonly color: Uint16Array;
   /** Along its face and its windows' first storey's foot, m: the long and the high, full floats (`MASS_FACADE`). */
   readonly facade: Float32Array;
-  /** Its bay's width and storey's height and its glass share, and a fourth left over, half floats (`MASS_GRID`). */
+  /** Its bay's width and storey's height, its glass share and its windows' sill and head (`massing.ts` windowCode), half floats (`MASS_GRID`). */
   readonly grid: Uint16Array;
   /** Its rooms' seed (the lot of each lit window, `massingMaterial.ts`) and the office flag over it: a full float, a seed's fraction kept whole. */
   readonly seed: Float32Array;
@@ -338,6 +338,8 @@ function mergedMass(masses: readonly MassingChunk[]): CellMass | null {
       facade[at * MASS_FACADE] = c.facade[k * 4]!; facade[at * MASS_FACADE + 1] = c.facade[k * 4 + 3]!;
       grid[at * MASS_GRID] = DataUtils.toHalfFloat(c.facade[k * 4 + 1]!); grid[at * MASS_GRID + 1] = DataUtils.toHalfFloat(c.facade[k * 4 + 2]!);
       grid[at * MASS_GRID + 2] = DataUtils.toHalfFloat(c.glazing[k * 2]!);
+      // Its windows' sill and head (`massing.ts` windowCode): an integer under 1,024, exact in a half float.
+      grid[at * MASS_GRID + 3] = DataUtils.toHalfFloat(c.window[k]!);
       seed[at] = c.glazing[k * 2 + 1]!;
     }
     for (let i = 0; i < c.index.length; i++) index[n + i] = c.index[i]! + v;

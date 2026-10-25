@@ -9,9 +9,6 @@ import { applyLotOverlay } from '../lotOverlay';
 const GLASS = new Color(0x7c8e98).multiplyScalar(0.06);
 /** The room seen through a pane by day, as the detail shows it once the pane is a few pixels (`glassRoom.ts` paneTiny's mean), lit by `roomDaylight`. */
 export const ROOM_SEEN_GLSL = 'vec3(0.42, 0.45, 0.47)';
-/** Where a window sits in its storey, from the floor (shares of the storey height). */
-const SILL = 0.3;
-const HEAD = 0.85;
 
 export interface MassingUniforms {
   /** Share of rooms lit at this hour (`kit.ts` `awakeShare`). */
@@ -66,8 +63,8 @@ export function createMassingMaterial(uniforms: MassingUniforms, base = false): 
     shader.uniforms['roomDaylight'] = uniforms.roomDaylight ?? { value: 0 };
     shader.vertexShader = shader.vertexShader
       // A vertex's facade (along, foot) in full floats, its grid (bay, storey, glass share) in half floats, its seed whole (`cellArrays.ts` `CellMass`).
-      .replace('#include <common>', '#include <common>\nattribute vec2 facade;\nattribute vec4 facadeGrid;\nattribute float glazingSeed;\nvarying vec4 vFacade;\nvarying vec2 vGlazing;\nvarying float vHeight;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = vec4(facade.x, facadeGrid.x, facadeGrid.y, facade.y);\nvGlazing = vec2(facadeGrid.z, glazingSeed);\nvHeight = (modelMatrix * vec4(transformed, 1.0)).y;');
+      .replace('#include <common>', '#include <common>\nattribute vec2 facade;\nattribute vec4 facadeGrid;\nattribute float glazingSeed;\nvarying vec4 vFacade;\nvarying vec2 vGlazing;\nvarying vec2 vWindow;\nvarying float vHeight;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFacade = vec4(facade.x, facadeGrid.x, facadeGrid.y, facade.y);\nvGlazing = vec2(facadeGrid.z, glazingSeed);\nvWindow = vec2(floor(facadeGrid.w / 32.0 + 0.01), mod(floor(facadeGrid.w + 0.5), 32.0)) / 31.0;\nvHeight = (modelMatrix * vec4(transformed, 1.0)).y;');
     if (base) {
       // Its colour from its paint, one a triangle; an up normal for what reads one in the vertex stage (the shadow's normal bias, the lots' overlay): the face's own is taken from its slope in the fragment stage.
       shader.vertexShader = shader.vertexShader
@@ -83,6 +80,8 @@ uniform float massingNight;
 uniform float roomDaylight;
 varying vec4 vFacade;
 varying vec2 vGlazing;
+// The windows' sill and head, shares of the storey (massing.ts windowCode): the face's own windows, as the detail cuts them.
+varying vec2 vWindow;
 varying float vHeight;
 float massGlass = 0.0;
 float massLit = 0.0;
@@ -97,7 +96,7 @@ if (vFacade.y > 0.0) {
   float share = vGlazing.x;
   // A curtain wall: its panes between mullions (the kit's frame), nine tenths glass each way.
   float across = share > 0.99 ? 0.9 : massPulse(cell.x, foot.x, 0.5 - 0.5 * share, 0.5 + 0.5 * share);
-  float up = share > 0.99 ? 0.9 : massPulse(cell.y, foot.y, ${SILL.toFixed(2)}, ${HEAD.toFixed(2)});
+  float up = share > 0.99 ? 0.9 : massPulse(cell.y, foot.y, vWindow.x, vWindow.y);
   // A window under a pixel leaves its mean: kept at full strength the glass the detail shows, not washed into the wall (the town at 1–2 km read as pastel boxes, 2026-10-20).
   massGlass = clamp(across * up * 1.45, 0.0, 1.0) * step(0.0, cell.y);
   // Which room is lit: its own lot near, the share awake once a window is under a pixel; by day (\`massingNight\` 0, a uniform: one branch for every pixel) none glows, so none is worked out.
@@ -119,7 +118,7 @@ if (vFacade.y > 0.0) {
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.06, massGlass);')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += (massLamp * massingNight * massLit + ${ROOM_SEEN_GLSL} * roomDaylight) * massGlass;`);
   };
-  material.customProgramCacheKey = () => (base ? 'building-massing-base-v1' : 'building-massing-lamps-v6');
+  material.customProgramCacheKey = () => (base ? 'building-massing-base-v1' : 'building-massing-lamps-v7');
   // A built lot's yard, coloured from afar as up close (`lotOverlay.ts`).
   applyLotOverlay(material, { building: true });
   return material;
