@@ -141,6 +141,15 @@ export class ScreenScale {
     return depth > 1e-3 ? this.pixels / depth : Infinity;
   }
 
+  /** Whether all of a box (three's axes: x0, y0, z0, x1, y1, z1) stands deeper than `distance` along the view: in perspective only (a view
+   *  from above fades nothing), its nearest corner's depth (never more than its distance from the eye) past it. */
+  beyond(box: ArrayLike<number>, distance: number): boolean {
+    if (!this.perspective || !(box[0]! <= box[3]!)) return false;
+    const e = this.eye, a = this.ahead;
+    const depth = ((a.x >= 0 ? box[0]! : box[3]!) - e.x) * a.x + ((a.y >= 0 ? box[1]! : box[4]!) - e.y) * a.y + ((a.z >= 0 ? box[2]! : box[5]!) - e.z) * a.z;
+    return depth > distance;
+  }
+
   atPoint(x: number, y: number, z: number, radius: number): number {
     if (!this.perspective) return this.pixels;
     const e = this.eye, a = this.ahead;
@@ -281,9 +290,15 @@ export class PartStore {
   }
 
   /** As the camera sees the nearest pole: a piece covering under a pixel (times its brightness) not drawn, nor cast where it covers under a shadow texel; the coarsest shape off by under a pixel. */
-  view(_scale: ScreenScale, nearest: number): void {
+  view(scale: ScreenScale, nearest: number): void {
     const mesh = this.mesh, spec = this.spec;
-    if (!mesh || this.count === 0 || spec.glows) return;
+    if (!mesh || this.count === 0) return;
+    // A light its material fades out whole past `fadesAt` (a lamp's cone, `scenery.ts` beamMaterial): none drawn where all of it stands deeper.
+    if (spec.fadesAt !== undefined) {
+      this.shown = !scale.beyond(this.bounds.box, spec.fadesAt);
+      mesh.count = this.shown ? this.count : 0;
+    }
+    if (spec.glows) return;
     this.shown = this.bounds.cover * nearest * nearest * spec.brightness() >= 1;
     mesh.count = this.shown ? this.count : 0;
     // Its casting by cascade: `castBySize` (`meshOf`).

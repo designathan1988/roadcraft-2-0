@@ -18,7 +18,7 @@ import { BUSH_KINDS, TREE_SPECIES, type BushKind, type TreeSpecies } from './pro
 import { PICTURE_PX, PROP_PICTURES, propPictures, sceneryPictures, type PropPicture, type PropPictures, type SceneryPictures } from './plantImpostors';
 import { createPropLayer, type PropLayer, type PropPlacement } from './propCells';
 import { PROP_LEAST_PX, PROP_NEAR_PX, PROP_PICTURE_PX, propMeasure, propMidLevel, simplifierLoading, type PropMidLevel } from './propLevels';
-import { LAMP_BEAM_RADIUS, LAMP_HEIGHT, LAMP_OUTREACH, LAMP_POOL_RADIUS, POOL_ALONG, SHADOW_REACH, foliageTint, type SceneryKit } from './scenery';
+import { BEAM_FADE, LAMP_BEAM_RADIUS, LAMP_HEIGHT, LAMP_OUTREACH, LAMP_POOL_RADIUS, POOL_ALONG, SHADOW_REACH, foliageTint, type SceneryKit } from './scenery';
 
 /** DO NOT go back to that: one bench placed paid for every bench of the city. */
 
@@ -135,7 +135,8 @@ export function furnitureStores(kit: SceneryKit, pictures: SceneryPictures, ladd
     // The lens is lit from inside; it neither casts nor takes a shadow.
     prop('street-light-lamps', kit.lampLens, kit.posedGlow, false),
     prop('street-light-pools', kit.pool, kit.posedPoolGlow, false, false, 3),
-    prop('street-light-beams', kit.beam, kit.posedBeamGlow, false, false, 4),
+    // Its cone faded out whole past `BEAM_FADE` from the eye (`scenery.ts` beamMaterial): not drawn there (`KindLevels.fadesAt`).
+    { ...prop('street-light-beams', kit.beam, kit.posedBeamGlow, false, false, 4), levels: { reach: kit.beam.boundingSphere!.radius, fadesAt: BEAM_FADE[1] } },
     prop('street-bins', f.bin, kit.props, true, true, undefined, 'bin'),
     prop('benches', f.bench, kit.props, true, true, undefined, 'bench'),
     prop('hydrants', f.hydrant, kit.props, true, true, undefined, 'hydrant'),

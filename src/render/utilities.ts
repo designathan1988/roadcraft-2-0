@@ -19,7 +19,7 @@ import {
 
 import type { Network } from '@world/network';
 import { m } from '@world/units';
-import { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, type SceneryKit } from './scenery';
+import { BEAM_FADE, LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, type SceneryKit } from './scenery';
 import { GROUND_ONLY, type RoadElevation } from '@world/elevation';
 import { FOOTWAY_RISE } from '@world/roadTypes';
 import { footwayRiseAt } from '@world/roads/footwayRise';
@@ -114,6 +114,8 @@ export interface PolePartSpec {
   readonly brightness: () => number;
   /** Its shapes, finest first: the first is `geometry`, the others coarser (`PoleLayer` picks by the error on the screen). */
   readonly levels: readonly PartLevel[];
+  /** World units from the eye past which its material fades it out whole (a lamp's cone): not drawn where all of it stands deeper (`poleLayer.ts` view). */
+  readonly fadesAt?: number;
 }
 
 const unlit = (): number => 1;
@@ -141,7 +143,8 @@ export function polePartSpecs(kit: SceneryKit): readonly PolePartSpec[] {
     solid('utility-lamp-heads', boxGeometry, housing),
     lens,
     light('utility-lamp-pools', kit.pool, kit.poolGlow, 3),
-    light('utility-lamp-beams', kit.beam, kit.beamGlow, 4),
+    // Its cone faded out whole past `BEAM_FADE` from the eye (`scenery.ts` beamMaterial): not drawn there.
+    { ...light('utility-lamp-beams', kit.beam, kit.beamGlow, 4), fadesAt: BEAM_FADE[1] },
   ];
 }
 

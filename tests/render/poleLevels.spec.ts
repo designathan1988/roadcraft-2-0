@@ -53,6 +53,8 @@ describe('the pole layer as the camera sees it', () => {
 
     layer.group.update(camera(m(20)));
     const [nearInsulators, farInsulators] = named(layer.group, 'utility-insulators');
+    // The near line's cones of light drawn (within 140 m), the far line's not (a kilometre off).
+    expect(named(layer.group, 'utility-lamp-beams').map(drawn)).toEqual([true, false]);
     expect(drawn(nearInsulators!)).toBe(true);
     // The line a kilometre off, by its own nearest pole: its insulators under a pixel, not drawn.
     expect(drawn(farInsulators!)).toBe(false);
@@ -73,6 +75,8 @@ describe('the pole layer as the camera sees it', () => {
       for (const mesh of named(layer.group, name)) expect(drawn(mesh)).toBe(false);
     }
     for (const mesh of named(layer.group, 'utility-lamp-pools')) expect(drawn(mesh)).toBe(true);
+    // Their cones of light faded out whole past 140 m (`scenery.ts` BEAM_FADE): none drawn from up there.
+    for (const mesh of named(layer.group, 'utility-lamp-beams')) expect(drawn(mesh)).toBe(false);
     // A lens lit at night is seen smaller than an unlit one: by its coverage times its brightness.
     layer.group.update(camera(m(1400)));
     const byDay = named(layer.group, 'utility-lamp-lenses').map(drawn);

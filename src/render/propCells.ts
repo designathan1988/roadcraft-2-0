@@ -180,11 +180,23 @@ interface FarBlock {
   readonly pictured: Group;
   /** Its kinds drawn by their ladders: their levels chosen each frame (`show`). */
   readonly ladders: FarLadder[];
+  /** Its batches of a kind faded out past `beyond` from the eye (`KindLevels.fadesAt`): hidden while all of the batch stands past it. */
+  readonly fading: readonly { readonly mesh: InstancedMesh; readonly beyond: number }[];
   readonly meshes: InstancedMesh[];
   readonly uncast: (() => void)[];
   readonly growing: boolean;
   waiting: number;
   readonly gpu: number;
+}
+
+/** Whether all of `mesh` (its bounding sphere) stands past `beyond` world units from the eye of `view` (a view-projection): its sphere's
+ *  nearest depth (clip w, never more than the distance) past it. A view from above (w 1) fades nothing. */
+function fadedOut(mesh: InstancedMesh, beyond: number, view: Matrix4): boolean {
+  const s = mesh.boundingSphere;
+  if (!s) return false;
+  const e = view.elements;
+  const w = e[3]! * s.center.x + e[7]! * s.center.y + e[11]! * s.center.z + e[15]!;
+  return w - s.radius * Math.hypot(e[3]!, e[7]!, e[11]!) > beyond;
 }
 
 /** The far classes: the plants' pictures and the things drawn at every size reach the horizon; the small things drawn down to a pixel (`KindLevels.least`) only where they are. */
@@ -361,6 +373,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     const { packs, growing } = make();
     note(packs);
     const meshes: InstancedMesh[] = [], uncast: (() => void)[] = [];
+    const fading: { mesh: InstancedMesh; beyond: number }[] = [];
     let arrays = 0, waiting = 0;
     const stride = YAW_POSE.stride;
     const own = (mesh: InstancedMesh, buffers: Record<string, BufferAttribute | InterleavedBuffer>, again: () => Record<string, Float32Array>): void => {
@@ -480,6 +493,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       const nears = kindSpec.meshes.filter((s) => !s.far && !s.mid && !s.cards);
       if (!levels || !laddered(kindSpec)) {
         const made = nears.map((body) => batch(body, body.castShadow));
+        if (levels?.fadesAt !== undefined) for (const mesh of made) fading.push({ mesh, beyond: levels.fadesAt });
         if (made[0]) own(made[0], tints ? { poses, tints } : { poses }, () => fill(make().packs));
         continue;
       }
@@ -509,7 +523,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     pictured.name = `${spec.name}-far-pictures`;
     holder.add(pictured);
     for (const mesh of meshes) (mesh.material === spec.pictures?.material ? pictured : holder).add(mesh);
-    return { block: { group: holder, pictured, ladders, meshes, uncast, growing, waiting, gpu: arrays }, arrays };
+    return { block: { group: holder, pictured, ladders, fading, meshes, uncast, growing, waiting, gpu: arrays }, arrays };
   };
 
   const far = [FarClass.wide, FarClass.small].map((cls) => {
@@ -665,6 +679,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
           block.group.visible = wanted.has(key);
           block.pictured.visible = pictured;
           if (block.group.visible) for (const ladder of block.ladders) showLadder(ladder, view.view, view.perUnitAtOne, square, PROP_CELL);
+          // A batch its material fades out whole from here: none of it drawn (its sphere's nearest depth, never more than its distance, past it).
+          if (block.group.visible) for (const f of block.fading) f.mesh.visible = !fadedOut(f.mesh, f.beyond, view.view);
         }
       });
     },

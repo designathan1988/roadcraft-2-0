@@ -74,7 +74,7 @@ const BEAM_INTENSITY = 0.4;
 /** How hard the cone's edges are seen from the side (VLB's Side Thickness): higher, softer. */
 const BEAM_SIDE_SOFTNESS = 1.6;
 /** VLB's Fade Out: the cone dims from `BEAM_FADE[0]` from the eye and is gone at `BEAM_FADE[1]`. */
-const BEAM_FADE = [m(60), m(140)] as const;
+export const BEAM_FADE = [m(60), m(140)] as const;
 
 /** The street lights' colour: white LED, some 4500 K. */
 const STREET_LED = 0xffe2c4;

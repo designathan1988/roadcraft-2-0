@@ -82,6 +82,9 @@ export interface KindLevels {
   readonly midReady?: () => boolean;
   /** Pixels across under which it is not drawn at all: cut there, never thinned (a kind with far pictures or none). */
   readonly least?: number;
+  /** World units from the eye past which its material has faded it out whole (a lamp's cone of light, `scenery.ts` BEAM_FADE): not drawn
+   *  there, in a perspective view (a view from above fades nothing). */
+  readonly fadesAt?: number;
   /** A small thing (a bin, a bench): cast into a cascade only where it spans `SMALL_CAST_TEXELS` (`makeMesh`). */
   readonly small?: boolean;
   /** Its far model is the colour's alone (a street light's light column, `propGeometry.ts` lampFarGeometry): every one drawn casts by its
@@ -1074,6 +1077,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
       // The mid level once its models are made, never at the map zoom (every plant its picture there).
       const mid = levels?.mid === undefined || !k.midOn || far === Infinity ? -1 : levels.mid;
       const least = levels?.least ?? -1;
+      const fades = levels?.fadesAt ?? -1;
       // Its far pictures thinned (`sorted`): a kind with a `least` of its own is cut there instead.
       const thins = sorted[k.index]! && far >= 0;
       // Past the first slot whose pick is over the share the leaf's largest keeps, nothing more is drawn (`sorted`); under the cover each
@@ -1131,6 +1135,10 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
         } else level = NEAR;
         // Under its own least size, not drawn at any level.
         if (least >= 0 && !over(least, FAR)) level = NONE;
+        // Past where its material fades it out whole: its sphere's nearest depth (never more than its distance) beyond it. DO NOT draw a lamp's
+        // cone a kilometre off: every one of the town's was drawn at night and discarded pixel by pixel past 140 m (the F7 audit, 235 k
+        // triangles at the district's view, 2026-10-25). A view from above has w 1: nothing faded, nothing cut.
+        if (fades >= 0 && wOf(sp[i * 4]!, sp[i * 4 + 1]!, sp[i * 4 + 2]!) - sp[i * 4 + 3]! * wReach > fades) level = NONE;
         lv[i] = level;
         // A far picture past the share its size keeps is thinned out (the GPU grows the ones kept, `impostorThin`).
         mark(k, i, thins && level === FAR && picks[i]! > thinWant(across) + PICK_SLACK ? NONE : level, cover);
