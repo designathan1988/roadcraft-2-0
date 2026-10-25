@@ -193,7 +193,9 @@ uniform highp sampler2DArray uRoadColours;
 uniform highp sampler2DArray uRoadRelief;
 uniform sampler2D uFootwayColour;
 uniform highp sampler2DArray uFootwayRelief;
+#ifdef ROAD_DETAIL
 uniform highp sampler2DArray uRoadDetails;
+#endif
 uniform float uRoadDetailNormals;
 uniform float uKerbRepeat;
 flat varying int vRoadCode;
@@ -213,14 +215,20 @@ const ROAD_MAP = `
   roadLookA = uRoadLooks[roadCode * ${LOOK_ROWS}];
   roadLookB = uRoadLooks[roadCode * ${LOOK_ROWS} + 1];
   roadLookC = uRoadLooks[roadCode * ${LOOK_ROWS} + 2];
+#ifdef ROAD_DETAIL
   float detailW = detailWeight(vRoadUv * roadLookB.z);
+#else
+  float detailW = 0.0;
+#endif
   vec2 detailUv = vRoadUv * roadLookC.x;
   vec4 sampledDiffuseColor = roadColour(vRoadUv, detailW * roadLookC.w);
   vec2 detailDx = dFdx(detailUv), detailDy = dFdy(detailUv);
+#ifdef ROAD_DETAIL
   if (detailW > 0.0) {
     vec3 detailAlbedo = detailSampleArray(uRoadDetails, detailUv, roadLookB.w, detailDx, detailDy);
     sampledDiffuseColor.rgb *= mix(vec3(1.0), detailAlbedo, detailW * roadLookC.y);
   }
+#endif
   diffuseColor *= sampledDiffuseColor;`;
 
 /** The surface's own grain (`GRAIN_OWN`), from its colour map. */
@@ -235,10 +243,12 @@ const ROAD_TBN = `
 const ROAD_NORMAL = `
   vec3 mapN = roadRelief(vRoadUv, 0.0, roadLookA.y, detailW * roadLookC.w).xyz * 2.0 - 1.0;
   mapN.xy *= roadLookB.x;
+#ifdef ROAD_DETAIL
   if (detailW > 0.0) {
     vec3 fineN = detailNormalArray(uRoadDetails, detailUv, roadLookB.w + uRoadDetailNormals, detailDx, detailDy);
     mapN.xy += fineN.xy * roadLookC.z * detailW;
   }
+#endif
   normal = normalize(tbn * mapN);`;
 
 /** In place of three's `roughnessmap_fragment` and `metalnessmap_fragment`. */
@@ -270,14 +280,18 @@ const ROAD_KERB_TOP = `
 const ROAD_KERB_COLOUR = `
   if (kerbTop > 0.0) {
     vec3 kerbAlbedo = textureGrad(uRoadColours, kerbAt, kerbGradX, kerbGradY).rgb;
+#ifdef ROAD_DETAIL
     if (detailW > 0.0) kerbAlbedo *= mix(vec3(1.0), detailSampleArray(uRoadDetails, detailUv, roadLookB.w, detailDx, detailDy), detailW * kerbC.y);
+#endif
     diffuseColor.rgb = mix(diffuseColor.rgb, diffuse * kerbAlbedo, kerbTop);
   }`;
 const ROAD_KERB_NORMAL = `
   if (kerbTop > 0.0) {
     vec3 kerbN = textureGrad(uRoadRelief, vec3(kerbAt.xy, kerbA.y), kerbGradX, kerbGradY).xyz * 2.0 - 1.0;
     kerbN.xy *= kerbB.x;
+#ifdef ROAD_DETAIL
     if (detailW > 0.0) kerbN.xy += detailNormalArray(uRoadDetails, detailUv, roadLookB.w + uRoadDetailNormals, detailDx, detailDy).xy * kerbC.z * detailW;
+#endif
     normal = normalize(mix(normal, normalize(tbn * kerbN), kerbTop));
   }`;
 const ROAD_KERB_ROUGHNESS = `
@@ -302,6 +316,11 @@ export function applyRoadSurface(material: MeshStandardMaterial, maps: RoadMaps,
   const carriageway = `roadCode <= ${ROAD_CODE.raised}`;
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
+    // The close-zoom layer (`uRoadDetails`) read by every program but the far blocks' batch (`farBlockBatches.ts`): far off, where its weight is
+    // 0, and its batch already takes two units for its instances (three's batchingTexture, batchingIdTexture). DO NOT read it there: with the
+    // sun's three cascades the batch asked 17 texture units, past the 16 WebGL 2 guarantees, and its program was refused (2026-10-25).
+    if (!shader.batching) shader.fragmentShader = `#define ROAD_DETAIL
+${shader.fragmentShader}`;
     // The paint's table, one for every carriageway (`roadPaint.ts`): the uniform objects shared, so a table grown reaches every program.
     shader.uniforms['uRoadSegments'] = roadPaint.segments;
     shader.uniforms['uRoadLines'] = roadPaint.lines;

@@ -286,20 +286,24 @@ const STILL_READ_GLSL = /* glsl */ `
     // that point, as the multisampled alpha-cut model is drawn. DO NOT filter them (bilinear, or the level whose texel is the pixel): each
     // texel already holds its multisampled share, and a far fern or clover came out a pale wash two or three pixels wide where the model is
     // a few dark pixels (the ground cover's ladder sheets, 2026-10-25).
+    // One exit, its value set on both ways: D3D's compiler (ANGLE) took a return inside the branch for a value left unset (X4000).
+    vec4 read = vec4(0.0);
     if (uPerMip > 0.5) {
       int level = int(clamp(floor(log2(max(max(length(ux), length(uy)) * FRAME_PX, 1.0)) - 0.5), 0.0, log2(FRAME_PX)));
-      return 0.25 * (stillTexel(atlas, uv + ux * -0.125 + uy * -0.375, frame, level)
+      read = 0.25 * (stillTexel(atlas, uv + ux * -0.125 + uy * -0.375, frame, level)
         + stillTexel(atlas, uv + ux * 0.375 + uy * -0.125, frame, level)
         + stillTexel(atlas, uv + ux * -0.375 + uy * 0.125, frame, level)
         + stillTexel(atlas, uv + ux * 0.125 + uy * 0.375, frame, level));
+    } else {
+      // No change across a sample: the finest level, read at a point.
+      vec2 gx = vec2(0.0), gy = vec2(0.0);
+      read = 0.25 * (
+        impostorRead(atlas, uv + ux * -0.125 + uy * -0.375, frame, vBlock, uBlocks, gx, gy)
+        + impostorRead(atlas, uv + ux * 0.375 + uy * -0.125, frame, vBlock, uBlocks, gx, gy)
+        + impostorRead(atlas, uv + ux * -0.375 + uy * 0.125, frame, vBlock, uBlocks, gx, gy)
+        + impostorRead(atlas, uv + ux * 0.125 + uy * 0.375, frame, vBlock, uBlocks, gx, gy));
     }
-    // No change across a sample: the finest level, read at a point.
-    vec2 gx = vec2(0.0), gy = vec2(0.0);
-    return 0.25 * (
-      impostorRead(atlas, uv + ux * -0.125 + uy * -0.375, frame, vBlock, uBlocks, gx, gy)
-      + impostorRead(atlas, uv + ux * 0.375 + uy * -0.125, frame, vBlock, uBlocks, gx, gy)
-      + impostorRead(atlas, uv + ux * -0.375 + uy * 0.125, frame, vBlock, uBlocks, gx, gy)
-      + impostorRead(atlas, uv + ux * 0.125 + uy * 0.375, frame, vBlock, uBlocks, gx, gy));
+    return read;
   }
 `;
 

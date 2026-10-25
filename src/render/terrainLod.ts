@@ -150,6 +150,7 @@ export function lodVertexGlsl(grid: LandGrid): string {
  * up or down onto the next level's ground under it by its own distance, so at the morph's end the cut cells are the next level's cell, as the
  * patches round them are, and the next level takes over with nothing to fill.
  */
+// DO NOT name a variable `patch` in it: a reserved word of GLSL ES 3.00 (section 3.6); D3D11 (ANGLE) refuses the program and nothing is drawn.
 export function seamVertexGlsl(grid: LandGrid): string {
   const f = (v: number): string => v.toFixed(6);
   const patches = grid.seg / LOD_PATCH, words = Math.ceil(patches / 32);
@@ -158,8 +159,8 @@ export function seamVertexGlsl(grid: LandGrid): string {
     uniform uint uSeamPatches[${patches * words}];
     attribute vec3 aSeam;
     void seamVertex() {
-      int patch = int(aSeam.z);
-      int px = patch % ${patches}, py = patch / ${patches};
+      int seamPatch = int(aSeam.z);
+      int px = seamPatch % ${patches}, py = seamPatch / ${patches};
       uint word = uSeamPatches[py * ${words} + (px >> 5)];
       if (((word >> uint(px & 31)) & 1u) == 0u) { landP = vec3(0.0); landN = vec3(0.0, 1.0, 0.0); landUvOf(); return; }
       ivec2 origin = ivec2(px, py) * ${LOD_PATCH};
