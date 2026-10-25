@@ -1,0 +1,15 @@
+/** Where the keyboard focus came from, for the game's own keys: kept out of `main.ts` because it needs nothing but the DOM. */
+
+let tabbing = false;
+
+/** Whether focus was last moved with the keyboard (Tab), not the pointer. */
+export function focusCameFromKeyboard(): boolean {
+  return tabbing;
+}
+
+/** Starts telling a Tab from a click. Call once. */
+export function trackFocusModality(): void {
+  // own key listener: notes that the focus came by Tab (the focus ring's modality), runs no command.
+  window.addEventListener('keydown', (e) => { if (e.key === 'Tab') tabbing = true; }, true);
+  window.addEventListener('pointerdown', () => { tabbing = false; }, true);
+}

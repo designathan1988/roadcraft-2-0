@@ -1,0 +1,201 @@
+import type { NodeId, SegmentId } from './ids';
+import type { Network } from './network';
+import { CROSSWALK_DEPTH } from './approach';
+import { orientedPolyline } from './geometry';
+import { carriesPedestrians } from './pedestrianAccess';
+import { FOOTWAY_RISE, roadProfile } from './roadTypes';
+import { m } from './units';
+import { RAMP_CELL, rampCellKey, rampCells, rampOf, rampRiseIn, type CurbRamp } from './rampRise';
+
+export type { CurbRamp } from './rampRise';
+
+/** THE DROPPED KERBS: at each end of every zebra the footway ramps down to the carriageway */
+
+/** The steepest ramp: 1 in 12. */
+const RAMP_RUN = FOOTWAY_RISE * 12;
+/** The steepest flare: 1 in 10. */
+const FLARE_RUN = FOOTWAY_RISE * 10;
+/** The width of the unmarked crossing at a road's end (`walkways.ts`). */
+const UNMARKED_WIDTH = m(2);
+/**
+ * The side of the regions the ramps are worked out by (`ensureRegion`). DO NOT work out every ramp of the map at its first ask (the
+ * map's load: 0.6 s of the page's opening and ~0.5 KB a building in the city of 70,000, 2026-10-22): a region's ramps when a reader
+ * asks for a point or a rectangle of it - the walkers drawn, the road surfaces of the cells in view.
+ */
+const REGION = RAMP_CELL * 12;
+/** How far a ramp's cells reach past the road it lies on: its foot is on the carriageway's edge, within the ribbon's box (`ribbonBounds`), and its cells reach its half width, flare and run past it (`rampCells`). */
+const RAMP_REACH = Math.max(CROSSWALK_DEPTH, UNMARKED_WIDTH) / 2 + FLARE_RUN + RAMP_RUN + m(1);
+
+/** DO NOT build every ramp of the map again on a revision */
+interface RampState {
+  /** The network's state the ramps stand for (`Network.state`); null before the first ask. */
+  state: object | null;
+  readonly byNode: Map<NodeId, readonly CurbRamp[]>;
+  readonly grid: Map<number, CurbRamp[]>;
+  /** The nodes whose ramps are worked out and filed (`place`), and the regions every ramp of which is (`ensureRegion`). */
+  readonly placed: Set<NodeId>;
+  readonly regions: Set<number>;
+}
+
+const cache = new WeakMap<Network, RampState>();
+
+/** The dropped kerbs of one node, as it stands (`rampState` brought up to the network first) */
+export function rampsOfNode(net: Network, node: NodeId): readonly CurbRamp[] {
+  const state = rampState(net);
+  if (!state.placed.has(node)) place(net, state, node);
+  return state.byNode.get(node) ?? [];
+}
+
+/** A region's key (`REGION`). */
+const regionKey = (rx: number, ry: number): number => (rx + 32768) * 65536 + (ry + 32768);
+
+/** Every ramp that reaches the region at (`rx`, `ry`) worked out and filed: the ramps of both ends of every road whose box meets it, widened by `RAMP_REACH`. */
+function ensureRegion(net: Network, state: RampState, rx: number, ry: number): void {
+  const key = regionKey(rx, ry);
+  if (state.regions.has(key)) return;
+  state.regions.add(key);
+  const x0 = rx * REGION, y0 = ry * REGION;
+  for (const seg of net.segmentCells.idsMeeting([x0 - RAMP_REACH, y0 - RAMP_REACH, x0 + REGION + RAMP_REACH, y0 + REGION + RAMP_REACH])) {
+    const s = net.doc.segment(seg);
+    if (!s) continue;
+    if (!state.placed.has(s.a)) place(net, state, s.a);
+    if (!state.placed.has(s.b)) place(net, state, s.b);
+  }
+}
+
+/** Every region the grid's cells over `rect` lie in (a cell lies in one region: `REGION` is a whole number of them), its ramps worked out (`ensureRegion`). */
+function ensureRect(net: Network, state: RampState, x0: number, y0: number, x1: number, y1: number): void {
+  const per = REGION / RAMP_CELL;
+  const rx0 = Math.floor(Math.floor(x0 / RAMP_CELL) / per), rx1 = Math.floor(Math.floor(x1 / RAMP_CELL) / per);
+  const ry0 = Math.floor(Math.floor(y0 / RAMP_CELL) / per), ry1 = Math.floor(Math.floor(y1 / RAMP_CELL) / per);
+  for (let rx = rx0; rx <= rx1; rx++) for (let ry = ry0; ry <= ry1; ry++) ensureRegion(net, state, rx, ry);
+}
+
+/** The ramps a node's zebras (and a road's end there) have. */
+function rampsAt(net: Network, nodeId: NodeId): CurbRamp[] {
+  const ramps: CurbRamp[] = [];
+  const node = net.doc.node(nodeId);
+  if (!node) return ramps;
+  /** A ramp each side of the street, `at` along it from the node, `half` its half width. */
+  const pair = (segmentId: SegmentId, at: number, half: number): void => {
+    const segment = net.doc.requireSegment(segmentId);
+    const road = roadProfile(segment.type, segment.lanes, segment.direction, segment.section, segment.parking);
+    if (!carriesPedestrians(road) || road.sidewalk <= 0) return;
+    const frame = orientedPolyline(net.doc, segment, nodeId).sampleAt(at);
+    // The flare towards the node ends on the junction's mouth where that is nearer than a flare's length: past it the junction's corner does not
+    // drop, and a flare cut there by the road's end left the ramp's surface and the corner's meeting off each other's vertices. A road's own end
+    // (`at` 0) has no junction past it.
+    const room = at - half - net.mouthDistance(segmentId, nodeId);
+    const near = at > 0 ? Math.min(FLARE_RUN, Math.max(0, room)) : FLARE_RUN;
+    const tx = frame.t.x, ty = frame.t.y;
+    for (const side of [-1, 1] as const) {
+      const nx = -ty * side, ny = tx * side;
+      ramps.push(rampOf({
+        x: frame.p.x + nx * (road.width / 2), y: frame.p.y + ny * (road.width / 2),
+        tx, ty, nx, ny, half,
+        run: Math.min(RAMP_RUN, road.sidewalk),
+        flare: FLARE_RUN,
+        near,
+        segment: segmentId,
+        structure: segment.structure,
+      }));
+    }
+  };
+  // A street that leads nowhere is crossed at its end, with no zebra (`walkways.ts`, the unmarked crossing)
+  if (node.incident.length === 1) {
+    // A turning circle is walked round, not across (`walkways.ts`).
+    if (node.end !== 'bulb') pair(node.incident[0]!, 0, UNMARKED_WIDTH / 2);
+    return ramps;
+  }
+  for (const segmentId of node.incident) {
+    const crossing = net.crosswalkDistanceAt(segmentId, nodeId);
+    if (crossing > 0) pair(segmentId, crossing, CROSSWALK_DEPTH / 2);
+  }
+  return ramps;
+}
+
+/** A node's ramps worked out again and filed, its old ones taken out of their cells. */
+function place(net: Network, state: RampState, nodeId: NodeId): void {
+  for (const r of state.byNode.get(nodeId) ?? []) {
+    rampCells(r, (key) => {
+      const list = state.grid.get(key);
+      if (!list) return;
+      const at = list.indexOf(r);
+      // Taken out by the last one put in its place (the order of a cell's ramps is read by none: `rampRiseIn` takes the lowest).
+      if (at >= 0) { list[at] = list[list.length - 1]!; list.pop(); }
+      if (list.length === 0) state.grid.delete(key);
+    });
+  }
+  if (!net.doc.node(nodeId)) { state.byNode.delete(nodeId); state.placed.delete(nodeId); return; }
+  state.placed.add(nodeId);
+  const ramps = rampsAt(net, nodeId);
+  if (ramps.length) state.byNode.set(nodeId, ramps); else state.byNode.delete(nodeId);
+  for (const r of ramps) rampCells(r, (key) => { const list = state.grid.get(key); if (list) list.push(r); else state.grid.set(key, [r]); });
+}
+
+/** Every ramp let go, when the network cannot say what changed (the first ask, a load): each region worked out again when asked (`ensureRegion`). */
+function forgetAll(state: RampState): void {
+  state.byNode.clear();
+  state.grid.clear();
+  state.placed.clear();
+  state.regions.clear();
+}
+
+function rampState(net: Network): RampState {
+  let state = cache.get(net);
+  if (!state) {
+    cache.set(net, state = { state: null, byNode: new Map(), grid: new Map(), placed: new Set(), regions: new Set() });
+    // Brought up to the network in the step that rebuilds it, from now on.
+    net.afterRebuild(followRamps);
+  }
+  bring(net, state);
+  return state;
+}
+
+/** The network rebuilt or taken back (`Network.afterRebuild`, registered with its ramps' state): its ramps, where they are kept, brought up to it in that step, never while a walker reads them (`walkingRise`). */
+export function followRamps(net: Network): void {
+  const state = cache.get(net);
+  if (state) bring(net, state);
+}
+
+/** The ramps of `state` brought up to the network: the nodes its changes reach placed again, or every node when it cannot say. */
+function bring(net: Network, state: RampState): void {
+  if (state.state === net.state) return;
+  const delta = state.state === null ? null : net.changesSince(state.state);
+  state.state = net.state;
+  if (delta === null) { forgetAll(state); return; }
+  const dirty = new Set<NodeId>(delta.nodes);
+  const ends = (seg: SegmentId): void => {
+    const s = net.doc.segment(seg);
+    if (s) { dirty.add(s.a); dirty.add(s.b); }
+  };
+  for (const seg of delta.segments) ends(seg);
+  // A crossing is fitted to the footway along its road: a change where the road reaches moves it.
+  for (const rect of delta.rects) for (const seg of net.segmentCells.idsMeeting(rect)) ends(seg);
+  // A node changed is placed again as it stands (a region worked out stays whole: a road's new end is a node changed); one gone, let go.
+  for (const id of dirty) place(net, state, id);
+}
+
+/** How high the walking surface stands at (x, y), as a share of the footway's rise: a read of the ramps as kept (asked by every walker drawn every frame), brought up to the network by its own rebuild (`followRamps`); made here only the first time a network's are asked */
+export function walkingRise(net: Network, x: number, y: number, onFootway: boolean, structure = 'ground'): number {
+  const state = cache.get(net) ?? rampState(net);
+  // The region already worked out: one look in a set (asked for every walker drawn every frame).
+  const per = REGION / RAMP_CELL;
+  const rx = Math.floor(Math.floor(x / RAMP_CELL) / per), ry = Math.floor(Math.floor(y / RAMP_CELL) / per);
+  if (!state.regions.has(regionKey(rx, ry))) ensureRegion(net, state, rx, ry);
+  return rampRiseIn(state.grid, x, y, onFootway, structure);
+}
+
+/** The ramps filed in the cells `rect` reaches (each once): every ramp `walkingRise` reads at a point of it. */
+export function rampsMeeting(net: Network, rect: readonly [number, number, number, number]): Set<CurbRamp> {
+  const state = rampState(net);
+  ensureRect(net, state, rect[0], rect[1], rect[2], rect[3]);
+  const { grid } = state;
+  const out = new Set<CurbRamp>();
+  for (let cx = Math.floor(rect[0] / RAMP_CELL); cx <= Math.floor(rect[2] / RAMP_CELL); cx++) {
+    for (let cy = Math.floor(rect[1] / RAMP_CELL); cy <= Math.floor(rect[3] / RAMP_CELL); cy++) {
+      for (const r of grid.get(rampCellKey(cx, cy)) ?? []) out.add(r);
+    }
+  }
+  return out;
+}

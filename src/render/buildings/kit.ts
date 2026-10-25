@@ -1,0 +1,772 @@
+import {
+  BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
+  Color,
+  CylinderGeometry,
+  DoubleSide,
+  AdditiveBlending,
+  FrontSide,
+  type Material,
+  MeshBasicMaterial,
+  MeshStandardMaterial,
+  PlaneGeometry,
+  Vector3,
+} from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { dropBuried, dropHiddenFaces } from '../mesh/hiddenFaces';
+
+import type { Finish } from '@world/buildings/materials';
+import { SHELL_NORMAL_GLSL, createFarShellMaterial, createShellMaterial, finishAlbedo } from './finishes';
+import { SHELL_NORMAL } from './cellArrays';
+import { createFurnitureGeometries, createFurnitureMaterial, furnitureTones } from './furnitureKit';
+import type { FurnitureKind } from '@world/buildings/interior';
+import { NIGHT_LUMINANCE, lightPoolTexture, luminanceOf } from '../lightLevels';
+import { createMassingMaterial } from './massingMaterial';
+import { posePart } from './partPose';
+import { type FacadePanes, createFacadeMaterial } from './facadeLevel';
+import { CARD, CARD_ATTRIBUTE, prefilterThinParts, twoSided } from './thinParts';
+import { roomBehindGlass } from './glassRoom';
+import { FACADE_PROP_KINDS, SHADOWED_PROPS, THIN_PROPS } from './facadeProps';
+import type { PartKind } from './chunk';
+import { LOUVRE_BOX_HALF, LOUVRE_BOX_Z0, LOUVRE_BOX_Z1, LOUVRE_FRAME, louvreMaterial } from './louvreSlats';
+import { AC_FRONT_GLSL, AC_FRONT_Z, acFarGeometry, createFacadePropGeometries } from './facadePropModels';
+import { m } from '@world/units';
+import { pullTowardEye } from '../depthConvention';
+import { SHELL_PART_FACES, SHELL_PART_KINDS, type ShellPartFace, type ShellPartKind } from './shellParts';
+import { simplerLevels, trianglesOf } from './partSimplify';
+
+/** Share of people awake, by hour from midnight: 100 % less the share asleep in the American Time Use Survey 2007-11 */
+const AWAKE_BY_HOUR = [
+  0.174, 0.095, 0.063, 0.051, 0.082, 0.146, 0.34, 0.579, 0.755, 0.864, 0.924, 0.951,
+  0.964, 0.959, 0.958, 0.961, 0.964, 0.97, 0.975, 0.973, 0.95, 0.855, 0.628, 0.349,
+];
+/** The awake share at a clock time (hours), between the survey's hourly figures. */
+function awakeShare(hour: number): number {
+  const h = ((hour % 24) + 24) % 24;
+  const i = Math.floor(h);
+  const a = AWAKE_BY_HOUR[i] as number;
+  const b = AWAKE_BY_HOUR[(i + 1) % 24] as number;
+  return a + (b - a) * (h - i);
+}
+/** The share the glass reads (`setNight`). */
+const roomsAwake = { value: awakeShare(22) };
+/** How bright a room seen through its window is by day, as light it sends out (`setNight`) */
+const ROOM_DAYLIGHT = 0.2;
+const roomDaylight = { value: 0 };
+/** Seconds since the kit was made, for a television's flicker (`roomLamps.ts`). */
+const tvClock = { value: 0 };
+
+/** Everything the buildings layer draws with, built ONCE per renderer. */
+
+export type { PartKind } from './chunk';
+
+export const PART_KINDS: readonly PartKind[] = [
+  'glass',
+  'frame',
+  'concrete',
+  'door',
+  'shutter',
+  'railing',
+  'roofRailing',
+  'awning',
+  'column',
+  'glassDark',
+  'water',
+  'lamp',
+  'wash',
+  'fin',
+  'louvre',
+  'glassRail',
+  'brise',
+  ...FACADE_PROP_KINDS,
+  ...SHELL_PART_KINDS,
+];
+
+/** The lantern beside a front door: a warm lamp behind frosted glass. */
+const PORCH_LIGHT = 0xffd49a;
+/** A lit room's mean brightness over the glass */
+const ROOM_LIT_MEAN = 0.9;
+
+/** The lantern beside a front door: width, height and depth out of the wall; its gap from the door's edge. */
+export const PORCH_LAMP = { w: m(0.16), h: m(0.26), d: m(0.12), gap: m(0.4) } as const;
+/** How far the wash of its light (the `wash` part, placed at the lantern's centre) stands out of the wall. */
+const WASH_OUT = m(0.01);
+/** Outside lights after dark. 43 % of homes leave one on all night */
+const ALL_NIGHT = 0.43;
+/** The share of outside lights lit at a clock time (hours). */
+function outsideLit(hour: number): number {
+  return ALL_NIGHT + (1 - ALL_NIGHT) * awakeShare(hour);
+}
+const outsideOn = { value: outsideLit(22) };
+/** The lot a lamp draws, from its instance's position (`outsideOn`), for both the lantern and its wash. */
+const LAMP_LOT_VERTEX = `
+#ifdef USE_INSTANCING
+  vLampLot = fract(sin(dot(floor(instanceMatrix[3].xyz * 0.1), vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+#else
+  vLampLot = 0.0;
+#endif`;
+/** Switches an outside light by its lot. */
+function scheduleOutsideLight(material: Material, key: string, after: string, apply: string): void {
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms['outsideOn'] = outsideOn;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vLampLot;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>${LAMP_LOT_VERTEX}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float outsideOn;\nvarying float vLampLot;')
+      .replace(after, `${after}\n  ${apply}`);
+  };
+  material.customProgramCacheKey = () => key;
+}
+
+/** Three lengths along a part model's own axes (x along the wall, y up, z out of it): metres once scaled by an instance's matrix. */
+export type Axes = readonly [number, number, number];
+
+/** A part's geometry at one level of detail. */
+export interface PartLevel {
+  readonly geometry: BufferGeometry;
+  readonly triangles: number;
+  /** One face whose bars its material draws (`thinParts.ts` cards): it casts no shadow (its bars are under a texel where it is drawn). */
+  readonly card?: true;
+  /** What it leaves out of the finest, along the model's axes: its error, the largest axis once scaled. */
+  readonly error: Axes;
+  /** A simplified level's (`SIMPLIFIED`) two-sided distance from the finest, measured (`propLevels.ts` surfaceOff both ways), model units. */
+  readonly measured?: number;
+}
+
+/** How a part kind is drawn by the error on the screen (`partCells.ts`). */
+export interface PartScreen {
+  /** Finest first, each leaving out more; the small props' simplified levels come in once the simplifier has loaded (`SIMPLIFIED`). */
+  readonly levels: readonly PartLevel[];
+  /** The model's box: an instance under a pixel across its diagonal is not drawn. */
+  readonly extent: Axes;
+  /** The pieces its shadow is made of (a frame's rails and stiles, a brise's blades): under a shadow texel across the middle side of each it casts none. */
+  readonly pieces: readonly Axes[];
+}
+
+export interface BuildingKit {
+  readonly geometry: Readonly<Record<PartKind, BufferGeometry>>;
+  /** Each part kind as a solid piece of a ruin (`fracture.ts`): the faces the drawn model leaves out because the wall hides them (a balcony
+   *  railing's side rails' ends) kept, as a piece thrown clear shows them. */
+  readonly whole: Readonly<Record<PartKind, BufferGeometry>>;
+  /** Settles once the small props' simplified levels are in their kinds' `screen` levels (`SIMPLIFIED`, made off the frame's path once the
+   *  simplifier has loaded), or once making them failed (logged): the catalogue lists each kind's levels once it has (`src/lab/catalog/kits.ts`). */
+  readonly levelsReady: Promise<void>;
+  /** Each part kind's levels of detail, its size and its shadow's (`partCells.ts`). */
+  readonly screen: Readonly<Record<PartKind, PartScreen>>;
+  readonly material: Readonly<Record<PartKind, Material>>;
+  /** The merged shell - walls, plinths, bands, roofs, steps - of every finish: one material, vertex coloured, each vertex's finish picking its maps (`finishes.ts`). */
+  readonly shellMaterial: MeshStandardMaterial;
+  /** The shell's parts where their finish's texture is under a pixel (`finishes.ts` createFarShellMaterial). */
+  readonly farShell: MeshStandardMaterial;
+  /** A broken building's pieces (`destruction.ts`): the shell's look, each vertex carrying its uv, colour and finish as its piece moves. */
+  readonly ruinShell: MeshStandardMaterial;
+  /** Ghost materials for the placement / drag preview, tinted by validity. */
+  readonly ghostShell: MeshStandardMaterial;
+  readonly ghostParts: MeshStandardMaterial;
+  /** "Ocultar outros": the same shells, faded, for every building but the edited one. */
+  readonly dimShell: MeshStandardMaterial;
+  readonly dimParts: MeshStandardMaterial;
+  /** Each finish's colour from afar (`finishes.ts` `finishAlbedo`), for the far level of the buildings. */
+  readonly finishTone: Readonly<Record<Finish, readonly [number, number, number]>>;
+  /** Buildings seen from afar, their windows drawn by the shader (`massing.ts`, `massingMaterial.ts`). */
+  readonly massing: MeshStandardMaterial;
+  /** The base's, the top level's (`massBase.ts`): each face shaded by its slope, a colour a triangle. */
+  readonly massingBase: MeshStandardMaterial;
+  /** The facade level (L1): the shells with their openings drawn by the shader, every finish (`facadeLevel.ts`). */
+  readonly facade: MeshStandardMaterial;
+  /** The detail level's runs of bays: the near shell's maps and wear, its openings closed by their own panes (`facadeLevel.ts` `covered`). */
+  readonly facadeNear: MeshStandardMaterial;
+  /** Parts that cast shadows; the small ones do not, to spare the shadow pass. */
+  readonly castsShadow: ReadonlySet<PartKind>;
+  /** The furniture models, built the first time an interior is drawn. */
+  furniture(): { readonly geometry: Readonly<Record<FurnitureKind, BufferGeometry>>; readonly material: MeshStandardMaterial };
+  setGhostValid(valid: boolean): void;
+  /** Lights the windows from inside as night falls: 0 by day, 1 at night; `hour` */
+  setNight(dark: number, hour?: number): void;
+  dispose(): void;
+}
+
+/** The props given simplified levels by meshoptimizer (`simplerLevels`): modelled in metres, their curves and leaves reducible. */
+// Not the louvres and brises: boxes of slats the simplifier cannot reduce within the error (measured); they have levels of their own.
+const SIMPLIFIED: readonly PartKind[] = ['bike', 'foliage', 'bush', 'airer', 'table', 'dish', 'pot', 'chair', 'lounger'];
+
+/** A box's top face alone, its sides left out: a unit square at y = 0.5 facing up, for a thin plate seen from afar. */
+function topFaceGeometry(): BufferGeometry {
+  const g = new PlaneGeometry(1, 1);
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, 0.5, 0);
+  return g;
+}
+
+/** A box of the given size whose centre is at (x, y, z). */
+function box(w: number, h: number, d: number, x: number, y: number, z: number): BufferGeometry {
+  const g = new BoxGeometry(w, h, d);
+  g.translate(x, y, z);
+  return g;
+}
+
+/** A box's faces in three's order (`BoxGeometry`: +x, -x, +y, -y, +z, -z), two triangles each. */
+const BOX_FACES = ['+x', '-x', '+y', '-y', '+z', '-z'] as const;
+
+/** A box without the faces another piece covers in the same plane: never drawn, and never two surfaces in one plane (`coplanar.spec.ts`). */
+function boxWithout(w: number, h: number, d: number, x: number, y: number, z: number, covered: readonly (typeof BOX_FACES)[number][]): BufferGeometry {
+  const g = box(w, h, d, x, y, z);
+  if (covered.length === 0) return g;
+  const index = g.getIndex()!;
+  const kept: number[] = [];
+  g.clearGroups();
+  BOX_FACES.forEach((face, k) => {
+    if (covered.includes(face)) return;
+    // Each face kept its own group, as three's box has: what `dropHiddenFaces` reads a face by.
+    g.addGroup(kept.length, 6, k);
+    for (let i = 6 * k; i < 6 * k + 6; i++) kept.push(index.getX(i));
+  });
+  // Only the corners the faces kept use (three's box lays four a face): DO NOT keep the left-out faces' corners, every instance drew them.
+  const remap = new Int32Array(g.getAttribute('position').count).fill(-1);
+  let used = 0;
+  for (const v of kept) if (remap[v] === -1) remap[v] = used++;
+  for (const [name, attribute] of Object.entries(g.attributes)) {
+    const size = attribute.itemSize, array = new Float32Array(used * size);
+    for (let v = 0; v < remap.length; v++) if (remap[v]! >= 0) for (let c = 0; c < size; c++) array[remap[v]! * size + c] = attribute.array[v * size + c]!;
+    g.setAttribute(name, new BufferAttribute(array, size));
+  }
+  g.setIndex(kept.map((v) => remap[v]!));
+  return g;
+}
+
+/** Parts merged into one model, the faces another part covers taken out first (`mesh/hiddenFaces.ts`); the parts let go. */
+function mergedParts(parts: readonly BufferGeometry[]): BufferGeometry {
+  dropHiddenFaces(parts, false);
+  dropBuried(parts);
+  const merged = mergeGeometries([...parts]) as BufferGeometry;
+  for (const p of parts) p.dispose();
+  return merged;
+}
+
+/** A window frame's bar across the unit square. */
+const FRAME_BAR = 0.045;
+
+/** Window frame: outer border, a mullion and a transom, in a unit square */
+// The sides', the mullion's and the transom's ends lie in the border's outer faces: left out, 60 triangles where 72 drew the same.
+// DO NOT leave the bars' backs (-z) out: a gourmet's post (`emitBay`) stands 20 cm off the wall, its back seen across the balcony, and the
+// sun's shadow is drawn by the faces the light leaves (three r186 `WebGLShadowMap`, `shadowSide`).
+function frameGeometry(): BufferGeometry {
+  const t = FRAME_BAR;
+  const parts = [
+    box(1, t, 1, 0, 0.5 - t / 2, 0),
+    box(1, t, 1, 0, -0.5 + t / 2, 0),
+    boxWithout(t, 1, 1, 0.5 - t / 2, 0, 0, ['+y', '-y']),
+    boxWithout(t, 1, 1, -0.5 + t / 2, 0, 0, ['+y', '-y']),
+    boxWithout(t * 0.8, 1, 1, 0, 0, 0, ['+y', '-y']),
+    boxWithout(1, t * 0.8, 1, 0, 0.18, 0, ['+x', '-x']),
+  ];
+  return mergedParts(parts);
+}
+
+/** A balcony railing: top rail and balusters on three sides, z from 0 (wall) to 1. */
+// The side rails' ends at the wall (z 0) lie on it (`emitBay` balcony: the railing 15 cm in from the bay's edges, the opening at least
+// 45 cm in): left out once the parts are merged, nothing else touched (`whole`, a ruin's piece, keeps them: `fracture.ts`). DO NOT run the
+// front or the bottom rail on past the side rails or the corner balusters, nor end a piece short: the corners they filled were open.
+function railingGeometry(whole = false): BufferGeometry {
+  const parts: BufferGeometry[] = [
+    box(1, 0.06, 0.05, 0, 0.97, 1),
+    box(0.05, 0.06, 1, -0.5, 0.97, 0.5),
+    box(0.05, 0.06, 1, 0.5, 0.97, 0.5),
+    box(1, 0.04, 0.03, 0, 0.12, 1),
+  ];
+  for (let i = 0; i <= 10; i++) parts.push(box(0.015, 0.94, 0.015, -0.5 + i / 10, 0.5, 1));
+  for (let i = 1; i < 4; i++) {
+    parts.push(box(0.015, 0.94, 0.015, -0.5, 0.5, i / 4));
+    parts.push(box(0.015, 0.94, 0.015, 0.5, 0.5, i / 4));
+  }
+  const merged = mergedParts(parts);
+  return whole ? merged : withoutTriangles(merged, (a, b, c) => Math.abs(a.z) < 1e-6 && Math.abs(b.z) < 1e-6 && Math.abs(c.z) < 1e-6);
+}
+
+/** `g` without the triangles `drop` picks (by its three corners), the corners only they used with them. */
+function withoutTriangles(g: BufferGeometry, drop: (a: Vector3, b: Vector3, c: Vector3) => boolean): BufferGeometry {
+  const position = g.getAttribute('position');
+  const index = g.getIndex()!;
+  const a = new Vector3(), b = new Vector3(), c = new Vector3();
+  const kept: number[] = [];
+  for (let k = 0; k < index.count; k += 3) {
+    a.fromBufferAttribute(position, index.getX(k)); b.fromBufferAttribute(position, index.getX(k + 1)); c.fromBufferAttribute(position, index.getX(k + 2));
+    if (!drop(a, b, c)) kept.push(index.getX(k), index.getX(k + 1), index.getX(k + 2));
+  }
+  const remap = new Int32Array(position.count).fill(-1);
+  let used = 0;
+  for (const v of kept) if (remap[v] === -1) remap[v] = used++;
+  const out = new BufferGeometry();
+  for (const [name, attribute] of Object.entries(g.attributes)) {
+    const size = attribute.itemSize, array = new Float32Array(used * size);
+    for (let v = 0; v < remap.length; v++) if (remap[v]! >= 0) for (let q = 0; q < size; q++) array[remap[v]! * size + q] = attribute.array[v * size + q]!;
+    out.setAttribute(name, new BufferAttribute(array, size, attribute.normalized));
+  }
+  out.setIndex(kept.map((v) => remap[v]!));
+  g.dispose();
+  return out;
+}
+
+/** A flat quad facing `axis` ('z' out of the wall, 'x' along it), centred at (x, y, z). */
+function quad(w: number, h: number, x: number, y: number, z: number, axis: 'z' | 'x' | '-x' = 'z'): BufferGeometry {
+  const g = new PlaneGeometry(w, h);
+  if (axis === 'x') g.rotateY(Math.PI / 2);
+  if (axis === '-x') g.rotateY(-Math.PI / 2);
+  g.translate(x, y, z);
+  return g;
+}
+
+/** A card: `faces` with every vertex's pattern (`CARD`) set by `patternOf` (its normal), the material drawing its bars (`thinParts.ts`). */
+function card(faces: BufferGeometry, patternOf: (nx: number) => number): BufferGeometry {
+  const normal = faces.getAttribute('normal');
+  const pattern = new Float32Array(normal.count);
+  for (let i = 0; i < normal.count; i++) pattern[i] = patternOf(normal.getX(i));
+  faces.setAttribute(CARD_ATTRIBUTE, new BufferAttribute(pattern, 1));
+  return faces;
+}
+
+/** THE THIN PARTS FROM AFAR AS CARDS: a window frame is one face over its window, a railing a face a side, each bar drawn by the fragment (`thinParts.ts`). DO NOT draw their bars as faces there: a frame's six bars were 24 vertices of slivers under a pixel wide, 167 thousand frames 6 M vertices a frame of micro-triangles, the GPU shading each in 2x2 blocks (the parts were 4.8 ms of a 19 ms frame at 1080p, measured 2026-10-20). */
+function frameCardGeometry(): BufferGeometry {
+  return card(quad(1, 1, 0, 0, 0.5), () => CARD.frame);
+}
+function roofRailingCardGeometry(): BufferGeometry {
+  return card(twoSided(quad(1, 1, 0, 0.5, 0)), () => CARD.roofRailing);
+}
+function railingCardGeometry(): BufferGeometry {
+  const faces = mergeGeometries([quad(1, 1, 0, 0.5, 1), quad(1, 1, -0.5, 0.5, 0.5, '-x'), quad(1, 1, 0.5, 0.5, 0.5, 'x')]) as BufferGeometry;
+  return card(twoSided(faces), (nx) => (Math.abs(nx) > 0.5 ? CARD.railingSide : CARD.railingFront));
+}
+
+
+
+
+/** A straight railing along a roof edge, centred at z = 0. */
+// DO NOT drop the post at a piece's end as the next piece's first: the last piece of a run ends on its own, and its post stands 1 cm past the rails' end.
+function roofRailingGeometry(): BufferGeometry {
+  const parts: BufferGeometry[] = [box(1, 0.06, 0.05, 0, 0.97, 0), box(1, 0.04, 0.03, 0, 0.45, 0)];
+  for (let i = 0; i <= 4; i++) parts.push(box(0.02, 0.94, 0.02, -0.5 + i / 4, 0.5, 0));
+  return mergedParts(parts);
+}
+
+/** A door leaf in the component frame */
+// DO NOT leave the leaf's back out: a double door's stands 36 cm into the wall, past a cut-open storey's inner face (`emitBuilding`
+// cutaway, 25 cm), and it casts the leaf's shadow.
+function doorGeometry(): BufferGeometry {
+  const parts: BufferGeometry[] = [box(1, 1, 0.6, 0, 0, -0.2)];
+  for (const x of [-0.24, 0.24]) {
+    parts.push(box(0.36, 0.5, 0.35, x, 0.2, 0.25));
+    parts.push(box(0.36, 0.3, 0.35, x, -0.3, 0.25));
+  }
+  // The handle, at hand height, near the lock stile.
+  parts.push(box(0.1, 0.035, 1.6, 0.4, -0.04, 0.9));
+  return mergedParts(parts);
+}
+
+/** A shop awning: a sloped canvas from the wall (y 0, z 0) down and out, with a valance. */
+
+/** A louvred shutter leaf: a stile-and-rail frame round slats tilted to shed rain. The slats are one box, drawn by the material
+ *  (`LOUVRE_SLATS_GLSL`): each pixel of the box casts its ray into it and draws the slat it meets, or nothing (the wall behind shows). DO NOT
+ *  model the nine slats: ~90 triangles a leaf, ~110 thousand in a district view (the polygon audit, 2026-10-22), for what the box's 12 draw. */
+function louvreGeometry(): BufferGeometry {
+  const t = LOUVRE_FRAME;
+  // The stiles' ends lie in the rails' outer faces, the middle rail's in the stiles': left out (`boxWithout`). DO NOT leave the frame's back
+  // out: the leaf stands 3 cm off the wall (`emitBay` shutteredWindow), and its shadow on the wall is drawn by the faces the sun leaves.
+  const parts: BufferGeometry[] = [
+    box(1, t, 1, 0, 0.5 - t / 2, 0), box(1, t, 1, 0, -0.5 + t / 2, 0),
+    boxWithout(t, 1, 1, 0.5 - t / 2, 0, 0, ['+y', '-y']), boxWithout(t, 1, 1, -0.5 + t / 2, 0, 0, ['+y', '-y']),
+    boxWithout(1, 0.6 * t, 0.6, 0, 0, -0.2, ['+x', '-x']),
+    // The slats' box fills the frame's opening, its sides in the frame's inner faces: left out, its front and back alone. DO NOT stand it
+    // inside the opening: the wall showed through a hairline at its top and bottom (the shutter photos against 828d6e19, 2026-10-22).
+    boxWithout(2 * LOUVRE_BOX_HALF, 2 * LOUVRE_BOX_HALF, LOUVRE_BOX_Z1 - LOUVRE_BOX_Z0, 0, 0, (LOUVRE_BOX_Z0 + LOUVRE_BOX_Z1) / 2, ['+x', '-x', '+y', '-y']),
+  ];
+  return mergedParts(parts);
+}
+
+
+/** A glass parapet: a clear pane the full width standing on the slab, a slim metal cap along its top. */
+function glassRailGeometry(): BufferGeometry {
+  const pane = box(1, 0.92, 0.02, 0, 0.48, 0);
+  const merged = mergeGeometries([pane]) as BufferGeometry;
+  pane.dispose();
+  return merged;
+}
+
+/** A glass parapet from afar: the pane's middle plane alone, seen from both sides (its material draws front faces only: from the balcony's
+ *  side the box's back face was drawn, one layer of glass either way, as here). Its 2 cm depth left out: 4 triangles where the box drew 12. */
+function glassRailFarGeometry(): BufferGeometry {
+  return twoSided(quad(1, 0.92, 0, 0.48, 0));
+}
+
+/** A bay's rack of sun fins: six vertical blades across the unit width, the storey's height, standing out of the wall */
+const BRISE_FINS = 6;
+/** A blade's thickness across the unit width. */
+const BRISE_BLADE = 0.035;
+function briseGeometry(): BufferGeometry {
+  const t = BRISE_BLADE;
+  const parts: BufferGeometry[] = [];
+  // A blade's back end lies in the wall it stands out of (`emitBay`: the rack put from the wall's face out): left out, 60 triangles where 72 drew the same.
+  for (let k = 0; k < BRISE_FINS; k++) parts.push(boxWithout(t, 1, 1, -0.5 + t / 2 + (k * (1 - t)) / (BRISE_FINS - 1), 0, 0, ['-z']));
+  return mergedParts(parts);
+}
+
+/** A brise's rack from afar: each blade a plane through its middle, seen from both sides; its thickness (`BRISE_BLADE`) left out. */
+function briseFarGeometry(): BufferGeometry {
+  const parts: BufferGeometry[] = [];
+  for (let k = 0; k < BRISE_FINS; k++) parts.push(quad(1, 1, -0.5 + BRISE_BLADE / 2 + (k * (1 - BRISE_BLADE)) / (BRISE_FINS - 1), 0, 0, 'x'));
+  const merged = mergeGeometries(parts) as BufferGeometry;
+  for (const p of parts) p.dispose();
+  return twoSided(merged);
+}
+
+/** A door from afar: its leaf alone, the panels' relief and the handle left out. */
+function doorFarGeometry(): BufferGeometry {
+  return box(1, 1, 0.6, 0, 0, -0.2);
+}
+
+function awningGeometry(): BufferGeometry {
+  // DO NOT leave the canvas's front edge or the valance's top out: each stands 2 mm out of the other (the edge's upper corner over the
+  // valance's top, the valance's outer top edge past the canvas's end).
+  const canvas = new BoxGeometry(1, 0.04, 1.08);
+  canvas.rotateX(Math.atan2(0.75, 1));
+  canvas.translate(0, -0.38, 0.5);
+  // The valance hangs from the canvas's front edge, overlapping it a little
+  canvas.computeBoundingBox();
+  const edge = canvas.boundingBox!;
+  const valance = box(1, 0.28, 0.025, 0, edge.min.y + 0.03 - 0.14, edge.max.z - 0.0125);
+  return mergedParts([canvas, valance]);
+}
+
+/** A shell part's model (`shellParts.ts`) in three's axes (plan x, up, -plan y): each face's corners in its order, fanned and wound as `Shell.face` winds it; white, its uv.x marking a paving's inset sides. */
+function shellPartGeometry(faces: readonly ShellPartFace[]): BufferGeometry {
+  const position: number[] = [], normal: number[] = [], uv: number[] = [], colour: number[] = [], index: number[] = [];
+  for (const f of faces) {
+    const base = position.length / 3;
+    const n = [f.n[0], f.n[2], -f.n[1]] as const;
+    for (const [u, v, w] of f.points) {
+      position.push(u, w, -v);
+      normal.push(n[0], n[1], n[2]);
+      uv.push(f.inset ? 1 : 0, 0);
+      colour.push(1, 1, 1);
+    }
+    const p = (k: number): readonly [number, number, number] => [f.points[k]![0], f.points[k]![2], -f.points[k]![1]];
+    const p0 = p(0), p1 = p(1), p2 = p(2);
+    const ux = p1[0] - p0[0], uy = p1[1] - p0[1], uz = p1[2] - p0[2];
+    const vx = p2[0] - p0[0], vy = p2[1] - p0[1], vz = p2[2] - p0[2];
+    const forward = (uy * vz - uz * vy) * n[0] + (uz * vx - ux * vz) * n[1] + (ux * vy - uy * vx) * n[2] >= 0;
+    for (let k = 1; k + 1 < f.points.length; k++) {
+      if (forward) index.push(base, base + k, base + k + 1);
+      else index.push(base, base + k + 1, base + k);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(new Float32Array(position), 3));
+  g.setAttribute('normal', new BufferAttribute(new Float32Array(normal), 3));
+  g.setAttribute('uv', new BufferAttribute(new Float32Array(uv), 2));
+  g.setAttribute('color', new BufferAttribute(new Float32Array(colour), 3));
+  g.setIndex(index);
+  g.computeBoundingBox();
+  g.computeBoundingSphere();
+  return g;
+}
+
+/** The condenser's material: its case's front drawn with the fan, grille and louvres (`AC_FRONT_GLSL`) where the model has a plain face,
+ *  and the lid as the case's top band (`acLidTone`: nothing else of the model reaches over the case's top). */
+function acUnitMaterial(): MeshStandardMaterial {
+  const material = new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.55, metalness: 0.15 });
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vAcLocal;
+varying float vAcFront;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vAcLocal = position;
+vAcFront = step(0.9, normal.z) * step(${(AC_FRONT_Z - 0.002).toFixed(4)}, position.z);`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+varying vec3 vAcLocal;
+varying float vAcFront;
+${AC_FRONT_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+diffuseColor.rgb *= (vAcFront > 0.5 ? acFrontTone(vAcLocal) : 1.0) * acLidTone(vAcLocal);`);
+  };
+  material.customProgramCacheKey = () => 'facade-ac-front';
+  return material;
+}
+
+/** `anisotropy`: the tier's taps for the facades' maps (`quality.ts`), as the ground's: at 4 a wall seen along the street blurred into its mean. */
+export function createBuildingKit(anisotropy = 4): BuildingKit {
+  // DO NOT leave a box part's back (-z) out: a canopy's slab over a low door's head, a balcony's over an arcade, a roller shutter 3 cm
+  // off its glass, a loggia's cap and a gourmet's drip stand with their backs clear of the wall, seen there and casting from them (the
+  // shadow pass draws the faces the sun leaves, three r186 `shadowSide`).
+  const unitBox = new BoxGeometry(1, 1, 1);
+  const glassPlane = new PlaneGeometry(1, 1);
+  const geometry: Record<PartKind, BufferGeometry> = {
+    glass: glassPlane,
+    frame: frameGeometry(),
+    concrete: unitBox,
+    door: doorGeometry(),
+    shutter: unitBox,
+    railing: railingGeometry(),
+    roofRailing: roofRailingGeometry(),
+    awning: awningGeometry(),
+    // Open-ended: an arcade's column runs floor to soffit, its ends never seen (`emitBay` pillar).
+    column: new CylinderGeometry(0.5, 0.5, 1, 12, 1, true),
+    glassDark: glassPlane,
+    water: unitBox,
+    lamp: unitBox,
+    // Placed at the lantern's centre (the same lot), the plane drawn back on the wall.
+    wash: new PlaneGeometry(1, 1).translate(0, 0, -(PORCH_LAMP.d / 2 - WASH_OUT)),
+    fin: unitBox,
+    louvre: louvreGeometry(),
+    glassRail: glassRailGeometry(),
+    brise: briseGeometry(),
+    ...createFacadePropGeometries(),
+    ...(Object.fromEntries(SHELL_PART_KINDS.map((kind) => [kind, shellPartGeometry(SHELL_PART_FACES[kind])])) as Record<ShellPartKind, BufferGeometry>),
+  };
+
+  const concrete = new MeshStandardMaterial({ color: 0xcfc9bd, roughness: 0.82, metalness: 0 });
+  const metal = new MeshStandardMaterial({ color: 0x33373a, roughness: 0.45, metalness: 0.55 });
+  const own: Record<Exclude<PartKind, ShellPartKind>, Material> = {
+    // Its front in the shadow pass (three draws a front-sided material's BACK faces for shadows): a pane is one-sided and faces out, so the sun reaches its front first;
+    // DO NOT cast both sides again: a pane whose back faces the sun is behind its own building's walls (the shell casts both sides), every pane facing away drawn for nothing.
+    glass: new MeshStandardMaterial({ color: 0x7c8e98, roughness: 0.06, metalness: 0, envMapIntensity: 1.6, shadowSide: FrontSide }),
+    // White: each frame takes its building's trim as an instance colour (`buildingMesh.ts` COLOURED_PARTS)
+    frame: new MeshStandardMaterial({ color: 0xffffff, roughness: 0.55, metalness: 0.05 }),
+    concrete,
+    door: new MeshStandardMaterial({ color: 0x6b4a33, roughness: 0.55, metalness: 0 }),
+    shutter: new MeshStandardMaterial({ color: 0x9aa1a4, roughness: 0.5, metalness: 0.45 }),
+    // Its own material, white, coloured per instance like the frames
+    railing: new MeshStandardMaterial({ color: 0xffffff, roughness: 0.45, metalness: 0.55 }),
+    roofRailing: metal,
+    // Per-instance colours (with the frames and railings), and it alone uses this material.
+    awning: new MeshStandardMaterial({ color: 0xffffff, roughness: 0.92, metalness: 0 }),
+    column: concrete,
+    // Window variety: a pane that reflects less (a darker room behind it) - no two rows of windows alike.
+    glassDark: new MeshStandardMaterial({ color: 0x5d6c74, roughness: 0.08, metalness: 0, envMapIntensity: 1.3, shadowSide: FrontSide }),
+    // Pool water: clear, glossy and a little turquoise, the tiled floor showing through it
+    water: new MeshStandardMaterial({
+      color: 0x58c4dd, roughness: 0.03, metalness: 0.15, envMapIntensity: 1.8,
+      transparent: true, opacity: 0.62, depthWrite: false,
+    }),
+    // The lantern beside a front door: frosted glass by day, a lamp after dark.
+    lamp: new MeshStandardMaterial({ color: 0xf1ebdd, roughness: 0.35, metalness: 0, emissive: PORCH_LIGHT, emissiveIntensity: 0 }),
+    // The light the lantern throws on the wall round it: laid on the wall additively, as a decal
+    fin: new MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, metalness: 0 }),
+    // Brise-soleil racks, concrete or painted metal in the trim's colour per instance.
+    brise: new MeshStandardMaterial({ color: 0xffffff, roughness: 0.75, metalness: 0 }),
+    // Louvred shutters, painted wood, coloured per instance.
+    louvre: louvreMaterial(),
+    // A balcony's glass parapet: pale green-grey laminated glass, half seen through.
+    glassRail: new MeshStandardMaterial({
+      color: 0xa9c4c4, roughness: 0.05, metalness: 0.2, envMapIntensity: 1.4, transparent: true, opacity: 0.42, depthWrite: false,
+    }),
+    // The props on the facades and balconies (`facadeProps.ts`): toned per vertex
+    acUnit: acUnitMaterial(),
+    pot: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.85, metalness: 0 }),
+    foliage: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.75, metalness: 0, side: DoubleSide, shadowSide: DoubleSide }),
+    bush: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.8, metalness: 0, side: DoubleSide, shadowSide: DoubleSide }),
+    lounger: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.75, metalness: 0 }),
+    // The wheels are rings seen from both sides.
+    bike: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.4, metalness: 0.3, side: DoubleSide }),
+    chair: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.6, metalness: 0 }),
+    table: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.55, metalness: 0.1 }),
+    airer: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.8, metalness: 0 }),
+    dish: new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.5, metalness: 0.2 }),
+    wash: new MeshBasicMaterial({
+      map: lightPoolTexture(), color: PORCH_LIGHT, transparent: true, opacity: 0, blending: AdditiveBlending,
+      depthWrite: false, visible: false,
+    }),
+  };
+  for (const [kind, m] of Object.entries(own)) m.name = `building-part-${kind}`;
+  // A part laid on the shell in its plane - a balcony's slab on the roof of the block beside it, a sill on its wall
+  for (const m of Object.values(own)) pullTowardEye(m, 1, 4);
+  prefilterThinParts(own, THIN_PROPS);
+  scheduleOutsideLight(own.lamp, 'outside-lamp-lot', '#include <emissivemap_fragment>', 'totalEmissiveRadiance *= step(vLampLot, outsideOn);');
+  scheduleOutsideLight(own.wash, 'outside-wash-lot', '#include <color_fragment>', 'diffuseColor.a *= step(vLampLot, outsideOn);');
+  // The furniture's models, made once
+  const furnitureGeometry = createFurnitureGeometries();
+  const tones = furnitureTones(furnitureGeometry);
+  for (const kind of ['glass', 'glassDark'] as const) roomBehindGlass(own[kind] as MeshStandardMaterial, { tones, roomsAwake, roomDaylight, tvClock });
+  const shell = createShellMaterial({}, anisotropy);
+  const ruinShell = createShellMaterial({ carried: true }, anisotropy);
+  const farShell = createFarShellMaterial();
+  // The shell's parts are the shell drawn instanced (`shellParts.ts`): its own material, not pulled towards the eye, not renamed.
+  const material: Record<PartKind, Material> = { ...own, ...{ lotBox: shell, lotRail: shell, lotSlab: shell, lotSides: shell } satisfies Record<ShellPartKind, Material> };
+  const ghostShell = new MeshStandardMaterial({
+    color: 0x65e5c3,
+    emissive: new Color(0x1d5a4a),
+    transparent: true,
+    opacity: 0.5,
+    depthWrite: false,
+    roughness: 0.7,
+    side: FrontSide,
+  });
+  const ghostParts = ghostShell.clone();
+  // The preview's shells carry their normal octahedral (`cellArrays.ts` `octNormal`): unfolded as the shell's own program does (`finishes.ts`).
+  ghostShell.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+#ifndef USE_INSTANCING
+${SHELL_NORMAL_GLSL}
+#endif`)
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+#ifndef USE_INSTANCING
+objectNormal = shellUnfold(${SHELL_NORMAL});
+#endif`);
+  };
+  ghostShell.customProgramCacheKey = () => 'building-ghost-shell-oct';
+
+  // The faded copies: same colour and maps, a fraction of the presence, and no depth write
+  const fade = (faded: MeshStandardMaterial): MeshStandardMaterial => {
+    faded.transparent = true;
+    faded.opacity = 0.22;
+    faded.depthWrite = false;
+    faded.color.multiplyScalar(0.75);
+    return faded;
+  };
+  // The shell's: its finishes' maps and scalars, no wear and no lots (a copy keeps no `onBeforeCompile`: its own program, `finishes.ts`).
+  const dimShell = fade(createShellMaterial({ plain: true }));
+  const dimParts = fade((material['concrete'] as MeshStandardMaterial).clone());
+  dimParts.opacity = 0.16;
+  // A copy does not keep the pull towards the eye (`depthConvention.ts`).
+  pullTowardEye(dimParts, 1, 4);
+
+  // How bright a lit window glows from afar: set with the detailed panes' (`setNight`).
+  const massingNight = { value: 0 };
+  const massing = createMassingMaterial({ roomsAwake, massingNight, roomDaylight });
+  const massingBase = createMassingMaterial({ roomsAwake, massingNight, roomDaylight }, true);
+  // The facade level's walls: the shell's every finish, its openings drawn with the panes', doors' and frames' looks (`facadeLevel.ts`).
+  const panes = { glass: material.glass, glassDark: material.glassDark, door: material.door, shutter: material.shutter, frame: material.frame } as FacadePanes;
+  // The facade level stands past the detail's reach (`massCells.ts` FINE_PIXELS, ~280 m at 1080p), where a finish's 15 cm features are half a pixel: its walls drawn by the shell's far program, its windows, frames and panes as they are. DO NOT give it the near program: its maps, normal frame and wear weighed on every wall of every facade cell of the view for texture no pixel resolved.
+  const facade = createFacadeMaterial(createShellMaterial({ far: true }, anisotropy), panes, { roomsAwake, massingNight, roomDaylight });
+  // The detail level's walls laid as runs of bays (`emitFacadeRuns` near): the near shell's own program under the window grid, its openings closed by their panes.
+  const facadeNear = createFacadeMaterial(createShellMaterial({}, anisotropy), panes, { roomsAwake, massingNight, roomDaylight }, 'building-facade-near');
+  // A ruin's pieces: the drawn models with what the wall or the next piece hid put back (`BuildingKit.whole`).
+  const whole: Record<PartKind, BufferGeometry> = { ...geometry, railing: railingGeometry(true) };
+  const unique = new Set<Material>([...Object.values(material), shell, ruinShell, farShell, dimShell, facade, facadeNear, ghostShell, ghostParts, dimParts, massing, massingBase]);
+  // LEVELS OF DETAIL: each kind's finest, then lighter ones by what they leave out (a frame's depth, a blade's thickness)
+  const levels = {} as Record<PartKind, PartLevel[]>;
+  for (const kind of PART_KINDS) levels[kind] = [{ geometry: geometry[kind], triangles: trianglesOf(geometry[kind]), error: [0, 0, 0] }];
+  const coarser = (kind: PartKind, g: BufferGeometry, error: Axes, asCard = false): void => { levels[kind].push({ geometry: g, triangles: trianglesOf(g), error, ...(asCard ? { card: true as const } : {}) }); };
+  // Their street faces only, as cards: a frame's depth, a railing's bars' and rails' thickness.
+  coarser('frame', frameCardGeometry(), [0, 0, 1], true);
+  coarser('railing', railingCardGeometry(), [0.05, 0, 0.05], true);
+  coarser('roofRailing', roofRailingCardGeometry(), [0.02, 0, 0.05], true);
+  // The case and its arms: the grille's rings, the coil's louvres and the lines into the wall left out (4.4 cm the thickest).
+  coarser('acUnit', acFarGeometry(), [0.045, 0.045, 0.045]);
+  coarser('brise', briseFarGeometry(), [BRISE_BLADE, 0, 0]);
+  // The glass's two faces 1 cm either side of its middle plane: that is the error (model z, the part put 1 deep, `emitBay`).
+  coarser('glassRail', glassRailFarGeometry(), [0, 0, 0.01]);
+  // A leaf of slats from afar is a box: the slats' pitch and their depth in the frame left out.
+  coarser('louvre', unitBox, [0, 0.105, 0.6]);
+  coarser('door', doorFarGeometry(), [0, 0, 1.6]);
+  // A lot's box, rail or slab seen from afar: its sides are under a pixel there, so its top alone draws it (2 triangles
+  // instead of 8–10). The sides give a silhouette half the part's height (model y), not its length: the error is that half.
+  // A part with no top (`lotSides`) has nothing left from afar: what lies on it draws its top (a wall's coping, a post's head). Its level of no
+  // triangles is not drawn (`partCells.ts` levelAt). DO NOT leave it a single level: its sides were drawn whole out to where its diagonal is a
+  // pixel, 8 triangles where the box it was drew 2 (district view 1,564k -> 1,600k triangles of lot parts).
+  for (const kind of SHELL_PART_KINDS) coarser(kind, shellPartGeometry(SHELL_PART_FACES[kind].filter((f) => f.n[2] > 0)), [0, 0.5, 0]);
+  // A sill, a facade fin, a pool's water: a thin horizontal plate whose sides are centimetres high, under a pixel from afar.
+  // Its top alone draws it (2 triangles, not 12); the error is half its height. A fin standing on edge (a storey tall) keeps
+  // its box: that error is metres, well over a pixel. Near, the water is its whole box: nothing
+  // holds the ground round a pool up to its coping, so its sides may show past it.
+  const topFace = topFaceGeometry();
+  for (const kind of ['concrete', 'fin', 'water'] as const) coarser(kind, topFace, [0, 0.5, 0]);
+  const extentOf = (g: BufferGeometry): Axes => {
+    if (!g.boundingBox) g.computeBoundingBox();
+    const b = g.boundingBox!;
+    return [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+  };
+  // What a shadow is made of: a frame's rails and stiles, a railing's rails and balusters, a rack's blades; a solid part its own box.
+  const pieces: Partial<Record<PartKind, Axes[]>> = {
+    frame: [[1, FRAME_BAR, 1], [FRAME_BAR, 1, 1]],
+    railing: [[1, 0.06, 0.05], [0.05, 0.06, 1], [0.015, 0.94, 0.015]],
+    roofRailing: [[1, 0.06, 0.05], [0.02, 0.94, 0.02]],
+    brise: [[BRISE_BLADE, 1, 1]],
+  };
+  const screen = {} as Record<PartKind, PartScreen>;
+  for (const kind of PART_KINDS) {
+    const extent = extentOf(geometry[kind]);
+    screen[kind] = { levels: levels[kind], extent, pieces: pieces[kind] ?? [extent] };
+  }
+  const geometries = new Set<BufferGeometry>([...Object.values(levels).flatMap((list) => list.map((l) => l.geometry)), ...Object.values(whole)]);
+  // The small props' simplified levels, made off the frame's path once the simplifier has loaded.
+  // Never waited on to draw: a kind is drawn at the levels it has until these land.
+  // Levels landing after the kit is let go are let go too (`dispose`): DO NOT add them to the set it already emptied.
+  let disposed = false;
+  const levelsReady = Promise.all(SIMPLIFIED.map(async (kind) => {
+    for (const level of await simplerLevels(geometry[kind], levels[kind][0]!.triangles)) {
+      if (disposed) { level.geometry.dispose(); continue; }
+      levels[kind].push(level);
+      geometries.add(level.geometry);
+    }
+  })).then(() => {}, (error: unknown) => { console.error('Simplified prop levels failed', error); });
+  let furniture: { geometry: Record<FurnitureKind, BufferGeometry>; material: MeshStandardMaterial } | null = null;
+
+  // DO NOT give the parts' instanced meshes three's matrices: every material a part is drawn with makes it from the part's pose, after all its own patches (`partPose.ts`); its meshes that are not instanced draw as before.
+  for (const m of new Set<Material>([...Object.values(material), farShell, ghostParts, dimParts, dimShell])) posePart(m);
+  return {
+    geometry,
+    whole,
+    levelsReady,
+    screen,
+    material,
+    shellMaterial: shell,
+    farShell,
+    ruinShell,
+    ghostShell,
+    ghostParts,
+    dimShell,
+    dimParts,
+    massing,
+    massingBase,
+    facade,
+    facadeNear,
+    finishTone: finishAlbedo(),
+    // Glass, doors and shutters close the openings for the sun
+    // And the shell's parts, as the shell they were laid in casts.
+    castsShadow: new Set<PartKind>(['glass', 'glassDark', 'frame', 'door', 'shutter', 'concrete', 'railing', 'awning', 'column', 'roofRailing', 'fin', 'louvre', 'brise', ...SHADOWED_PROPS, ...SHELL_PART_KINDS]),
+    furniture() {
+      if (!furniture) {
+        furniture = { geometry: furnitureGeometry, material: posePart(createFurnitureMaterial()) };
+        for (const g of Object.values(furniture.geometry)) geometries.add(g);
+        unique.add(furniture.material);
+      }
+      return furniture;
+    },
+    setNight(dark, hour) {
+      if (hour !== undefined) {
+        roomsAwake.value = awakeShare(hour);
+        outsideOn.value = outsideLit(hour);
+      }
+      // Rooms lit behind the glass: a warm glow, brighter than any lit wall (`lightLevels.ts`), less behind the darker glass.
+      const room = NIGHT_LUMINANCE.window / ROOM_LIT_MEAN;
+      for (const [kind, k] of [['glass', 1], ['glassDark', 0.64]] as const) {
+        const mat = material[kind] as MeshStandardMaterial;
+        mat.emissive.setHex(0xffffff);
+        mat.emissiveIntensity = dark * k * room;
+      }
+      tvClock.value = performance.now() / 1000;
+      massingNight.value = dark * room;
+      roomDaylight.value = (1 - dark) * ROOM_DAYLIGHT;
+      // The lanterns at the front doors, and their light on the wall.
+      (material.lamp as MeshStandardMaterial).emissiveIntensity = dark * NIGHT_LUMINANCE.porchLamp / luminanceOf(PORCH_LIGHT);
+      const wash = material.wash as MeshBasicMaterial;
+      wash.opacity = 0.55 * dark;
+      wash.visible = dark > 0.02;
+    },
+    setGhostValid(valid) {
+      for (const m of [ghostShell, ghostParts]) {
+        m.color.setHex(valid ? 0x65e5c3 : 0xff6f63);
+        m.emissive.setHex(valid ? 0x1d5a4a : 0x5a1d1d);
+      }
+    },
+    dispose() {
+      disposed = true;
+      for (const g of geometries) g.dispose();
+      for (const m of unique) m.dispose();
+    },
+  };
+}

@@ -1,0 +1,75 @@
+{
+ "viewport": [
+  1920,
+  1080
+ ],
+ "dpr": 1.3333333333333333,
+ "steps": [
+  {
+   "wait": 6000
+  },
+  {
+   "shot": "title"
+  },
+  {
+   "key": "Enter"
+  },
+  {
+   "wait": 2000
+  },
+  {
+   "shot": "opened"
+  },
+  {
+   "press": "Ajuda"
+  },
+  {
+   "wait": 500
+  },
+  {
+   "shot": "help"
+  },
+  {
+   "key": "Escape"
+  },
+  {
+   "press": "Menu"
+  },
+  {
+   "wait": 300
+  },
+  {
+   "press": "English"
+  },
+  {
+   "wait": 500
+  },
+  {
+   "key": "Escape"
+  },
+  {
+   "press": "Help"
+  },
+  {
+   "wait": 500
+  },
+  {
+   "shot": "help-en"
+  },
+  {
+   "key": "Escape"
+  },
+  {
+   "press": "Menu"
+  },
+  {
+   "wait": 300
+  },
+  {
+   "press": "Português"
+  },
+  {
+   "key": "Escape"
+  }
+ ]
+}

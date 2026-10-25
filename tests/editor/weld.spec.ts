@@ -1,0 +1,149 @@
+import { describe, expect, it } from 'vitest';
+
+import { RoadDoc } from '@world/doc';
+import { Network } from '@world/network';
+import { footprintBox, footprintRects, localDirToWorld, planOverlap } from '@world/buildings/geometry';
+import { type Building, type BuildingId, cloneBuilding, volumeById } from '@world/buildings/types';
+import { blueprintByKey, generateBlock } from '@world/buildings/blueprints';
+import { paletteOf } from '@world/buildings/materials';
+import { validateBuilding } from '@world/buildings/validate';
+import {
+  type BuildingContext,
+  addBuildingRecord,
+  opUnionVolumes,
+  placeBuilding,
+  weldInto,
+} from '@editor/buildings';
+import type { Building as BuildingType } from '@world/buildings/types';
+import { TUNED_UNIT, m } from '@world/units';
+
+/** The 0.4 m unit these scenes were laid out in: every length below is in it, times U. */
+const U = TUNED_UNIT;
+
+/** Welding: dragging one building against another must fuse them */
+
+const flat = (): number => 0;
+
+function world(): { doc: RoadDoc; net: Network; ctx: BuildingContext } {
+  const doc = new RoadDoc();
+  const a = doc.addNode({ x: -600 * U, y: 0 });
+  const b = doc.addNode({ x: 600 * U, y: 0 });
+  doc.addSegment(a.id, b.id, 1);
+  const net = new Network(doc);
+  net.rebuild();
+  return { doc, net, ctx: { doc, net, groundAt: flat } };
+}
+
+function place(ctx: BuildingContext, at = { x: 0, y: 60 * U }): Building {
+  const bp = blueprintByKey('house')!;
+  const result = placeBuilding(ctx, bp.body, at, 0, 'house');
+  expect(result.ok, String(result.problem)).toBe(true);
+  return ctx.doc.buildings.get(result.id as BuildingId)!;
+}
+
+/** A second building dropped where it overlaps the first - what a drag that ends on top of a neighbour produces. */
+function placeOverlapping(ctx: BuildingContext, against: Building, at: { x: number; y: number }): Building {
+  const bp = blueprintByKey('house')!;
+  const body = JSON.parse(JSON.stringify(bp.body)) as Omit<Building, 'id'>;
+  body.rotation = 0;
+  const f = footprintBox(body as Building);
+  const local = { x: (f.x0 + f.x1) / 2, y: f.y0 };
+  const offset = localDirToWorld(body as Building, local.x, local.y);
+  body.x = at.x - offset.x;
+  body.y = at.y - offset.y;
+  const result = addBuildingRecord(ctx, body, [against.id]);
+  expect(result.ok, String(result.problem)).toBe(true);
+  return ctx.doc.buildings.get(result.id as BuildingId)!;
+}
+
+describe('welding two buildings', () => {
+  it('keeps each building its own colours: the last one placed does not paint the other', () => {
+    const { ctx } = world();
+    const first = place(ctx, { x: 0, y: 60 * U });
+    ctx.doc.buildings.get(first.id)!.palette = 1; // brick
+    const second = placeOverlapping(ctx, first, { x: 12 * U, y: 60 * U });
+    const draft = cloneBuilding(second);
+    draft.palette = 0; // plaster
+    expect(weldInto(ctx, draft, [])).toEqual([first.id]);
+    const walls = draft.volumes.map((v) => (v.materials?.wall ?? paletteOf(draft).wall).finish).sort();
+    expect(walls).toEqual(['brick', 'plaster']);
+  });
+
+  it('welds in a chain: a building touching only the one just absorbed comes in too', () => {
+    const { ctx } = world();
+    // A block of w x d metres whose footprint's centre is (cx, cy), turned by `rotation`.
+    const block = (w: number, d: number, cx: number, cy: number, rotation: number): Omit<Building, 'id'> => {
+      const c = Math.cos(rotation), s = Math.sin(rotation), hw = m(w) / 2, hd = m(d) / 2;
+      return { ...generateBlock(m(w), m(d), 1), x: cx - (hw * c - hd * s), y: cy - (hw * s + hd * c), rotation } as Omit<Building, 'id'>;
+    };
+    // A long bar turned 45 degrees: its box has empty corners. A touches its edge; B, in a corner of the box, touches A alone.
+    const base = { x: 0, y: m(100) };
+    const nx = -Math.SQRT1_2, ny = Math.SQRT1_2;
+    const pa = { x: base.x + m(10) * Math.SQRT1_2 + nx * m(4), y: base.y + m(10) * Math.SQRT1_2 + ny * m(4) };
+    const pb = { x: pa.x + nx * m(7), y: pa.y + ny * m(7) };
+    const a = ctx.doc.buildings.add(block(6, 6, pa.x, pa.y, 0));
+    const b = ctx.doc.buildings.add(block(6, 6, pb.x, pb.y, 0));
+    const draft = { ...block(40, 4, base.x, base.y, Math.PI / 4), id: 9999 as BuildingId } as Building;
+    // B alone does not touch the draft: welded only through A.
+    expect(weldInto(ctx, cloneBuilding(draft), [a.id])).not.toContain(b.id);
+    const absorbed = weldInto(ctx, cloneBuilding(draft), []);
+    expect(absorbed).toContain(a.id);
+    expect(absorbed).toContain(b.id);
+  });
+
+  it('joins two overlapping buildings into one, keeping both blocks whole', () => {
+    const { ctx } = world();
+    const first = place(ctx, { x: 0, y: 60 * U });
+    // A second house a few metres along, so the two footprints overlap.
+    const second = placeOverlapping(ctx, first, { x: 12 * U, y: 60 * U });
+    const draft = cloneBuilding(second);
+    const absorbed = weldInto(ctx, draft, []);
+    const bounds = (b: Building) => footprintRects(b, 0.02 * U).map((r) => [Math.min(...r.map(p => p.x)).toFixed(1), Math.min(...r.map(p => p.y)).toFixed(1), Math.max(...r.map(p => p.x)).toFixed(1), Math.max(...r.map(p => p.y)).toFixed(1)]);
+    expect(absorbed, JSON.stringify({ first: bounds(first), second: bounds(second), pos: [second.x, second.y, second.rotation] })).toEqual([first.id]);
+    // Non-destructive: both blocks are kept as they were, overlapping; what is drawn is their union.
+    expect(draft.volumes.length).toBe(2);
+    expect(planOverlap(draft.volumes[0]!, draft.volumes[1]!)).toBe(true);
+    expect(validateBuilding(ctx, draft, [first.id])).toBeNull();
+  });
+
+  it('fuses flush neighbours that make one rectangle into one mass', () => {
+    const { ctx } = world();
+    const first = place(ctx, { x: 0, y: 60 * U });
+    const v = first.volumes[0]!;
+    const draft = cloneBuilding(first);
+    // A wing exactly against the first mass, the same storeys: one block.
+    const wing = { ...(JSON.parse(JSON.stringify(v)) as typeof v) };
+    wing.id = draft.nextVolumeId++;
+    wing.x = v.x + v.w;
+    draft.volumes.push(wing);
+    const before = draft.volumes.length;
+    expect(opUnionVolumes(draft, v.id)).toBe(true);
+    expect(draft.volumes.length).toBe(before - 1);
+    expect(draft.volumes[0]!.w).toBeCloseTo(v.w + wing.w, 6);
+  });
+
+  it('stores the welded record and drops the absorbed buildings', () => {
+    const { ctx } = world();
+    const first = place(ctx, { x: 0, y: 60 * U });
+    const second = placeOverlapping(ctx, first, { x: 12 * U, y: 60 * U });
+    const draft = cloneBuilding(second);
+    const absorbed = weldInto(ctx, draft, []);
+    const stored = addBuildingRecord(ctx, { ...draft } as Omit<BuildingType, "id"> & { id?: BuildingId }, [second.id, ...absorbed]);
+    expect(
+      stored.ok,
+      JSON.stringify({
+        problem: stored.problem,
+        volumes: draft.volumes.map((v) => [v.x, v.y, v.w, v.d, v.base, v.storeys.length]),
+      }),
+    ).toBe(true);
+    for (const id of [second.id, ...absorbed]) ctx.doc.buildings.remove(id);
+    expect(ctx.doc.buildings.size).toBe(1);
+    const welded = ctx.doc.buildings.get(stored.id as BuildingId);
+    expect(welded).toBeDefined();
+    expect(welded!.volumes.length).toBeGreaterThanOrEqual(1);
+    // The neighbour's footprint is covered by the welded building.
+    const covered = footprintRects(welded!, 0).length;
+    expect(covered).toBeGreaterThanOrEqual(1);
+    void volumeById(welded!, welded!.volumes[0]!.id);
+  });
+});

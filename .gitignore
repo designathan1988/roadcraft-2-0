@@ -1,0 +1,21 @@
+node_modules/
+dist/
+# The build with the console's probes (npm run build:probe)
+dist-probe/
+# The desktop packages (npm run package:desktop)
+release/
+coverage/
+test-results/
+playwright-report/
+# The playwright-cli session (snapshots, console logs, its own browser profile)
+.playwright-cli/
+.vite/
+.cache/
+*.local
+.DS_Store
+# DO NOT ignore cooked/: a clone must open the game and build a release without cooking first (the player's order, 2026-10-18)
+# The lab recorder's reports, written by the dev server (`scripts/vite/labReports.ts`)
+lab-reports/
+
+# Local MCP servers (holds a GitHub token: never commit)
+.mcp.json

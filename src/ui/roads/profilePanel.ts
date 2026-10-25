@@ -1,0 +1,83 @@
+import type { RoadSegment } from '@world/doc';
+import { type RoadProfileSpec, profileOf, profileWidth } from '@world/roads/profile';
+import { plural, t } from '../i18n';
+import { drawSection, metresText } from './crossSection';
+import { type DrawProfile, setDrawProfile } from './drawProfile';
+import { openProfileEditor } from './profileEditor';
+import './roads.css';
+
+/** THE ROAD'S PROFILE in the inspector */
+export function mountProfilePanel(
+  host: HTMLElement,
+  segment: RoadSegment,
+  apply: (profile: RoadProfileSpec, type?: number) => void,
+  /** V8: this road's profile copied to the whole street it runs in */
+  more: { readonly chain?: number; readonly toStreet?: () => void; readonly drawWith?: (held: DrawProfile) => void } = {},
+): void {
+  const profile = profileOf(segment);
+  // The profile taken in hand, with its class: the host picks the class first, so the tool and its panel agree.
+  const hold = (held: DrawProfile): void => { if (more.drawWith) more.drawWith(held); else setDrawProfile(held); };
+  const panel = document.createElement('section');
+  panel.className = 'rp-summary road-profile-panel';
+
+  const head = document.createElement('div');
+  head.className = 'rp-summary-head';
+  const title = document.createElement('span');
+  title.textContent = t('profile.title');
+  const total = document.createElement('span');
+  total.className = 'rp-sub';
+  total.textContent = t('profileEditor.totalWidth', { width: metresText(profileWidth(profile)) });
+  head.append(title, total);
+
+  const art = document.createElement('div');
+  art.className = 'rp-summary-art';
+  art.innerHTML = drawSection(profile, { width: 300, height: 112, handles: false, title: t('profile.diagram') }).svg;
+
+  const lanes = profile.elements.filter((e) => e.kind === 'lane').length;
+  const facts = document.createElement('div');
+  facts.className = 'rp-sub rp-summary-facts';
+  facts.textContent = [
+    plural('profile.summary.lanes', lanes),
+    t(`profile.materialName.${profile.carriageway ?? 'asphalt'}`),
+    t('profileEditor.speedValue', { speed: profile.speedKmh }),
+  ].join(' · ');
+
+  const edit = document.createElement('button');
+  edit.type = 'button';
+  edit.className = 'rp-btn primary';
+  edit.textContent = t('profileEditor.open');
+  edit.dataset['action'] = 'openProfileEditor';
+  edit.onclick = () => openProfileEditor({
+    title: t('profileEditor.thisRoad'),
+    profile,
+    type: segment.type,
+    apply: (next, type) => apply(next, type),
+    drawWith: (name, next, type) => hold({ name, profile: next, type }),
+  });
+
+  const row = document.createElement('div');
+  row.className = 'rp-summary-actions';
+  row.append(edit);
+  if (more.drawWith) {
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'rp-btn';
+    pick.textContent = t('profile.drawWith');
+    pick.title = t('profile.drawWithTip');
+    pick.dataset['action'] = 'eyedropper';
+    pick.onclick = () => hold({ name: t('profile.copied'), profile, type: segment.type });
+    row.append(pick);
+  }
+  if (more.toStreet && (more.chain ?? 0) > 1) {
+    const all = document.createElement('button');
+    all.type = 'button';
+    all.className = 'rp-btn';
+    all.textContent = t('profile.toStreet', { count: more.chain ?? 0 });
+    all.title = t('profile.toStreetTip');
+    all.dataset['action'] = 'toStreet';
+    all.onclick = () => more.toStreet?.();
+    row.append(all);
+  }
+  panel.append(head, art, facts, row);
+  host.append(panel);
+}

@@ -1,0 +1,66 @@
+{
+ "hash": "d5315550734b3bb6",
+ "codec": "rgba8",
+ "textures": [
+  {
+   "name": "road-surfaces:map",
+   "file": "road-surfaces.map.ktx2",
+   "use": "color"
+  },
+  {
+   "name": "road-surfaces:relief",
+   "file": "road-surfaces.relief.ktx2",
+   "use": "data"
+  },
+  {
+   "name": "road-footway:map",
+   "file": "road-footway.map.ktx2",
+   "use": "color"
+  },
+  {
+   "name": "road-footway:relief",
+   "file": "road-footway.relief.ktx2",
+   "use": "data"
+  },
+  {
+   "name": "road-details",
+   "file": "road-details.ktx2",
+   "use": "data"
+  },
+  {
+   "name": "building-finishes:map",
+   "file": "building-finishes.map.ktx2",
+   "use": "color"
+  },
+  {
+   "name": "building-finishes:normal",
+   "file": "building-finishes.normal.ktx2",
+   "use": "normal"
+  },
+  {
+   "name": "building-finishes:rough",
+   "file": "building-finishes.rough.ktx2",
+   "use": "data"
+  },
+  {
+   "name": "terrain-grass:map",
+   "file": "terrain-grass.map.ktx2",
+   "use": "color"
+  },
+  {
+   "name": "terrain-grass:normal",
+   "file": "terrain-grass.normal.ktx2",
+   "use": "normal"
+  },
+  {
+   "name": "terrain-land:map",
+   "file": "terrain-land.map.ktx2",
+   "use": "color"
+  },
+  {
+   "name": "terrain-land:normal",
+   "file": "terrain-land.normal.ktx2",
+   "use": "normal"
+  }
+ ]
+}

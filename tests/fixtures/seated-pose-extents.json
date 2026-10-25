@@ -1,0 +1,572 @@
+{
+  "byBody": {
+    "carDrive": {
+      "female-adult-casual": {
+        "bottom": -0.161,
+        "under": -0.074
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.16,
+        "under": -0.101
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.224,
+        "under": -0.224
+      },
+      "female-adult-business": {
+        "bottom": -0.16,
+        "under": -0.083
+      },
+      "female-young-casual": {
+        "bottom": -0.161,
+        "under": -0.079
+      },
+      "female-senior-casual": {
+        "bottom": -0.16,
+        "under": -0.078
+      },
+      "male-adult-casual": {
+        "bottom": -0.165,
+        "under": -0.09
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.16,
+        "under": -0.089
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.165,
+        "under": -0.09
+      },
+      "male-adult-business": {
+        "bottom": -0.16,
+        "under": -0.094
+      },
+      "male-young-casual": {
+        "bottom": -0.16,
+        "under": -0.09
+      },
+      "male-senior-casual": {
+        "bottom": -0.166,
+        "under": -0.103
+      }
+    },
+    "carRide": {
+      "female-adult-casual": {
+        "bottom": -0.161,
+        "under": -0.074
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.16,
+        "under": -0.1
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.223,
+        "under": -0.223
+      },
+      "female-adult-business": {
+        "bottom": -0.16,
+        "under": -0.078
+      },
+      "female-young-casual": {
+        "bottom": -0.161,
+        "under": -0.079
+      },
+      "female-senior-casual": {
+        "bottom": -0.16,
+        "under": -0.077
+      },
+      "male-adult-casual": {
+        "bottom": -0.165,
+        "under": -0.09
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.16,
+        "under": -0.088
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.165,
+        "under": -0.089
+      },
+      "male-adult-business": {
+        "bottom": -0.16,
+        "under": -0.094
+      },
+      "male-young-casual": {
+        "bottom": -0.16,
+        "under": -0.089
+      },
+      "male-senior-casual": {
+        "bottom": -0.166,
+        "under": -0.102
+      }
+    },
+    "carRear": {
+      "female-adult-casual": {
+        "bottom": -0.212,
+        "under": -0.078
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.21,
+        "under": -0.098
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.219,
+        "under": -0.219
+      },
+      "female-adult-business": {
+        "bottom": -0.21,
+        "under": -0.074
+      },
+      "female-young-casual": {
+        "bottom": -0.212,
+        "under": -0.082
+      },
+      "female-senior-casual": {
+        "bottom": -0.21,
+        "under": -0.077
+      },
+      "male-adult-casual": {
+        "bottom": -0.214,
+        "under": -0.131
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.21,
+        "under": -0.133
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.214,
+        "under": -0.109
+      },
+      "male-adult-business": {
+        "bottom": -0.21,
+        "under": -0.117
+      },
+      "male-young-casual": {
+        "bottom": -0.21,
+        "under": -0.13
+      },
+      "male-senior-casual": {
+        "bottom": -0.217,
+        "under": -0.126
+      }
+    },
+    "cabDrive": {
+      "female-adult-casual": {
+        "bottom": -0.451,
+        "under": -0.085
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.45,
+        "under": -0.11
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.45,
+        "under": -0.243
+      },
+      "female-adult-business": {
+        "bottom": -0.45,
+        "under": -0.124
+      },
+      "female-young-casual": {
+        "bottom": -0.452,
+        "under": -0.134
+      },
+      "female-senior-casual": {
+        "bottom": -0.45,
+        "under": -0.127
+      },
+      "male-adult-casual": {
+        "bottom": -0.45,
+        "under": -0.099
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.45,
+        "under": -0.097
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.45,
+        "under": -0.096
+      },
+      "male-adult-business": {
+        "bottom": -0.45,
+        "under": -0.107
+      },
+      "male-young-casual": {
+        "bottom": -0.45,
+        "under": -0.098
+      },
+      "male-senior-casual": {
+        "bottom": -0.452,
+        "under": -0.108
+      }
+    },
+    "cabRide": {
+      "female-adult-casual": {
+        "bottom": -0.45,
+        "under": -0.127
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.45,
+        "under": -0.11
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.45,
+        "under": -0.243
+      },
+      "female-adult-business": {
+        "bottom": -0.45,
+        "under": -0.142
+      },
+      "female-young-casual": {
+        "bottom": -0.451,
+        "under": -0.173
+      },
+      "female-senior-casual": {
+        "bottom": -0.45,
+        "under": -0.165
+      },
+      "male-adult-casual": {
+        "bottom": -0.45,
+        "under": -0.117
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.45,
+        "under": -0.106
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.45,
+        "under": -0.13
+      },
+      "male-adult-business": {
+        "bottom": -0.45,
+        "under": -0.182
+      },
+      "male-young-casual": {
+        "bottom": -0.45,
+        "under": -0.103
+      },
+      "male-senior-casual": {
+        "bottom": -0.45,
+        "under": -0.108
+      }
+    },
+    "chair": {
+      "female-adult-casual": {
+        "bottom": -0.54,
+        "under": -0.183
+      },
+      "female-adult-sport-casual": {
+        "bottom": -0.54,
+        "under": -0.113
+      },
+      "female-adult-smart-casual": {
+        "bottom": -0.54,
+        "under": -0.254
+      },
+      "female-adult-business": {
+        "bottom": -0.54,
+        "under": -0.175
+      },
+      "female-young-casual": {
+        "bottom": -0.541,
+        "under": -0.226
+      },
+      "female-senior-casual": {
+        "bottom": -0.54,
+        "under": -0.218
+      },
+      "male-adult-casual": {
+        "bottom": -0.54,
+        "under": -0.128
+      },
+      "male-adult-sport-casual": {
+        "bottom": -0.54,
+        "under": -0.117
+      },
+      "male-adult-smart-casual": {
+        "bottom": -0.54,
+        "under": -0.13
+      },
+      "male-adult-business": {
+        "bottom": -0.54,
+        "under": -0.102
+      },
+      "male-young-casual": {
+        "bottom": -0.54,
+        "under": -0.114
+      },
+      "male-senior-casual": {
+        "bottom": -0.54,
+        "under": -0.119
+      }
+    }
+  },
+  "carDrive": {
+    "top": 0.874,
+    "bottom": -0.224,
+    "fwd": 0.867,
+    "back": 0.361,
+    "half": 0.284,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carDriveMirror": {
+    "top": 0.87,
+    "bottom": -0.224,
+    "fwd": 0.867,
+    "back": 0.339,
+    "half": 0.286,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carDriveRight": {
+    "top": 0.875,
+    "bottom": -0.224,
+    "fwd": 0.867,
+    "back": 0.356,
+    "half": 0.287,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRide": {
+    "top": 0.873,
+    "bottom": -0.223,
+    "fwd": 0.837,
+    "back": 0.359,
+    "half": 0.283,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRideLeft": {
+    "top": 0.873,
+    "bottom": -0.223,
+    "fwd": 0.837,
+    "back": 0.345,
+    "half": 0.285,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRideRight": {
+    "top": 0.874,
+    "bottom": -0.223,
+    "fwd": 0.837,
+    "back": 0.354,
+    "half": 0.286,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRearRide": {
+    "top": 0.879,
+    "bottom": -0.219,
+    "fwd": 0.667,
+    "back": 0.324,
+    "half": 0.286,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRearLeft": {
+    "top": 0.879,
+    "bottom": -0.219,
+    "fwd": 0.667,
+    "back": 0.311,
+    "half": 0.287,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "carRearRight": {
+    "top": 0.88,
+    "bottom": -0.219,
+    "fwd": 0.667,
+    "back": 0.319,
+    "half": 0.29,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-adult-smart-casual"
+    }
+  },
+  "cabDrive": {
+    "top": 0.872,
+    "bottom": -0.452,
+    "fwd": 0.657,
+    "back": 0.338,
+    "half": 0.285,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "cabDriveMirror": {
+    "top": 0.87,
+    "bottom": -0.452,
+    "fwd": 0.657,
+    "back": 0.316,
+    "half": 0.287,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "cabDriveRight": {
+    "top": 0.869,
+    "bottom": -0.452,
+    "fwd": 0.657,
+    "back": 0.324,
+    "half": 0.287,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "cabRide": {
+    "top": 0.87,
+    "bottom": -0.451,
+    "fwd": 0.607,
+    "back": 0.331,
+    "half": 0.283,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "male-adult-smart-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "cabRideLeft": {
+    "top": 0.87,
+    "bottom": -0.451,
+    "fwd": 0.607,
+    "back": 0.316,
+    "half": 0.285,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "cabRideRight": {
+    "top": 0.87,
+    "bottom": -0.451,
+    "fwd": 0.607,
+    "back": 0.321,
+    "half": 0.286,
+    "worst": {
+      "top": "male-senior-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "chairSit": {
+    "top": 0.877,
+    "bottom": -0.541,
+    "fwd": 0.627,
+    "back": 0.271,
+    "half": 0.283,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "chairSitLeft": {
+    "top": 0.878,
+    "bottom": -0.541,
+    "fwd": 0.627,
+    "back": 0.268,
+    "half": 0.284,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "chairSitRight": {
+    "top": 0.877,
+    "bottom": -0.541,
+    "fwd": 0.627,
+    "back": 0.27,
+    "half": 0.284,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "chairSitPhone": {
+    "top": 0.865,
+    "bottom": -0.541,
+    "fwd": 0.627,
+    "back": 0.263,
+    "half": 0.284,
+    "worst": {
+      "top": "male-adult-smart-casual",
+      "fwd": "male-senior-casual",
+      "back": "female-young-casual",
+      "half": "male-adult-smart-casual",
+      "bottom": "female-young-casual"
+    }
+  },
+  "bodies": 12,
+  "phases": 8
+}

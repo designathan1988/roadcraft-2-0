@@ -1,0 +1,466 @@
+import {
+  BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
+  CylinderGeometry,
+  MeshStandardMaterial,
+  SphereGeometry,
+  Vector3,
+} from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { weldGeometry } from '../mesh/weld';
+import { dropBuried, dropHiddenFaces } from '../mesh/hiddenFaces';
+import { FURNITURE_KINDS, FURNITURE_SIZE, type FurnitureKind } from '@world/buildings/interior';
+
+/** The furniture people use inside buildings, as models */
+
+type RGB = readonly [number, number, number];
+
+const hex = (h: number): RGB => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
+
+const OAK = hex(0x9a6a43);
+const WALNUT = hex(0x5e3d26);
+const LINEN = hex(0xf2efe8);
+const DUVET = hex(0x7d93ad);
+const FABRIC = hex(0x6f7f8f);
+const CUSHION = hex(0x84929f);
+const BLACK = hex(0x1e2125);
+const STEEL = hex(0xb3b9bd);
+const CHROME = hex(0xd9dde0);
+const WHITE = hex(0xf6f6f3);
+const CERAMIC = hex(0xeef0ef);
+const LEAF = hex(0x4c8a3a);
+const LEAF_DARK = hex(0x386d2b);
+const POT = hex(0xb4673f);
+const RED = hex(0xa22b2b);
+const SCREEN = hex(0x0f1418);
+const BOARD = hex(0x2c4a3a);
+const BOOKS: readonly RGB[] = [hex(0x8b2c2c), hex(0x2c4f8b), hex(0x2e6b3f), hex(0xc49a3c), hex(0x5a3b6b), hex(0xd8d2c0)];
+const GOODS: readonly RGB[] = [hex(0xd9483b), hex(0xf2b33d), hex(0x3d8ad9), hex(0x5fb34a), hex(0xe8e3d6), hex(0x8b5a2b)];
+
+/** Paints a geometry one colour (as a vertex attribute) and moves it into place: kept indexed (DO NOT `toNonIndexed` it: every instance behind every window drew each corner once per triangle; a loose part is indexed, three `BufferGeometryUtils.mergeVertices`). */
+function paint(g: BufferGeometry, c: RGB, x = 0, y = 0, z = 0): BufferGeometry {
+  g.translate(x, y, z);
+  const n = g.getAttribute('position').count;
+  const colours = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) colours.set(c, i * 3);
+  g.setAttribute('color', new BufferAttribute(colours, 3));
+  return g.index ? g : weldGeometry(g);
+}
+
+/** The rounding a box's fragments shade by (`ROUND_GLSL`): each vertex's place in its box's own frame, the box's half size and radius (w 0: none), its axes. */
+const ROUND_P = 'aRoundP', ROUND_B = 'aRoundB', ROUND_X = 'aRoundX', ROUND_Y = 'aRoundY';
+
+/** A box with rounded edges, its bottom at `y`: a plain box (12 triangles), its edges rounded in the shading (`createFurnitureMaterial`).
+ *  DO NOT model the rounding: three's RoundedBoxGeometry was 300 triangles a box, a bookshelf of books 55,200 (the audit, 2026-10-22). */
+function rbox(w: number, h: number, d: number, x: number, y: number, z: number, c: RGB, r = 0.03): BufferGeometry {
+  const g = new BoxGeometry(w, h, d);
+  const n = g.getAttribute('position').count;
+  const radius = Math.max(0, Math.min(r, w / 2 - 1e-3, h / 2 - 1e-3, d / 2 - 1e-3));
+  const p = new Float32Array(n * 3), b = new Float32Array(n * 4), ax = new Float32Array(n * 3), ay = new Float32Array(n * 3);
+  const position = g.getAttribute('position');
+  for (let i = 0; i < n; i++) {
+    p.set([position.getX(i), position.getY(i), position.getZ(i)], i * 3);
+    b.set([w / 2, h / 2, d / 2, radius], i * 4);
+    ax.set([1, 0, 0], i * 3);
+    ay.set([0, 1, 0], i * 3);
+  }
+  g.setAttribute(ROUND_P, new BufferAttribute(p, 3));
+  g.setAttribute(ROUND_B, new BufferAttribute(b, 4));
+  g.setAttribute(ROUND_X, new BufferAttribute(ax, 3));
+  g.setAttribute(ROUND_Y, new BufferAttribute(ay, 3));
+  return paint(g, c, x, y + h / 2, z);
+}
+
+/** A box with sharp edges, its bottom at `y`: wood, steel, books, treads, boards (no rounding to shade: their edges are sharp). */
+const box = (w: number, h: number, d: number, x: number, y: number, z: number, c: RGB): BufferGeometry => rbox(w, h, d, x, y, z, c, 0);
+
+/** A part turned about the up axis, its rounding's axes turned with it (three turns only its positions and normals). */
+function turnY(g: BufferGeometry, angle: number): BufferGeometry {
+  g.rotateY(angle);
+  const c = Math.cos(angle), s = Math.sin(angle);
+  for (const name of [ROUND_X, ROUND_Y]) {
+    const a = g.getAttribute(name);
+    if (!a) continue;
+    for (let i = 0; i < a.count; i++) {
+      const vx = a.getX(i), vz = a.getZ(i);
+      a.setXYZ(i, c * vx + s * vz, a.getY(i), -s * vx + c * vz);
+    }
+  }
+  return g;
+}
+
+/** An upright cylinder, its bottom at `y`. */
+const cyl = (r: number, h: number, x: number, y: number, z: number, c: RGB, top = r, seg = 12): BufferGeometry =>
+  paint(new CylinderGeometry(top, r, h, seg), c, x, y + h / 2, z);
+
+const ball = (r: number, x: number, y: number, z: number, c: RGB): BufferGeometry =>
+  paint(new SphereGeometry(r, 10, 8), c, x, y, z);
+
+/** Four legs under a top `w` x `d`, inset `inset`, `h` high. */
+function legs(w: number, d: number, h: number, c: RGB, inset = 0.06, r = 0.022): BufferGeometry[] {
+  const out: BufferGeometry[] = [];
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) out.push(cyl(r, h, sx * (w / 2 - inset), 0, sz * (d / 2 - inset), c, r * 0.8, 8));
+  return out;
+}
+
+function build(kind: FurnitureKind): BufferGeometry[] {
+  const [W, D, H] = FURNITURE_SIZE[kind];
+  const back = -D / 2;
+  switch (kind) {
+    case 'bed': case 'singleBed': {
+      const frameH = 0.32;
+      const out = [
+        box(W, frameH, D, 0, 0.05, 0, WALNUT),
+        ...legs(W, D, 0.06, WALNUT, 0.06, 0.03),
+        rbox(W - 0.06, 0.2, D - 0.12, 0, frameH, 0.02, LINEN, 0.08),
+        rbox(W - 0.04, 0.06, D * 0.62, 0, frameH + 0.19, D * 0.17, DUVET, 0.05),
+        box(W + 0.04, 0.95, 0.07, 0, 0.05, back + 0.03, WALNUT),
+      ];
+      const pillows = kind === 'bed' ? [-W / 4, W / 4] : [0];
+      for (const px of pillows) out.push(rbox(Math.min(0.6, W * 0.42), 0.12, 0.38, px, frameH + 0.2, back + 0.32, LINEN, 0.06));
+      return out;
+    }
+    case 'wardBed':
+      return [
+        box(W, 0.08, D, 0, 0.55, 0, STEEL),
+        ...legs(W, D, 0.55, STEEL, 0.05, 0.025),
+        rbox(W - 0.06, 0.15, D - 0.1, 0, 0.63, 0, LINEN, 0.06),
+        rbox(0.6, 0.11, 0.35, 0, 0.77, back + 0.3, LINEN, 0.05),
+        box(W, 0.6, 0.04, 0, 0.55, back + 0.02, STEEL),
+        box(0.04, 0.3, D * 0.6, -W / 2, 0.72, 0, CHROME),
+        box(0.04, 0.3, D * 0.6, W / 2, 0.72, 0, CHROME),
+      ];
+    case 'sofa': case 'armchair': {
+      const arm = 0.18;
+      const seats = kind === 'sofa' ? 3 : 1;
+      const inner = W - 2 * arm;
+      const out = [
+        rbox(W, 0.28, D, 0, 0.08, 0, FABRIC, 0.06),
+        ...legs(W, D, 0.08, WALNUT, 0.08, 0.025),
+        rbox(arm, 0.32, D, -W / 2 + arm / 2, 0.36, 0, FABRIC, 0.08),
+        rbox(arm, 0.32, D, W / 2 - arm / 2, 0.36, 0, FABRIC, 0.08),
+        rbox(W - 0.04, 0.45, 0.2, 0, 0.36, back + 0.1, FABRIC, 0.08),
+      ];
+      for (let i = 0; i < seats; i++) {
+        const x = -inner / 2 + (inner / seats) * (i + 0.5);
+        out.push(rbox(inner / seats - 0.02, 0.14, D - 0.26, x, 0.36, 0.09, CUSHION, 0.06));
+        out.push(rbox(inner / seats - 0.04, 0.38, 0.16, x, 0.48, back + 0.24, CUSHION, 0.07));
+      }
+      return out;
+    }
+    case 'table':
+      return [box(W, 0.04, D, 0, H - 0.04, 0, OAK), ...legs(W, D, H - 0.04, WALNUT, 0.07, 0.025)];
+    case 'altar':
+      return [
+        box(W, H, D, 0, 0, 0, hex(0xe9e2cf)),
+        box(W + 0.06, 0.04, D + 0.06, 0, H, 0, LINEN),
+        box(W * 0.5, 0.02, D + 0.08, 0, H - 0.25, 0, RED),
+        cyl(0.03, 0.3, -W * 0.3, H, 0, hex(0xd7b65a)),
+        cyl(0.03, 0.3, W * 0.3, H, 0, hex(0xd7b65a)),
+      ];
+    case 'desk':
+      return [
+        box(W, 0.035, D, 0, H - 0.035, 0, OAK),
+        box(0.04, H - 0.035, D - 0.04, -W / 2 + 0.03, 0, 0, WALNUT),
+        box(0.4, H - 0.12, D - 0.06, W / 2 - 0.22, 0.05, 0, WALNUT),
+        box(0.5, 0.32, 0.03, 0, H + 0.12, back + 0.15, BLACK),
+        box(0.06, 0.12, 0.06, 0, H, back + 0.15, BLACK),
+        box(0.42, 0.015, 0.14, 0, H, 0.08, hex(0x3a3d40)),
+      ];
+    case 'chair':
+      return [
+        box(W, 0.04, D, 0, 0.44, 0, OAK),
+        ...legs(W, D, 0.44, WALNUT, 0.04, 0.02),
+        box(0.03, 0.46, 0.03, -W / 2 + 0.04, 0.48, back + 0.03, WALNUT),
+        box(0.03, 0.46, 0.03, W / 2 - 0.04, 0.48, back + 0.03, WALNUT),
+        box(W - 0.06, 0.08, 0.025, 0, 0.82, back + 0.03, OAK),
+        box(W - 0.06, 0.05, 0.025, 0, 0.66, back + 0.03, OAK),
+      ];
+    case 'officeChair': {
+      const out = [
+        rbox(W - 0.04, 0.08, D - 0.06, 0, 0.44, 0.02, BLACK, 0.035),
+        rbox(W - 0.08, 0.5, 0.06, 0, 0.55, back + 0.06, BLACK, 0.03),
+        cyl(0.03, 0.4, 0, 0.06, 0, CHROME),
+      ];
+      for (let i = 0; i < 5; i++) {
+        const a = (i / 5) * Math.PI * 2;
+        const leg = box(0.04, 0.03, 0.28, 0, 0.04, 0, BLACK);
+        leg.translate(0, 0, -0.14);
+        turnY(leg, a);
+        out.push(leg, ball(0.03, Math.sin(a) * 0.27, 0.03, -Math.cos(a) * 0.27, BLACK));
+      }
+      return out;
+    }
+    case 'seat':
+      return [
+        rbox(W - 0.1, 0.12, D - 0.12, 0, 0.4, 0.04, RED, 0.05),
+        rbox(W - 0.1, 0.55, 0.12, 0, 0.42, back + 0.07, RED, 0.06),
+        box(0.05, 0.62, D, -W / 2 + 0.025, 0, 0, BLACK),
+        box(0.05, 0.62, D, W / 2 - 0.025, 0, 0, BLACK),
+      ];
+    case 'pew':
+      return [
+        box(W, 0.05, D * 0.75, 0, 0.44, 0.06, OAK),
+        box(W, 0.5, 0.05, 0, 0.45, back + 0.05, OAK),
+        box(0.06, H, D, -W / 2 + 0.03, 0, 0, WALNUT),
+        box(0.06, H, D, W / 2 - 0.03, 0, 0, WALNUT),
+      ];
+    case 'shelf': case 'bookshelf': {
+      const wood = kind === 'bookshelf' ? WALNUT : hex(0xd8d4cc);
+      const out = [
+        box(W, H, 0.03, 0, 0, back + 0.015, wood),
+        box(0.04, H, D, -W / 2 + 0.02, 0, 0, wood),
+        box(0.04, H, D, W / 2 - 0.02, 0, 0, wood),
+      ];
+      const levels = kind === 'bookshelf' ? 5 : 4;
+      for (let k = 0; k <= levels; k++) {
+        const y = (k / levels) * (H - 0.04);
+        out.push(box(W - 0.06, 0.03, D - 0.04, 0, y, 0, wood));
+        if (k === levels) break;
+        const room = H / levels - 0.06;
+        let x = -W / 2 + 0.06;
+        let i = k * 3;
+        while (x < W / 2 - 0.12) {
+          const bw = kind === 'bookshelf' ? 0.04 + ((i * 37) % 5) * 0.012 : 0.18 + ((i * 13) % 4) * 0.04;
+          const bh = room * (kind === 'bookshelf' ? 0.72 + ((i * 7) % 4) * 0.07 : 0.5 + ((i * 11) % 4) * 0.1);
+          const c = (kind === 'bookshelf' ? BOOKS : GOODS)[i % 6]!;
+          out.push(box(bw - 0.006, bh, D * 0.7, x + bw / 2, y + 0.03, 0.02, c));
+          x += bw;
+          i++;
+        }
+      }
+      return out;
+    }
+    case 'rack': {
+      const out: BufferGeometry[] = [];
+      for (const sx of [-1, 0, 1]) for (const sz of [-1, 1]) out.push(box(0.06, H, 0.06, sx * (W / 2 - 0.03), 0, sz * (D / 2 - 0.03), hex(0x2f63b0)));
+      for (const y of [0.15, 1.15, 2.15]) {
+        out.push(box(W, 0.08, 0.05, 0, y, D / 2 - 0.03, hex(0xe0782a)), box(W, 0.08, 0.05, 0, y, -D / 2 + 0.03, hex(0xe0782a)));
+        for (const bx of [-W / 3, 0, W / 3]) out.push(box(W / 3 - 0.15, 0.7, D - 0.2, bx, y + 0.08, 0, hex(0xc8a271)));
+      }
+      return out;
+    }
+    case 'counter': case 'barCounter': case 'checkout': {
+      const body = kind === 'barCounter' ? WALNUT : kind === 'checkout' ? STEEL : OAK;
+      const out = [
+        box(W, 0.08, D - 0.08, 0, 0, 0.02, BLACK),
+        box(W, H - 0.12, D - 0.04, 0, 0.08, 0, body),
+        box(W + 0.04, 0.04, D + 0.04, 0, H - 0.04, 0, kind === 'barCounter' ? BLACK : hex(0xe6e1d8)),
+      ];
+      if (kind === 'barCounter') {
+        for (let i = 0; i < 6; i++) out.push(cyl(0.035, 0.28, -W / 2 + 0.4 + i * 0.6, H, back + 0.12, GOODS[i]!, 0.015));
+      }
+      if (kind === 'checkout') {
+        out.push(box(W * 0.6, 0.02, D * 0.5, -W * 0.15, H, 0.05, BLACK));
+        out.push(box(0.3, 0.25, 0.3, W / 2 - 0.25, H, 0, hex(0x3a3d40)));
+      }
+      return out;
+    }
+    case 'fridge':
+      return [rbox(W, H, D, 0, 0, 0, WHITE, 0.05), box(W - 0.02, 0.01, 0.01, 0, H * 0.62, D / 2, hex(0xcfd3d5)),
+        box(0.025, 0.35, 0.03, W / 2 - 0.08, H * 0.7, D / 2 + 0.02, CHROME), box(0.025, 0.5, 0.03, W / 2 - 0.08, H * 0.18, D / 2 + 0.02, CHROME)];
+    case 'stove': {
+      const out = [box(W, H - 0.03, D, 0, 0, 0, WHITE), box(W, 0.03, D, 0, H - 0.03, 0, BLACK),
+        box(W - 0.12, 0.38, 0.01, 0, 0.18, D / 2, BLACK), box(W - 0.2, 0.02, 0.03, 0, 0.62, D / 2 + 0.02, CHROME)];
+      for (const sx of [-1, 1]) for (const sz of [-1, 1]) out.push(cyl(0.08, 0.012, sx * W * 0.22, H, sz * D * 0.22, hex(0x3b3d40), 0.08, 14));
+      return out;
+    }
+    case 'sink':
+      return [box(W, H - 0.04, D, 0, 0, 0, OAK), box(W, 0.04, D, 0, H - 0.04, 0, hex(0xd8d3c9)),
+        box(W * 0.5, 0.02, D * 0.6, 0, H, 0.02, CHROME), cyl(0.015, 0.25, 0, H, back + 0.08, CHROME)];
+    case 'toilet':
+      return [cyl(0.17, 0.4, 0, 0, 0.08, CERAMIC, 0.2, 16), rbox(0.38, 0.05, 0.46, 0, 0.4, 0.06, WHITE, 0.03),
+        rbox(W, 0.38, 0.18, 0, 0.4, back + 0.09, CERAMIC, 0.04)];
+    case 'bath':
+      return [rbox(W, H, D, 0, 0, 0, CERAMIC, 0.12), rbox(W - 0.12, 0.02, D - 0.14, 0, H - 0.015, 0, hex(0xc7d8de), 0.06),
+        cyl(0.015, 0.2, 0, H, back + 0.05, CHROME)];
+    case 'wardrobe': case 'locker': {
+      const c = kind === 'locker' ? hex(0x5f7d93) : WALNUT;
+      return [box(W, H, D, 0, 0, 0, c), box(0.01, H - 0.1, 0.01, 0, 0.05, D / 2, BLACK),
+        box(0.02, 0.18, 0.03, -0.06, H * 0.5, D / 2 + 0.01, CHROME), box(0.02, 0.18, 0.03, 0.06, H * 0.5, D / 2 + 0.01, CHROME)];
+    }
+    case 'tv':
+      return [box(W, 0.45, D, 0, 0, 0, WALNUT), box(W * 0.9, 0.55, 0.05, 0, 0.5, 0, BLACK), box(W * 0.86, 0.5, 0.01, 0, 0.525, 0.03, SCREEN)];
+    case 'plant':
+      return [cyl(0.17, 0.32, 0, 0, 0, POT, 0.21, 14), ball(0.24, 0, 0.6, 0, LEAF), ball(0.18, 0.12, 0.82, 0.05, LEAF_DARK), ball(0.16, -0.1, 0.78, -0.06, LEAF)];
+    case 'bars': {
+      const out = [box(W, 0.06, D, 0, H - 0.06, 0, BLACK), box(W, 0.06, D, 0, 1.0, 0, BLACK)];
+      for (let x = -W / 2 + 0.05; x <= W / 2 - 0.04; x += 0.13) out.push(cyl(0.015, H, x, 0, 0, hex(0x40444a), 0.015, 6));
+      return out;
+    }
+    case 'screen':
+      return [box(W, H, D, 0, 1.5, 0, BLACK), box(W - 0.2, H - 0.2, 0.02, 0, 1.6, D / 2, WHITE)];
+    case 'blackboard':
+      return [box(W, H, D, 0, 0.9, 0, hex(0x7a5a3a)), box(W - 0.1, H - 0.1, 0.02, 0, 0.95, D / 2, BOARD),
+        box(W - 0.2, 0.03, 0.08, 0, 0.88, D / 2 + 0.03, hex(0x7a5a3a))];
+    case 'machine':
+      return [rbox(W, H * 0.7, D, 0, 0, 0, hex(0x6f8a9a), 0.04), rbox(W * 0.5, H * 0.3, D * 0.4, -W * 0.15, H * 0.7, 0, hex(0x587080), 0.03),
+        box(0.3, 0.25, 0.03, W * 0.25, H * 0.5, D / 2, SCREEN), cyl(0.18, D * 0.9, W * 0.2, H * 0.72, 0, STEEL, 0.18, 14).rotateX(Math.PI / 2)];
+    case 'atm':
+      return [rbox(W, H, D, 0, 0, 0, hex(0x2c5a8a), 0.04), box(W * 0.6, 0.25, 0.02, 0, H * 0.62, D / 2, SCREEN), box(W * 0.4, 0.04, 0.12, 0, H * 0.45, D / 2, BLACK)];
+    case 'stage':
+      return [box(W, H, D, 0, 0, 0, BLACK), box(0.6, 1.2, 0.5, -W / 2 + 0.4, H, back + 0.4, hex(0x2a2a2a)), box(0.6, 1.2, 0.5, W / 2 - 0.4, H, back + 0.4, hex(0x2a2a2a)),
+        box(1.4, 0.8, 0.6, 0, H, 0, hex(0x3a3a46))];
+    case 'treadmill':
+      return [rbox(W, 0.18, D, 0, 0, 0, BLACK, 0.04), box(W - 0.14, 0.02, D - 0.3, 0, 0.18, 0.05, hex(0x2e3136)),
+        box(0.05, 1.0, 0.05, -W / 2 + 0.05, 0.18, back + 0.15, STEEL), box(0.05, 1.0, 0.05, W / 2 - 0.05, 0.18, back + 0.15, STEEL),
+        rbox(W, 0.12, 0.25, 0, 1.15, back + 0.15, BLACK, 0.03)];
+    case 'pallet':
+      return [box(W, 0.14, D, 0, 0, 0, hex(0xb08a5a)), box(W - 0.1, H - 0.18, D - 0.1, 0, 0.14, 0, hex(0xc9a777))];
+    // Lights: a shade lit warm from inside
+    case 'stairs': {
+      // Fourteen treads rising from the front (+z) to the back, a stringer and a handrail on posts.
+      const steps = 14;
+      const out: BufferGeometry[] = [];
+      for (let i = 0; i < steps; i++) {
+        const h = ((i + 1) / steps) * H;
+        out.push(box(W, h, D / steps + 0.004, 0, 0, D / 2 - (i + 0.5) * (D / steps), i % 2 ? OAK : hex(0xa67650)));
+      }
+      for (const t of [0.1, 0.5, 0.9]) out.push(box(0.04, 0.9, 0.04, W / 2 - 0.03, H * t, D / 2 - D * t, WALNUT));
+      out.push(box(0.06, 0.05, D * 0.95, W / 2 - 0.03, H * 0.5 + 0.9, 0, WALNUT));
+      return out;
+    }
+    case 'stairwell':
+      // The opening over the flight: a dark well and a guard rail on three sides.
+      return [box(W, 0.012, D, 0, 0, 0, hex(0x2a2622)),
+        box(0.05, H, D, -W / 2, 0, 0, WALNUT), box(0.05, H, D, W / 2, 0, 0, WALNUT),
+        box(W, H, 0.05, 0, 0, D / 2, WALNUT)];
+    case 'ceilingLamp':
+      return [cyl(0.05, 0.12, 0, H - 0.12, 0, STEEL, 0.05, 10), cyl(W / 2, 0.2, 0, 0.02, 0, SHADE, W / 2 * 0.55, 20), ball(0.08, 0, 0.05, 0, BULB)];
+    case 'floorLamp':
+      return [cyl(0.16, 0.03, 0, 0, 0, BLACK, 0.16, 16), cyl(0.018, H - 0.35, 0, 0.03, 0, BLACK, 0.018, 8), cyl(W / 2 * 0.6, 0.32, 0, H - 0.34, 0, SHADE, W / 2, 20)];
+    case 'tableLamp':
+      return [cyl(0.09, 0.03, 0, 0, 0, OAK, 0.1, 14), cyl(0.02, H - 0.25, 0, 0.03, 0, OAK, 0.02, 8), cyl(W / 2 * 0.65, 0.22, 0, H - 0.24, 0, SHADE, W / 2, 18)];
+  }
+}
+
+const SHADE = hex(0xfff0d0);
+const BULB = hex(0xfffbe8);
+
+/** What one furniture kind is built from, part by part, before its hidden faces are dropped (`scripts/model-sheet.mjs`): the primitive, its parameters, its colour, its edge rounding, its triangles and where it stands. */
+export function furnitureParts(kind: FurnitureKind): { shape: string; parameters: Record<string, number>; colour: string; rounding: number; triangles: number; at: [number, number, number] }[] {
+  const built = build(kind);
+  // The same hidden faces dropped as the rendered geometry's (`createFurnitureGeometries`), so the counts are the drawn ones.
+  dropHiddenFaces(built);
+  dropBuried(built);
+  return built.map((g) => {
+    g.computeBoundingBox();
+    const centre = g.boundingBox!.getCenter(new Vector3());
+    const round = g.getAttribute(ROUND_B);
+    const rgb = g.getAttribute('color');
+    const channel = (k: number): string => Math.round(rgb.getComponent(0, k) * 255).toString(16).padStart(2, '0');
+    const { parameters } = g as BufferGeometry & { parameters?: Record<string, number> };
+    const triangles = (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+    const out = { shape: g.type.replace('Geometry', ''), parameters: { ...parameters }, colour: `#${channel(0)}${channel(1)}${channel(2)}`, rounding: round ? round.getW(0) : 0, triangles, at: [centre.x, centre.y, centre.z] as [number, number, number] };
+    g.dispose();
+    return out;
+  });
+}
+
+/** One geometry per furniture kind, merged, vertex-coloured. */
+export function createFurnitureGeometries(): Record<FurnitureKind, BufferGeometry> {
+  const out = {} as Record<FurnitureKind, BufferGeometry>;
+  for (const kind of FURNITURE_KINDS) {
+    const built = build(kind);
+    // The faces a part lies under, then the ones it is buried in (a leg's end in a turned seat, a bulb in its shade, a ball of leaves in the
+    // next) left out.
+    dropHiddenFaces(built);
+    dropBuried(built);
+    const parts = built.map((g) => {
+      // Every part with the same attributes, so they merge: a part that is no box keeps its own normals (no rounding, radius 0).
+      const n = g.getAttribute('position').count;
+      if (!g.getAttribute('uv')) g.setAttribute('uv', new BufferAttribute(new Float32Array(n * 2), 2));
+      if (!g.getAttribute(ROUND_P)) {
+        g.setAttribute(ROUND_P, new BufferAttribute(new Float32Array(n * 3), 3));
+        g.setAttribute(ROUND_B, new BufferAttribute(new Float32Array(n * 4), 4));
+        g.setAttribute(ROUND_X, new BufferAttribute(new Float32Array(n * 3), 3));
+        g.setAttribute(ROUND_Y, new BufferAttribute(new Float32Array(n * 3), 3));
+      }
+      return g;
+    });
+    const merged = mergeGeometries(parts) as BufferGeometry;
+    merged.computeBoundingSphere();
+    for (const p of parts) p.dispose();
+    out[kind] = merged;
+  }
+  return out;
+}
+
+/** The rounding of a box's edges in its shading: the normal of the rounded box at the point of the plain one, the gradient of its distance
+ *  outside its inner box (Quilez, "distance functions", sdRoundBox: q = abs(p) - b + r, https://iquilezles.org/articles/distfunctions/).
+ *  On a face's middle it is the face's own normal; within r of an edge or a corner it turns as the rounded surface does. The outline stays square. */
+const ROUND_VERTEX = /* glsl */ `
+attribute vec3 ${ROUND_P};
+attribute vec4 ${ROUND_B};
+attribute vec3 ${ROUND_X};
+attribute vec3 ${ROUND_Y};
+varying vec3 vRoundP;
+varying vec4 vRoundB;
+varying vec3 vRoundX;
+varying vec3 vRoundY;
+varying vec3 vRoundZ;
+// A model direction carried to view space as three carries a normal (r186 defaultnormal_vertex): the instance's turn and scale, then normalMatrix.
+vec3 roundToView(vec3 v) {
+#ifdef USE_INSTANCING
+  mat3 im = mat3(instanceMatrix);
+  v /= vec3(dot(im[0], im[0]), dot(im[1], im[1]), dot(im[2], im[2]));
+  v = im * v;
+#endif
+  return normalMatrix * v;
+}`;
+const ROUND_VERTEX_MAIN = /* glsl */ `
+  vRoundP = ${ROUND_P};
+  vRoundB = ${ROUND_B};
+  vRoundX = roundToView(${ROUND_X});
+  vRoundY = roundToView(${ROUND_Y});
+  vRoundZ = roundToView(cross(${ROUND_X}, ${ROUND_Y}));`;
+const ROUND_FRAGMENT = /* glsl */ `
+varying vec3 vRoundP;
+varying vec4 vRoundB;
+varying vec3 vRoundX;
+varying vec3 vRoundY;
+varying vec3 vRoundZ;`;
+const ROUND_FRAGMENT_MAIN = /* glsl */ `
+  if (vRoundB.w > 0.0) {
+    vec3 roundQ = max(abs(vRoundP) - vRoundB.xyz + vRoundB.w, 0.0) * sign(vRoundP);
+    if (dot(roundQ, roundQ) > 0.0) normal = normalize(roundQ.x * vRoundX + roundQ.y * vRoundY + roundQ.z * vRoundZ);
+  }`;
+
+export function createFurnitureMaterial(): MeshStandardMaterial {
+  const material = new MeshStandardMaterial({ vertexColors: true, roughness: 0.68, metalness: 0.04 });
+  material.name = 'building-furniture';
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>${ROUND_VERTEX}`)
+      .replace('#include <defaultnormal_vertex>', `#include <defaultnormal_vertex>${ROUND_VERTEX_MAIN}`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>${ROUND_FRAGMENT}`)
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>${ROUND_FRAGMENT_MAIN}`);
+  };
+  material.customProgramCacheKey = () => 'building-furniture-rounded';
+  return material;
+}
+
+/** Each kind's colour as the eye takes it in from across a room */
+export function furnitureTones(geometry: Readonly<Record<FurnitureKind, BufferGeometry>>): Float32Array {
+  const out = new Float32Array(FURNITURE_KINDS.length * 3);
+  FURNITURE_KINDS.forEach((kind, k) => {
+    const g = geometry[kind];
+    const position = g.getAttribute('position'), colour = g.getAttribute('color'), index = g.index;
+    const corners = index ? index.count : position.count;
+    let r = 0, gr = 0, b = 0, total = 0;
+    for (let t = 0; t + 2 < corners; t += 3) {
+      const i0 = index ? index.getX(t) : t, i1 = index ? index.getX(t + 1) : t + 1, i2 = index ? index.getX(t + 2) : t + 2;
+      const ux = position.getX(i1) - position.getX(i0), uy = position.getY(i1) - position.getY(i0), uz = position.getZ(i1) - position.getZ(i0);
+      const vx = position.getX(i2) - position.getX(i0), vy = position.getY(i2) - position.getY(i0), vz = position.getZ(i2) - position.getZ(i0);
+      const area = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx) / 2;
+      r += area * (colour.getX(i0) + colour.getX(i1) + colour.getX(i2)) / 3;
+      gr += area * (colour.getY(i0) + colour.getY(i1) + colour.getY(i2)) / 3;
+      b += area * (colour.getZ(i0) + colour.getZ(i1) + colour.getZ(i2)) / 3;
+      total += area;
+    }
+    out.set(total > 0 ? [r / total, gr / total, b / total] : [0.5, 0.5, 0.5], k * 3);
+  });
+  return out;
+}

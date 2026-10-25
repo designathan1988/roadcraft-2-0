@@ -1,0 +1,195 @@
+import type { Vec2 } from '@core/vec2';
+import type { Viewport } from './viewport';
+
+/** THE CAMERA'S MOTION OVER TIME: the keys held and the wheel's notches turned into a glide, frame by frame */
+
+/** The camera's own keys, by `KeyboardEvent.code`. */
+const KEYS: Readonly<Record<string, readonly [Axis, 1 | -1]>> = {
+  KeyW: ['forward', 1], ArrowUp: ['forward', 1],
+  KeyS: ['forward', -1], ArrowDown: ['forward', -1],
+  KeyA: ['right', -1], ArrowLeft: ['right', -1],
+  KeyD: ['right', 1], ArrowRight: ['right', 1],
+  KeyQ: ['turn', -1], KeyE: ['turn', 1],
+  // Tilt on Page Up/Down: R and F (Cities: Skylines II's zoom keys) are the building's rotation and the walls tool here.
+  PageUp: ['tilt', 1], PageDown: ['tilt', -1],
+  Equal: ['zoom', 1], NumpadAdd: ['zoom', 1],
+  Minus: ['zoom', -1], NumpadSubtract: ['zoom', -1],
+};
+type Axis = 'forward' | 'right' | 'turn' | 'tilt' | 'zoom';
+const AXES: readonly Axis[] = ['forward', 'right', 'turn', 'tilt', 'zoom'];
+
+/** The pan's speed in screen pixels a second: at the closest zoom about a walk (1.5 m/s), far away a map's width in a few seconds. */
+const PAN_PX_PER_S = 700;
+/** Turn, rad/s (a quarter turn in a second), tilt, rad/s, and zoom, log factor a second. */
+const TURN_PER_S = 1.6;
+const TILT_PER_S = 0.9;
+const ZOOM_PER_S = 1.8;
+/** Shift held: this much faster. */
+const SHIFT = 3;
+/** How long a held key takes to reach its speed and to stop, s (time constant). */
+const EASE_S = 0.1;
+/** How long a notch of the wheel takes to be spent, s (time constant). */
+const ZOOM_EASE_S = 0.085;
+/** How long a quarter turn by Shift+Q/E takes to be spent, s. */
+const TURN_EASE_S = 0.12;
+
+export interface MotionHost {
+  view(): Viewport;
+  size(): { readonly w: number; readonly h: number };
+  /** The height of what is drawn under a screen point: the plane a zoom holds. */
+  heightUnder(at: { x: number; y: number }): number;
+}
+
+/** An aimed turn (`aim`) is over when less than this is left, rad; under `AIM_SNAP` the rest is taken at once. */
+const AIM_CLOSE = 1e-3;
+const AIM_SNAP = 4e-3;
+const AIM_MAX_S = 3;
+/** The longest step the glide takes at once, s: the exact steps hold for any length; this only bounds a resume after the tab slept. */
+const MAX_STEP_S = 1;
+
+export class CameraMotion {
+  private readonly held = new Map<string, readonly [Axis, 1 | -1]>();
+  private readonly velocity: Record<Axis, number> = { forward: 0, right: 0, turn: 0, tilt: 0, zoom: 0 };
+  private shift = false;
+  /** Zoom still to spend (log factor), the screen point it is about, and the ground point it holds there */
+  private pendingZoom = 0;
+  private zoomAt: { x: number; y: number; height: number; grabbed: Vec2 | null } = { x: 0, y: 0, height: 0, grabbed: null };
+  /** Turn still to spend, rad. */
+  private pendingTurn = 0;
+  /** A heading being turned to (`aim`): what is still left of the turn, asked again each frame, as the view now stands. */
+  private aiming: (() => number) | null = null;
+  /** Seconds the aim has been turning: given up after `AIM_MAX_S`, so a heading never reached cannot hold the frames going. */
+  private aimedFor = 0;
+  /** A glide starts at the key, notch or turn that began it - DO NOT measure its first step from the last frame drawn */
+  private at: number | null = null;
+
+  constructor(private readonly host: MotionHost) {}
+
+  /** Something began moving at `time`, ms: the glide counts from it if it was still. */
+  private wake(time: number): void {
+    if (this.at === null) this.at = time;
+  }
+
+  /** A key went down (at `time`, ms): true when it is one of the camera's. */
+  press(code: string, shift: boolean, time = performance.now()): boolean {
+    const binding = KEYS[code];
+    if (!binding) return false;
+    this.wake(time);
+    this.held.set(code, binding);
+    this.shift = shift;
+    return true;
+  }
+
+  /** A key came up. */
+  release(code: string, shift = false): void {
+    this.held.delete(code);
+    this.shift = shift;
+  }
+
+  /** Every key let go at once (the window lost focus). */
+  releaseAll(): void {
+    this.held.clear();
+    this.shift = false;
+  }
+
+  /** Whether `code` is one of the camera's keys. */
+  static owns(code: string): boolean {
+    return code in KEYS;
+  }
+
+  /** A notch of the wheel: `logFactor` of zoom (positive: closer) about the screen point `at`. */
+  wheel(logFactor: number, at: { x: number; y: number }, time = performance.now()): void {
+    this.wake(time);
+    // A new point: what is left of the last notch goes to the new one.
+    if (this.pendingZoom === 0 || Math.hypot(at.x - this.zoomAt.x, at.y - this.zoomAt.y) > 2) {
+      const ground = this.host.heightUnder(at);
+      const held = this.host.view().grab?.(at.x, at.y, ground) ?? null;
+      this.zoomAt = { x: at.x, y: at.y, height: held ? held.height : ground, grabbed: held ? held.world : null };
+    }
+    this.pendingZoom += logFactor;
+  }
+
+  /** A turn to spend smoothly (Shift+Q/E's quarter turn), rad. */
+  turn(angle: number, time = performance.now()): void {
+    this.wake(time);
+    this.pendingTurn += angle;
+  }
+
+  /** Turns smoothly to a heading (the compass's north): `left` gives the turn still wanted */
+  aim(left: () => number, time = performance.now()): void {
+    this.wake(time);
+    this.aiming = left;
+    this.aimedFor = 0;
+  }
+
+  /** Stops everything at once. */
+  stop(): void {
+    this.held.clear();
+    for (const axis of AXES) this.velocity[axis] = 0;
+    this.pendingZoom = 0;
+    this.pendingTurn = 0;
+    this.aiming = null;
+    this.at = null;
+  }
+
+  /** Something is still moving (or held): the frame loop keeps going. */
+  get moving(): boolean {
+    return this.held.size > 0 || this.pendingZoom !== 0 || this.pendingTurn !== 0 || this.aiming !== null
+      || AXES.some((axis) => this.velocity[axis] !== 0);
+  }
+
+  /** DO NOT step a position by the speed at the end of the step times the step, nor cut the step to a tenth of a second */
+  step(now: number): boolean {
+    if (!this.moving) {
+      this.at = null;
+      return false;
+    }
+    const since = this.at ?? now;
+    const seconds = Math.min(MAX_STEP_S, Math.max(0, (now - since) / 1000));
+    this.at = Math.max(since, now);
+    const view = this.host.view();
+    const { w, h } = this.host.size();
+    const goal: Record<Axis, number> = { forward: 0, right: 0, turn: 0, tilt: 0, zoom: 0 };
+    for (const [axis, sign] of this.held.values()) goal[axis] += sign;
+    const keep = Math.exp(-seconds / EASE_S);
+    /** How far each axis went over the step, in its speed times seconds. */
+    const travel: Record<Axis, number> = { forward: 0, right: 0, turn: 0, tilt: 0, zoom: 0 };
+    for (const axis of AXES) {
+      const g = Math.max(-1, Math.min(1, goal[axis])) * (this.shift ? SHIFT : 1);
+      const v0 = this.velocity[axis];
+      travel[axis] = g * seconds + (v0 - g) * EASE_S * (1 - keep);
+      let v = g + (v0 - g) * keep;
+      if (g === 0 && Math.abs(v) < 0.002) v = 0;
+      this.velocity[axis] = v;
+    }
+    if (travel.forward !== 0 || travel.right !== 0) {
+      const units = PAN_PX_PER_S / Math.max(1e-6, view.zoom);
+      view.slide(travel.right * units, travel.forward * units);
+    }
+    let turn = travel.turn * TURN_PER_S;
+    if (this.pendingTurn !== 0) {
+      const spend = Math.abs(this.pendingTurn) < 1e-4 ? this.pendingTurn : this.pendingTurn * (1 - Math.exp(-seconds / TURN_EASE_S));
+      this.pendingTurn -= spend;
+      turn += spend;
+    }
+    if (this.aiming) {
+      const left = this.aiming();
+      this.aimedFor += seconds;
+      if (!Number.isFinite(left) || Math.abs(left) < AIM_CLOSE || this.aimedFor > AIM_MAX_S) this.aiming = null;
+      else turn += Math.abs(left) < AIM_SNAP ? left : left * (1 - Math.exp(-seconds / TURN_EASE_S));
+    }
+    const tilt = travel.tilt * TILT_PER_S;
+    if (turn !== 0 || tilt !== 0) view.orbit(turn, tilt);
+    if (travel.zoom !== 0) view.zoomAt(w / 2, h / 2, Math.exp(travel.zoom * ZOOM_PER_S), w, h, this.host.heightUnder({ x: w / 2, y: h / 2 }));
+    if (this.pendingZoom !== 0) {
+      const spend = Math.abs(this.pendingZoom) < 1e-4 ? this.pendingZoom : this.pendingZoom * (1 - Math.exp(-seconds / ZOOM_EASE_S));
+      this.pendingZoom -= spend;
+      const at = this.zoomAt;
+      if (at.grabbed) view.zoomAt(at.x, at.y, Math.exp(spend), w, h, at.height, at.grabbed);
+      else view.zoomAt(w / 2, h / 2, Math.exp(spend), w, h, this.host.heightUnder({ x: w / 2, y: h / 2 }));
+    }
+    // Still: the next glide counts from what starts it, not from this frame.
+    if (!this.moving) this.at = null;
+    return true;
+  }
+}

@@ -1,0 +1,210 @@
+import type { Mesh } from 'three';
+import { cancelWarm, reserveWarm, warmFull, warmLooseAhead } from '../uploads';
+import { type BuildingMeshes, meshesOf } from './buildingMesh';
+import { type CellMass, cellBytes, SHELL_MESH } from './cellArrays';
+import type { CellEnv, CellPool } from './cellPool';
+import type { CellEntry, CellResult, ChunkSummary } from './cellWork';
+import { sameEntries } from './chunk';
+import type { BuildingKit } from './kit';
+import { PartCell } from './partCells';
+import { filingBytes } from './partFiling';
+import { SHELL_PARTS } from './shellParts';
+
+/** THE BUILDINGS' CELLS ASKED OF THE WORKERS AND LANDED (`layer.ts`) */
+
+/** A cell's batches as landed: its shells, panes and furniture, and its parts by sub-cell (`partCells.ts`). */
+export interface LandedCell {
+  readonly entries: readonly CellEntry[];
+  readonly batch: BuildingMeshes | null;
+  readonly parts: PartCell | null;
+  /** What its batches send to the GPU, bytes (`cellBytes`): the layer's residency budget counts it. */
+  readonly bytes: number;
+}
+
+interface Landing extends LandedCell { uploads: number }
+
+/** A cell's detail (L0) or its facade level (L1, `emitChunk` `far`). */
+export type BatchKind = 'cell' | 'facade';
+
+/** The most holes (`want` with `hole`) asked past a full upload queue at once, until their meshes are on the GPU: what that queue grows by at a reopening. */
+export const MOST_HOLES = 4;
+
+export class CellRequests {
+  /** The levels asked past a full queue as a hole in the view: counted while asked or on their way to the GPU (`MOST_HOLES`). */
+  private readonly holes = new Set<string>();
+  private readonly asked = new Map<string, { readonly entries: readonly CellEntry[]; id: number; readonly release: () => void }>();
+  private readonly landed = new Map<string, Landing>();
+  /** Summary jobs asked and not answered: cancelled with the rest (`clear`). */
+  private readonly summaries = new Set<number>();
+  /** Each cell's masses asked and not answered, by the job's id. */
+  private readonly masses = new Map<string, number>();
+
+  /** `admit`: whether a level landed is still wanted within the GPU's room, its bytes measured (refused: disposed, never uploaded); `rank`: its upload's pixels of error (`uploads.ts`). */
+  constructor(private readonly pool: CellPool, private readonly kit: BuildingKit, private readonly onSummaries: (summaries: readonly ChunkSummary[], entries: readonly CellEntry[], env: CellEnv) => void,
+    private readonly admit: (kind: BatchKind, cell: string, bytes: number) => boolean = () => true, private readonly rank: (kind: BatchKind, cell: string) => number = () => 0,
+    private readonly estimate: (kind: BatchKind, cell: string) => number = () => 0) {}
+
+  /** Cells asked and not landed, or landed and still on their way to the GPU. */
+  get waiting(): number {
+    let n = this.asked.size;
+    for (const l of this.landed.values()) if (l.uploads > 0) n++;
+    return n;
+  }
+
+  /** `cell`'s batches made of `entries`, once landed and (with `upload`) on the GPU; null while they are made */
+  /** `pair`: the cell steps between its levels as the eye moves (`massCells.ts` PAIR_REACH): its job walks each building for both, kept together (`cellWork.ts` CellJob.pair). */
+  want(kind: BatchKind, cell: string, entries: readonly CellEntry[], env: CellEnv, upload: boolean, edited = false, hole = false, pair = false): LandedCell | null {
+    const key = `${kind}|${cell}`;
+    const got = this.landed.get(key);
+    if (got && sameEntries(got.entries, entries)) return got.uploads > 0 ? null : got;
+    if (got) { disposeLanded(got); this.landed.delete(key); }
+    const asked = this.asked.get(key);
+    if (asked && sameEntries(asked.entries, entries)) return null;
+    // DO NOT ask a level to upload while the upload queue is full (`uploads.ts` warmFull): its arrays waited on the page behind every other one (the renderer at 7.3 GB in a re-bake, conf77, 2026-10-17). What is drawn stands, asked again next frame; a building cut open always goes.
+    // `hole`: a cell the view wants in detail with no level of it landed, the building at the camera in its masses: it goes too, `MOST_HOLES` at once (DO NOT hold it behind the reopening's far levels and masses: conferencia 93-108, picture 51).
+    if (upload && warmFull() && !edited && !entries.some((e) => e.key.includes('|'))) {
+      if (!hole || !this.holeRoom()) return null;
+    }
+    // Replaced by the cell as it is now: never sent if waiting, its answer dropped if begun (the queue's key does the same).
+    if (asked) { this.pool.supersede(asked.id); asked.release(); }
+    // What it will bring to the upload queue, held there from now (`reserveWarm`): the queue's ceiling counts the jobs in flight.
+    const ask = { entries, id: 0, release: upload ? reserveWarm(this.estimate(kind, cell)) : () => {} };
+    this.asked.set(key, ask);
+    if (hole) this.holes.add(key);
+    ask.id = this.pool.run(kind, cell, entries, env, (result) => {
+      if (this.asked.get(key) !== ask) return;
+      this.asked.delete(key);
+      ask.release();
+      this.onSummaries(result.summaries, entries, env);
+      const landing = this.land(kind, cell, entries, result, upload);
+      if (landing) this.landed.set(key, landing);
+    }, key, edited, false, pair);
+    // Where no worker runs the job is done by now.
+    const now = this.landed.get(key);
+    return now && now.entries === entries && now.uploads === 0 ? now : null;
+  }
+
+  /** Whether another hole may be asked past the limits (a full upload queue, `layer.ts` STREAM_AHEAD): fewer than `MOST_HOLES` asked or on their way to the GPU. */
+  holeRoom(): boolean {
+    return this.holesInFlight() < MOST_HOLES;
+  }
+
+  /** The holes asked still asked or on their way to the GPU; the others forgotten. */
+  private holesInFlight(): number {
+    let n = 0;
+    for (const key of this.holes) {
+      if (this.asked.has(key) || (this.landed.get(key)?.uploads ?? 0) > 0) n++;
+      else this.holes.delete(key);
+    }
+    return n;
+  }
+
+  /** A cell's batches taken to be shown: the layer's to dispose from now on. */
+  take(kind: BatchKind, cell: string): void {
+    this.landed.delete(`${kind}|${cell}`);
+  }
+
+  /** Cells asked and not landed yet. */
+  get asking(): number {
+    return this.asked.size;
+  }
+
+  /** Whether a cell has been asked for and not landed yet. */
+  isAsked(kind: BatchKind, cell: string): boolean {
+    return this.asked.has(`${kind}|${cell}`);
+  }
+
+  /** A cell no longer wanted (drawn far before it landed): its request cancelled, its batches if landed disposed. */
+  drop(kind: BatchKind, cell: string): void {
+    const key = `${kind}|${cell}`;
+    const asked = this.asked.get(key);
+    if (asked) { this.pool.cancel(asked.id); this.asked.delete(key); asked.release(); }
+    const got = this.landed.get(key);
+    if (got) { disposeLanded(got); this.landed.delete(key); }
+  }
+
+  /** What the page keeps of these far buildings (their flags), with no batch made. */
+  summarize(cell: string, entries: readonly CellEntry[], env: CellEnv): void {
+    // DO NOT read `id` in the answer before it is given: on the page the answer comes inside `run`.
+    let id = -1;
+    id = this.pool.run('summary', cell, entries, env, (result) => {
+      this.summaries.delete(id);
+      this.onSummaries(result.summaries, entries, env);
+    });
+    // Done at once where no worker runs: nothing left to cancel.
+    if (this.pool.isRunning(id)) this.summaries.add(id);
+  }
+
+  /** A cell's masses from afar made of `entries` (`cellWork.ts` 'mass'), handed to `done` when they come */
+  mass(cell: string, entries: readonly CellEntry[], env: CellEnv, done: (mass: CellMass | null) => void, edited = false): boolean {
+    // The upload queue full: not asked (the caller asks again next frame), as `want`; never what the player just edited.
+    if (warmFull() && !edited) return false;
+    const was = this.masses.get(cell);
+    if (was !== undefined) { this.pool.cancel(was); this.masses.delete(cell); }
+    let id = -1;
+    id = this.pool.run('mass', cell, entries, env, (result) => {
+      if (this.masses.get(cell) === id) this.masses.delete(cell);
+      done(result.mass ?? null);
+    }, `mass|${cell}`, edited);
+    if (this.pool.isRunning(id)) this.masses.set(cell, id);
+    return true;
+  }
+
+  /** A cell's masses no longer wanted (it has no building left). */
+  dropMass(cell: string): void {
+    const id = this.masses.get(cell);
+    if (id === undefined) return;
+    this.pool.cancel(id);
+    this.masses.delete(cell);
+  }
+
+  /** Cells whose masses are asked and not come. */
+  get massing(): number {
+    return this.masses.size;
+  }
+
+  /** Every request forgotten and every batch not taken disposed (a context restored, the layer gone). */
+  clear(): void {
+    for (const { id, release } of this.asked.values()) { this.pool.cancel(id); release(); }
+    this.asked.clear();
+    for (const id of this.summaries) this.pool.cancel(id);
+    this.summaries.clear();
+    for (const id of this.masses.values()) this.pool.cancel(id);
+    this.masses.clear();
+    for (const l of this.landed.values()) disposeLanded(l);
+    this.landed.clear();
+  }
+
+  /** The batches wrapped in meshes, and sent to the GPU ahead (`warmLooseAhead`) when `upload` and admitted; null when refused (DO NOT upload a level the room has no place for: it was sent before the layer chose to show it). */
+  private land(kind: BatchKind, cell: string, entries: readonly CellEntry[], result: CellResult, upload: boolean): Landing | null {
+    let bytes = result.batch ? cellBytes(result.batch) : 0;
+    if (result.parts) bytes += filingBytes(result.parts);
+    if (upload && !this.admit(kind, cell, bytes)) return null;
+    const batch = result.batch ? meshesOf(result.batch, this.kit, false, false) : null;
+    // A facade cell's detailed parts are batched by kind for the whole town (`farParts.ts`); its shell's parts stay here.
+    const parts = result.parts
+      ? new PartCell(cell, kind === 'facade' ? { bands: result.parts.bands.filter((band) => SHELL_PARTS.has(band.kind)) } : result.parts, this.kit, result.parts)
+      : null;
+    const landing: Landing = { entries, batch, parts, bytes, uploads: 0 };
+    if (!upload) return landing;
+    const sent = warmLooseAhead(meshesIn(landing), () => this.rank(kind, cell));
+    if (sent) { landing.uploads++; void sent.then(() => { landing.uploads--; }); }
+    return landing;
+  }
+}
+
+/** Every mesh of a landed cell, but its shells: those go into the multi-draw batch when the cell is shown, and their arrays are still
+ *  read there (a warmed mesh has them let go once uploaded, `gpuOnly.ts`). */
+function meshesIn(l: LandedCell): Mesh[] {
+  const meshes: Mesh[] = [];
+  l.batch?.group.traverse((o) => { const mesh = o as Mesh; if (mesh.isMesh && mesh.name !== SHELL_MESH) meshes.push(mesh); });
+  if (l.parts) meshes.push(...l.parts.warmMeshes());
+  return meshes;
+}
+
+/** DO NOT dispose first: a mesh still queued was drawn after and its geometry went back to the GPU with no owner. */
+function disposeLanded(l: LandedCell): void {
+  cancelWarm(meshesIn(l));
+  l.batch?.dispose();
+  l.parts?.dispose();
+}

@@ -1,0 +1,130 @@
+[
+  {
+    "id": "female-adult-casual",
+    "wardrobe": "casual",
+    "ageBand": "adult",
+    "gender": "f",
+    "rides": false,
+    "mood": 0.5069647091557272
+  },
+  {
+    "id": "female-adult-sport-casual",
+    "wardrobe": "sport-casual",
+    "ageBand": "adult",
+    "gender": "f",
+    "rides": true,
+    "mood": 0.5036483513540588
+  },
+  {
+    "id": "female-adult-smart-casual",
+    "wardrobe": "smart-casual",
+    "ageBand": "adult",
+    "gender": "f",
+    "rides": true,
+    "mood": 0.33765439412090925
+  },
+  {
+    "id": "female-adult-business",
+    "wardrobe": "business",
+    "ageBand": "adult",
+    "gender": "f",
+    "rides": false,
+    "mood": 0.5985761431162245
+  },
+  {
+    "id": "female-young-casual",
+    "wardrobe": "casual",
+    "ageBand": "young",
+    "gender": "f",
+    "rides": false,
+    "mood": 0.4002887956565246
+  },
+  {
+    "id": "female-senior-casual",
+    "wardrobe": "casual",
+    "ageBand": "senior",
+    "gender": "f",
+    "rides": false,
+    "mood": 0.32435258398763833
+  },
+  {
+    "id": "female-child-casual",
+    "wardrobe": "casual",
+    "ageBand": "child",
+    "gender": "f",
+    "rides": false,
+    "mood": 0
+  },
+  {
+    "id": "female-child-sport-casual",
+    "wardrobe": "sport-casual",
+    "ageBand": "child",
+    "gender": "f",
+    "rides": false,
+    "mood": 0
+  },
+  {
+    "id": "male-adult-casual",
+    "wardrobe": "casual",
+    "ageBand": "adult",
+    "gender": "m",
+    "rides": true,
+    "mood": 0.41599298146320507
+  },
+  {
+    "id": "male-adult-sport-casual",
+    "wardrobe": "sport-casual",
+    "ageBand": "adult",
+    "gender": "m",
+    "rides": true,
+    "mood": 0.5493310998892411
+  },
+  {
+    "id": "male-adult-smart-casual",
+    "wardrobe": "smart-casual",
+    "ageBand": "adult",
+    "gender": "m",
+    "rides": true,
+    "mood": 0.0766998668666929
+  },
+  {
+    "id": "male-adult-business",
+    "wardrobe": "business",
+    "ageBand": "adult",
+    "gender": "m",
+    "rides": false,
+    "mood": 0.1401401347015053
+  },
+  {
+    "id": "male-young-casual",
+    "wardrobe": "casual",
+    "ageBand": "young",
+    "gender": "m",
+    "rides": true,
+    "mood": 0.2982911310507916
+  },
+  {
+    "id": "male-senior-casual",
+    "wardrobe": "casual",
+    "ageBand": "senior",
+    "gender": "m",
+    "rides": false,
+    "mood": 0.3565810386557132
+  },
+  {
+    "id": "male-child-casual",
+    "wardrobe": "casual",
+    "ageBand": "child",
+    "gender": "m",
+    "rides": false,
+    "mood": 0
+  },
+  {
+    "id": "male-child-sport-casual",
+    "wardrobe": "sport-casual",
+    "ageBand": "child",
+    "gender": "m",
+    "rides": false,
+    "mood": 0
+  }
+]

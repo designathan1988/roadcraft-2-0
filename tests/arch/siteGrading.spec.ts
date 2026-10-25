@@ -1,0 +1,41 @@
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+/** THE SITES GRADED AS THEIR BUILDINGS COME (2026-10-15) */
+const read = (path: string): string => readFileSync(path, 'utf8');
+/** Comments blanked: a word in a note is not code. */
+const code = (path: string): string => read(path).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/.*$/gm, '$1');
+
+describe('the sites graded', () => {
+  it('in the frames while a world job makes its road tiles', () => {
+    const renderer = code('src/render/renderer.ts');
+    // Level ground (a generated city's new map) grades nothing: its buildings were grown on it.
+    expect(renderer).toMatch(/if \(!levelLand && !\(worldJob && worldJobGround\) && gradedFor !== net\.doc\.buildings\.revision\)/);
+    expect(renderer).not.toMatch(/!worldJob && gradedFor/);
+    // Set when the job starts, cleared once its ground is shaped.
+    expect(renderer).toMatch(/worldJob = worldSteps\([^;]*\);\s*worldJobFresh = true;\s*worldJobGround = true;/);
+    expect(renderer).toMatch(/yield\* shapeBlocksSteps\(net, blocks\);\s*(?:performance\.mark\('world:shaped'\);\s*)?pendingBlocks = \[\];\s*worldJobGround = false;/);
+  });
+
+  it('shape the corners of their regions, not every box against every region', () => {
+    const terrain = code('src/render/terrain.ts');
+    const pass = terrain.slice(terrain.indexOf('const shapeToRoads = ('), terrain.indexOf('const normal = geometry.getAttribute'));
+    expect(pass).toMatch(/shapeCorners\(corners, natural, shape, regions, visited, pass,/);
+    expect(pass).not.toMatch(/shapeBounds\(\)/);
+  });
+
+  it('do not floor the camera\'s solids again', () => {
+    const renderer = code('src/render/renderer.ts');
+    expect(renderer).toMatch(/cameraSolidsKept\.follow\(net\.doc\.buildings, floorGroundSince\)/);
+    // The floors follow what they read (the natural ground, the roads' heights), never the ground shaped to the roads and the sites.
+    expect(renderer).toMatch(/const FLOOR_KINDS: readonly ChangeKind\[\] = \['elevation', 'terrain'\];/);
+    expect(renderer).toMatch(/groundDiary\?\.since\(since, FLOOR_KINDS\)/);
+  });
+
+  it('work each platform out alone, each building\'s frame turned once', () => {
+    expect(code('src/world/buildings/siteGrading.ts')).not.toMatch(/buildingPads\(\[/);
+    for (const path of ['src/world/buildings/foundation.ts', 'src/world/buildings/lots.ts']) {
+      expect(code(path), path).not.toMatch(/\blocalToWorld\(|\bworldToLocal\(/);
+    }
+  });
+});

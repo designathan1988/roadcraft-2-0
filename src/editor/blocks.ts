@@ -1,0 +1,49 @@
+import type { Vec2 } from '@core/vec2';
+import type { RoadDoc } from '@world/doc';
+import type { Network } from '@world/network';
+import { m } from '@world/units';
+import type { SegmentParking } from '@world/parking';
+import { commitRoadPath } from './commit';
+import { findAnchor, type Anchor } from './snap';
+
+/** Several blocks at once: a grid of streets laid in one gesture */
+export interface BlockGrid {
+  readonly cols: number;
+  readonly rows: number;
+  /** Distance between street centrelines, metres (whole metres: the zoning subgrid). */
+  readonly blockMetres: number;
+  /** Turn of the grid, radians. */
+  readonly angle: number;
+}
+
+/** The street lines of a grid, as pairs of world points. */
+export function blockGridLines(centre: Vec2, grid: BlockGrid): [Vec2, Vec2][] {
+  const step = m(Math.round(grid.blockMetres));
+  const w = grid.cols * step, h = grid.rows * step;
+  const c = Math.cos(grid.angle), s = Math.sin(grid.angle);
+  const at = (u: number, v: number): Vec2 => ({ x: centre.x + u * c - v * s, y: centre.y + u * s + v * c });
+  const lines: [Vec2, Vec2][] = [];
+  for (let j = 0; j <= grid.rows; j++) lines.push([at(-w / 2, -h / 2 + j * step), at(w / 2, -h / 2 + j * step)]);
+  for (let i = 0; i <= grid.cols; i++) lines.push([at(-w / 2 + i * step, -h / 2), at(-w / 2 + i * step, h / 2)]);
+  return lines;
+}
+
+/** DO NOT make a network per line: each was built from nothing over the whole map, as many times as the grid has lines. */
+export function commitBlockGrid(
+  doc: RoadDoc, net: Network, centre: Vec2, grid: BlockGrid, type: number, lanes: number | null, parking?: SegmentParking,
+): number {
+  let laid = 0;
+  // `net` is built for `doc` (the caller's is: every edit rebuilds it), and each line laid hands it back current
+  for (const [a, b] of blockGridLines(centre, grid)) {
+    // Ends join what is already there (an earlier line, an existing street).
+    const anchor = (p: Vec2): Anchor => {
+      const hit = findAnchor(doc, net, p, 4);
+      return hit.kind === 'free' ? { kind: 'free', at: p } : hit;
+    };
+    const start = anchor(a), end = anchor(b);
+    const result = commitRoadPath(doc, net, start, end, type,
+      [{ start: { at: start.at, heightOffset: 0 }, end: { at: end.at, heightOffset: 0 }, curve: null }], lanes, parking);
+    if (result.committed) laid++;
+  }
+  return laid;
+}

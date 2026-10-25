@@ -1,0 +1,164 @@
+import type { Vec2 } from '@core/vec2';
+import type { NodeId, SegmentId } from '../ids';
+import { ACCESS_REACH, MAX_ITEM_RADIUS, type LandscapeItem, type LandscapeKind, type SnapLocal, crossingAccessTester, crossingAccessesAt, plantedMedian, snapLandscape } from '../landscape';
+import { travelShift } from '../roadTypes';
+import type { Network } from '../network';
+import { carriesPedestrians } from '../pedestrianAccess';
+import type { RoadSide } from '../roadTypes';
+import { BENCH_ZONE, sectionOf, zonesOn } from '../section';
+import { FURNITURE_CATALOG, furnitureEntry } from './furnitureCatalog';
+import { m } from '../units';
+
+/** THE FURNITURE A NEW ROAD IS BUILT WITH */
+export type FurnitureSet = 'complete' | 'basic' | 'none';
+export const FURNITURE_SETS: readonly FurnitureSet[] = ['complete', 'basic', 'none'];
+export const isFurnitureSet = (v: unknown): v is FurnitureSet => v === 'complete' || v === 'basic' || v === 'none';
+
+/** NBR 9050 6.12.3: the least clear walking strip. */
+export const NBR9050_CLEAR_WALK = m(1.2);
+
+interface Pattern {
+  readonly kind: LandscapeKind;
+  /** Spacing along the side, world units. */
+  readonly every: number;
+  /** First station past the corner, world units. */
+  readonly first: number;
+  /** Only on the right side of a -> b (one a street, as hydrants stand). */
+  readonly rightOnly?: true;
+}
+
+
+/** Each set's patterns, from the catalogue (`furnitureCatalog.ts`), in its order. */
+const SETS: Readonly<Record<Exclude<FurnitureSet, 'none'>, readonly Pattern[]>> = {
+  complete: patternsOf('complete'),
+  basic: patternsOf('basic'),
+};
+function patternsOf(set: 'complete' | 'basic'): Pattern[] {
+  return FURNITURE_CATALOG.filter((e) => e.sets.includes(set))
+    .map((e) => ({ kind: e.kind, every: e.every, first: e.first, ...(e.rightOnly ? { rightOnly: true as const } : {}) }));
+}
+
+/** The cell of the nearby-items grid, world units. */
+export const CELL = m(50);
+/** The cell a street's items are filed in for each piece's look round it (`SnapLocal.around`). */
+const NEAR_CELL = m(10);
+
+/** A street's items filed by place: a piece looks at those round it, never the street's every item. */
+function nearGrid(): { file(item: LandscapeItem): void; around(at: Vec2, radius: number): LandscapeItem[] } {
+  const cells = new Map<string, LandscapeItem[]>();
+  return {
+    file(item) {
+      const key = `${Math.floor(item.x / NEAR_CELL)},${Math.floor(item.y / NEAR_CELL)}`;
+      const list = cells.get(key);
+      if (list) list.push(item); else cells.set(key, [item]);
+    },
+    around(at, radius) {
+      const out: LandscapeItem[] = [];
+      for (let cx = Math.floor((at.x - radius) / NEAR_CELL); cx <= Math.floor((at.x + radius) / NEAR_CELL); cx++) {
+        for (let cy = Math.floor((at.y - radius) / NEAR_CELL); cy <= Math.floor((at.y + radius) / NEAR_CELL); cy++) out.push(...(cells.get(`${cx},${cy}`) ?? []));
+      }
+      return out;
+    },
+  };
+}
+
+export interface FurniturePlacement {
+  readonly kind: LandscapeKind;
+  readonly at: Vec2;
+}
+
+/** The pieces of `set` along the given segments, each where the landscaping tool would accept it among `existing` */
+export function furnitureFor(net: Network, segments: Iterable<SegmentId>, set: FurnitureSet,
+  /** The items standing to place among; absent (the way to call it): the document's own, asked by place round each street */
+  existing: Iterable<LandscapeItem> | null,
+  /** The left side carries a power line whose poles hold the street lights (`editor/roads/powerLine.ts`): no lamp columns there. */
+  powerLeft = false,
+  /** Street trees, on the footways and down a planted median; the rest of the set without them when false. */
+  trees = true): FurniturePlacement[] {
+  if (set === 'none') return [];
+  const out: FurniturePlacement[] = [];
+  // The items handed in and the pieces chosen here, in cells: each street asks only those near it
+  const grid = new Map<string, LandscapeItem[]>();
+  const cellOf = (x: number, y: number): string => `${Math.floor(x / CELL)},${Math.floor(y / CELL)}`;
+  const file = (item: LandscapeItem): void => {
+    const key = cellOf(item.x, item.y);
+    let list = grid.get(key);
+    if (!list) grid.set(key, list = []);
+    list.push(item);
+  };
+  for (const item of existing ?? []) file(item);
+  const streets = [...segments].sort((a, b) => a - b).filter((id) => {
+    const segment = net.doc.segment(id), ribbon = net.ribbons.get(id);
+    return !!segment && !!ribbon && carriesPedestrians(ribbon.road) && ribbon.road.sidewalk > 0;
+  });
+  // DO NOT ask the roads round each piece for the crossings' landings (`nearCrossingAccess`, an 80 m query a candidate): the landings of the nodes round the streets filed once.
+  const nodes = new Set<NodeId>();
+  for (const id of streets) {
+    const ribbon = net.ribbons.get(id)!, box = ribbon.full.bbox;
+    const r = ribbon.road.width / 2 + ribbon.road.sidewalk + m(4) + ACCESS_REACH + MAX_ITEM_RADIUS;
+    for (const near of net.ribbonsMeeting([box.minX - r, box.minY - r, box.maxX + r, box.maxY + r])) {
+      const s = net.doc.segment(near.id);
+      if (s) { nodes.add(s.a); nodes.add(s.b); }
+    }
+  }
+  const onAccess = crossingAccessTester(net, crossingAccessesAt(net, [...nodes].sort((a, b) => a - b)));
+  let nextId = -1;
+  for (const id of streets) {
+    const segment = net.doc.requireSegment(id), ribbon = net.ribbons.get(id)!;
+    const box = ribbon.full.bbox, pad = ribbon.road.width / 2 + ribbon.road.sidewalk + m(4);
+    const items: LandscapeItem[] = [];
+    for (let cx = Math.floor((box.minX - pad) / CELL); cx <= Math.floor((box.maxX + pad) / CELL); cx++) {
+      for (let cy = Math.floor((box.minY - pad) / CELL); cy <= Math.floor((box.maxY + pad) / CELL); cy++) items.push(...(grid.get(`${cx},${cy}`) ?? []));
+    }
+    const area = [box.minX - pad, box.minY - pad, box.maxX + pad, box.maxY + pad] as const;
+    if (existing === null) items.push(...net.doc.landscapeIn(area));
+    // DO NOT file every pole of the map for each road drawn.
+    for (const pole of net.doc.polesIn(area)) items.push({ id: -1_000_000 - pole.id, kind: 'lamp', x: pole.x, y: pole.y });
+    const near = nearGrid();
+    for (const item of items) near.file(item);
+    const local: SnapLocal = { onAccess, around: near.around };
+    const keep = (item: LandscapeItem): void => { items.push(item); near.file(item); file(item); };
+    const line = ribbon.full;
+    const section = sectionOf(ribbon.road, segment.direction);
+    const startS = net.mouthDistance(id, segment.a);
+    const endS = line.length - net.mouthDistance(id, segment.b);
+    // A planted median takes the street's trees (a boulevard's row down the middle)
+    const medianTrees = trees && set === 'complete' && segment.direction === 'both' && plantedMedian(ribbon.road);
+    if (medianTrees) {
+      const shift = travelShift(ribbon.road);
+      for (let s = startS + m(8); s <= endS - m(6); s += m(10)) {
+        const f = line.sampleAt(s);
+        const snap = snapLandscape(net, items, 'tree', { x: f.p.x + f.n.x * shift, y: f.p.y + f.n.y * shift }, m(0.6), local);
+        if (!snap.ok || !snap.median || snap.median.segment !== id) continue;
+        out.push({ kind: 'tree', at: snap.at });
+        keep({ id: nextId--, kind: 'tree', x: snap.at.x, y: snap.at.y });
+      }
+    }
+    for (const side of ['right', 'left'] as const satisfies readonly RoadSide[]) {
+      const zones = zonesOn(section, side);
+      // The footway from the kerb face to its outer edge.
+      const footway = Math.max(zones.through.outer, zones.frontage.outer) - zones.furnishing.inner;
+      const sign = side === 'left' ? 1 : -1;
+      // Into the furnishing zone; `snapLandscape` sets each kind's own depth.
+      const depth = (zones.furnishing.inner + zones.furnishing.outer) / 2;
+      // The left side staggered half a lamp spacing from the right.
+      const stagger = side === 'left' ? m(15) : 0;
+      for (const pattern of SETS[set]) {
+        if (pattern.rightOnly && side !== 'right') continue;
+        if (pattern.kind === 'lamp' && powerLeft && side === 'left') continue;
+        if (pattern.kind === 'tree' && (medianTrees || !trees)) continue;
+        // NBR 9050: the piece leaves a clear walk of 1,20 m beside it, or it is not put.
+        if (footway - (furnitureEntry(pattern.kind)?.depth ?? BENCH_ZONE) < NBR9050_CLEAR_WALK - 1e-6) continue;
+        for (let s = startS + pattern.first + (pattern.kind === 'lamp' ? stagger : 0); s <= endS - m(4); s += pattern.every) {
+          const f = line.sampleAt(s);
+          const at = { x: f.p.x + f.n.x * depth * sign, y: f.p.y + f.n.y * depth * sign };
+          const snap = snapLandscape(net, items, pattern.kind, at, m(0.6), local);
+          if (!snap.ok || snap.hit?.segment !== id) continue;
+          out.push({ kind: pattern.kind, at: snap.at });
+          keep({ id: nextId--, kind: pattern.kind, x: snap.at.x, y: snap.at.y });
+        }
+      }
+    }
+  }
+  return out;
+}

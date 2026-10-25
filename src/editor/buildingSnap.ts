@@ -1,0 +1,225 @@
+import type { Vec2 } from '@core/vec2';
+import type { BlueprintBody } from '@world/buildings/blueprints';
+import { GRID, buildingBounds, footprintBox, footprintRects } from '@world/buildings/geometry';
+import { ROAD_CLEARANCE } from '@world/buildings/validate';
+import type { Building, BuildingId } from '@world/buildings/types';
+import type { RoadDoc } from '@world/doc';
+import type { Network } from '@world/network';
+import { Level, halfWidth } from '@world/roadTypes';
+import { normaliseAngle } from './buildings';
+import { ribbonsNear } from './snap';
+import { m } from '@world/units';
+
+/** Where a footprint goes when the pointer is at `cursor`: to a road first */
+export interface PlacementSnap {
+  readonly anchor: Vec2;
+  readonly rotation: number;
+  readonly kind: 'road' | 'building' | 'grid';
+}
+
+/** The size of a footprint, measured from its anchor. */
+export interface FootprintSize {
+  readonly width: number;
+  readonly depth: number;
+  readonly module: number;
+}
+
+export function footprintSize(body: BlueprintBody | Building): FootprintSize {
+  const f = footprintBox(body as Building);
+  return { width: f.x1 - f.x0, depth: f.y1 - f.y0, module: body.module };
+}
+
+/** How far from a road a footprint still snaps to it, beyond its own depth. */
+const ROAD_REACH = m(9.6);
+/** How close an edge must come to another to be made flush. */
+const EDGE_SNAP = m(0.32);
+/** How far a building still lends its rotation to one being placed. */
+const BUILDING_REACH = m(12);
+
+/** @perInput Runs once a pointer move (the snap under the cursor): nothing it reaches may walk the map. */
+export function snapPlacement(
+  doc: RoadDoc,
+  net: Network | null,
+  size: FootprintSize,
+  cursor: Vec2,
+  rotation: number,
+  ignore?: BuildingId,
+): PlacementSnap {
+  const road = net ? snapToRoad(net, size, cursor) : null;
+  if (road) return flush(doc, road, size, false, ignore);
+  const near = nearestBuilding(doc, cursor, ignore);
+  if (near) {
+    const quarter = Math.PI / 2;
+    const bearing = near.rotation;
+    const k = Math.round(normaliseAngle(rotation - bearing) / quarter);
+    const aligned: PlacementSnap = {
+      anchor: frontAnchor(cursor, size, bearing + k * quarter),
+      rotation: normaliseAngle(bearing + k * quarter),
+      kind: 'building',
+    };
+    return flush(doc, aligned, size, true, ignore);
+  }
+  const snapped = { x: Math.round(cursor.x / GRID) * GRID, y: Math.round(cursor.y / GRID) * GRID };
+  return { anchor: frontAnchor(snapped, size, rotation), rotation: normaliseAngle(rotation), kind: 'grid' };
+}
+
+/** The front-centre anchor that puts the footprint's CENTRE at `centre`. */
+function frontAnchor(centre: Vec2, size: FootprintSize, rotation: number): Vec2 {
+  // Local -y is the front; the centre is depth/2 behind the anchor.
+  const vx = -Math.sin(rotation);
+  const vy = Math.cos(rotation);
+  return { x: centre.x - vx * (size.depth / 2), y: centre.y - vy * (size.depth / 2) };
+}
+
+/** DO NOT walk `net.ribbons` here: this runs on every pointer move. */
+function snapToRoad(net: Network, size: FootprintSize, cursor: Vec2): PlacementSnap | null {
+  let best: { distance: number; anchor: Vec2; rotation: number; ribbon: number } | null = null;
+  const at = cursor;
+  const reach = ROAD_CLEARANCE + size.depth + ROAD_REACH;
+  for (const ribbon of ribbonsNear(net, [at.x - reach, at.y - reach, at.x + reach, at.y + reach])) {
+    const segment = net.doc.segment(ribbon.id);
+    if (!segment || segment.structure === 'tunnel') continue;
+    // The front on the back of the footway itself (see `ROAD_CLEARANCE`).
+    const half = halfWidth(ribbon.road, Level.Sidewalk) + ROAD_CLEARANCE;
+    const hit = ribbon.full.closestPoint(at);
+    if (hit.distance > half + size.depth + ROAD_REACH) continue;
+    if (best && hit.distance >= best.distance) continue;
+    const frame = ribbon.full.sampleAt(hit.s);
+    const side = (at.x - frame.p.x) * frame.n.x + (at.y - frame.p.y) * frame.n.y >= 0 ? 1 : -1;
+    // Along the road, the anchor snaps to the grid from the road's start.
+    const step = GRID;
+    const s = Math.round(hit.s / step) * step;
+    const along = ribbon.full.sampleAt(Math.max(0, Math.min(ribbon.full.length, s)));
+    const ox = frame.n.x * side;
+    const oy = frame.n.y * side;
+    // The front (local -y) faces the road: (sin r, -cos r) = -outward.
+    const rotation = Math.atan2(-ox, oy);
+    best = {
+      distance: hit.distance,
+      anchor: { x: along.p.x + ox * half, y: along.p.y + oy * half },
+      rotation,
+      ribbon: ribbon.id,
+    };
+  }
+  if (!best) return null;
+  return { anchor: cornerFlush(net, best.anchor, best.rotation, size, best.ribbon, cursor), rotation: normaliseAngle(best.rotation), kind: 'road' };
+}
+
+/** At a corner, the side of the footprint next to the crossing road slid onto the back of that road's footway */
+function cornerFlush(net: Network, anchor: Vec2, rotation: number, size: FootprintSize, snapped: number, cursor: Vec2): Vec2 {
+  const ux = Math.cos(rotation), uy = Math.sin(rotation);
+  const vx = -Math.sin(rotation), vy = Math.cos(rotation);
+  let shift = 0;
+  let bestNeed = Infinity;
+  // DO NOT walk `net.ribbons` here: this runs on every pointer move.
+  const midX = anchor.x + vx * size.depth / 2, midY = anchor.y + vy * size.depth / 2;
+  const reach = size.width / 2 + ROAD_CLEARANCE + size.width + size.module;
+  for (const ribbon of ribbonsNear(net, [midX - reach, midY - reach, midX + reach, midY + reach])) {
+    if (ribbon.id === snapped) continue;
+    const segment = net.doc.segment(ribbon.id);
+    if (!segment || segment.structure === 'tunnel') continue;
+    const back = halfWidth(ribbon.road, Level.Sidewalk) + ROAD_CLEARANCE;
+    for (const side of [-1, 1]) {
+      const px = anchor.x + ux * side * size.width / 2 + vx * size.depth / 2;
+      const py = anchor.y + uy * side * size.width / 2 + vy * size.depth / 2;
+      const hit = ribbon.full.closestPoint({ x: px, y: py });
+      if (hit.distance > back + size.width + size.module) continue;
+      const frame = ribbon.full.sampleAt(hit.s);
+      // The road runs along this side (its tangent along the depth).
+      if (Math.abs(frame.t.x * vx + frame.t.y * vy) < 0.9) continue;
+      // And lies beyond it: how far the side is from that road's footway.
+      const beyond = ((frame.p.x - px) * ux + (frame.p.y - py) * uy) * side;
+      if (beyond <= 0) continue;
+      const need = beyond - back;
+      const candidateX = anchor.x + ux * need * side;
+      const candidateY = anchor.y + uy * need * side;
+      const along = (cursor.x - candidateX) * ux + (cursor.y - candidateY) * uy;
+      const behind = (cursor.x - candidateX) * vx + (cursor.y - candidateY) * vy;
+      const outsideAlong = Math.max(0, Math.abs(along) - size.width / 2);
+      const outsideDepth = Math.max(0, -behind, behind - size.depth);
+      if (Math.hypot(outsideAlong, outsideDepth) > size.module) continue;
+      if (Math.abs(need) < Math.abs(bestNeed)) { bestNeed = need; shift = need * side; }
+    }
+  }
+  return { x: anchor.x + ux * shift, y: anchor.y + uy * shift };
+}
+
+function nearestBuilding(doc: RoadDoc, cursor: Vec2, ignore?: BuildingId): Building | null {
+  let best: Building | null = null;
+  let bestDistance = BUILDING_REACH;
+  // DO NOT walk `doc.buildings.all()` here: this runs on every pointer move.
+  const r = BUILDING_REACH;
+  for (const b of doc.buildings.near(cursor.x - r, cursor.y - r, cursor.x + r, cursor.y + r)) {
+    if (b.id === ignore) continue;
+    const box = buildingBounds(b);
+    const at = cursor;
+    const dx = Math.max(box.minX - at.x, 0, at.x - box.maxX);
+    const dy = Math.max(box.minY - at.y, 0, at.y - box.maxY);
+    const d = Math.hypot(dx, dy);
+    if (d < bestDistance) {
+      bestDistance = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+/** Makes the footprint's edges flush with a neighbour of the same bearing: along the local x axis always */
+function flush(doc: RoadDoc, snap: PlacementSnap, size: FootprintSize, both: boolean, ignore?: BuildingId): PlacementSnap {
+  const ux = Math.cos(snap.rotation);
+  const uy = Math.sin(snap.rotation);
+  const vx = -uy;
+  const vy = ux;
+  let shiftU = 0;
+  let shiftV = 0;
+  let bestU = EDGE_SNAP * size.module;
+  let bestV = EDGE_SNAP * size.module;
+  const reach = Math.max(size.width, size.depth) * 2 + m(8);
+  const near = snap.anchor;
+  // DO NOT walk `doc.buildings.all()` here: this runs on every pointer move.
+  for (const b of doc.buildings.near(near.x - reach, near.y - reach, near.x + reach, near.y + reach)) {
+    if (b.id === ignore) continue;
+    const turn = Math.abs(normaliseAngle((b.rotation - snap.rotation) * 4)) / 4;
+    if (turn > 0.02) continue;
+    const box = buildingBounds(b);
+    if (box.minX > near.x + reach || box.maxX < near.x - reach ||
+      box.minY > near.y + reach || box.maxY < near.y - reach) continue;
+    for (const rect of footprintRects(b)) {
+      let minU = Infinity;
+      let maxU = -Infinity;
+      let minV = Infinity;
+      let maxV = -Infinity;
+      for (const p of rect) {
+        const du = (p.x - snap.anchor.x) * ux + (p.y - snap.anchor.y) * uy;
+        const dv = (p.x - snap.anchor.x) * vx + (p.y - snap.anchor.y) * vy;
+        minU = Math.min(minU, du);
+        maxU = Math.max(maxU, du);
+        minV = Math.min(minV, dv);
+        maxV = Math.max(maxV, dv);
+      }
+      const half = size.width / 2;
+      // Beside it (the depth ranges overlap): flush or aligned in u.
+      if (maxV > m(-0.2) && minV < size.depth + m(0.2)) {
+        for (const shift of [maxU + half, minU - half, minU + half, maxU - half]) {
+          if (Math.abs(shift) < bestU) {
+            bestU = Math.abs(shift);
+            shiftU = shift;
+          }
+        }
+      }
+      if (both && maxU > -half - 0.5 && minU < half + 0.5) {
+        for (const shift of [maxV, minV - size.depth, minV, maxV - size.depth]) {
+          if (Math.abs(shift) < bestV) {
+            bestV = Math.abs(shift);
+            shiftV = shift;
+          }
+        }
+      }
+    }
+  }
+  return {
+    anchor: { x: snap.anchor.x + ux * shiftU + vx * shiftV, y: snap.anchor.y + uy * shiftU + vy * shiftV },
+    rotation: snap.rotation,
+    kind: snap.kind,
+  };
+}

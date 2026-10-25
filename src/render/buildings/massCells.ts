@@ -1,0 +1,1094 @@
+import { Box3, BufferAttribute, BufferGeometry, Frustum, Group, InterleavedBuffer, InterleavedBufferAttribute, Mesh, Sphere, Vector3 } from 'three';
+import { gpuOnly, gpuOnlyAttributes } from '../mesh/gpuOnly';
+import { cancelWarm, meshBytes, warmLooseAhead } from '../uploads';
+import { type GpuClass, geometryCost, gpuLedger } from '../gpuLedger';
+import { m } from '@world/units';
+import { type CellMass, MASS_FACADE, MASS_GRID } from './cellArrays';
+import type { BuildingKit } from './kit';
+import { FLAT_DEPTH } from './buildingMesh';
+import { cellIndex, levelCells, plateOf, TILE_CELLS, tileOf } from './levelKeys';
+import { BASE_CELL_STRIDE, BASE_VERTEX, type BaseMass, type BasePiece } from './massBase';
+import { PLATE_DETAIL, TILE_DETAIL } from './massing';
+
+/** THE BUILDINGS' FAR LEVEL, cell by cell: each cell of the buildings' grid */
+/** Above the cells, a tile (L2, 16 cells) and a plate (L3, 64 cells) of masses, one mesh each, chosen as Cesium's HLOD does (`massLevels.ts`) */
+/** At the top, the base over each plate's square (`massBase.ts`): never let go, drawn under every cell nothing finer draws (`syncBases`) */
+/** Only the buildings of the page's document (the tiles loaded): the other tiles' are baked in workers from the tile store (`farLevels.ts`) */
+
+/** The largest thing the far level leaves out, m: a balcony's slab (1.3 m) or a sill and its frame stand out of the wall */
+export const FAR_ERROR = m(1.5);
+/** The largest thing the facade level (L1, `emitChunk` `far`) leaves out, m: the deepest reveal it lays flat. */
+const FACADE_ERROR = FLAT_DEPTH;
+/** The detail is drawn while what the far level leaves out spans this many pixels or more. */
+const NEAR_PIXELS = 2;
+/** The full detail (L0) while what the facade level lays flat, 0.3 m, spans this many pixels at the frame's own scale (~280 m at 1080 p). DO NOT take it to half a pixel: twice the cells in detail cost 26 ms of GPU a frame in a district view against 19 (measured 2026-10-20); the facade level past it draws the same glass and windows (`facadeLevel.ts`), and the frame's budget steps it down under load. */
+const FINE_PIXELS = 1;
+/** Within this many times the detail's reach (`FINE_PIXELS`: what the facade level lays flat spanning half its pixels) a cell's detail and
+ *  facade level are made by one walk of each building and kept together (`cellWork.ts` CellJob.pair): the cell steps between them as the eye
+ *  comes and goes, and reads the other kept. Past it the facade level alone (the detail of a cell that far is not asked soon). */
+const PAIR_REACH = 2;
+/** A cell drawn near stays near down to this share of `NEAR_PIXELS`. */
+export const HYSTERESIS = 0.85;
+const DETAIL_REACH = m(1_400); // cells within 1.4 km draw the detail level itself, whatever their pixels: the player asks for no LOD there (2026-10-20)
+/** A metre's pixels under which the 1.4 km reach forces no detail: a cell there spans too few pixels for any of it to be seen (the whole map at once, ~0.1 px a metre), and building it held the opening of a large city behind tens of seconds of work no pixel showed. */
+const DETAIL_REACH_VISIBLE = 0.5;
+/** STREET-LEVEL HORIZON VIEWS: with the eye near the ground and looking along the streets */
+const STREET_EYE = m(40);
+const HORIZON_HALF = m(150);
+/** A cell comes near only when its box, grown by this share of a cell, meets the view's frustum; a near cell stays near while its box grown by `VIEW_KEEP` does (hysteresis, so a pan does not let go what it just made). */
+const VIEW_COME = 0.125;
+const VIEW_KEEP = 0.5;
+/** The vertical extent a tile's or a plate's box is tested against the view with (`levelInView`): below any ground, and as tall as a tower before its masses say how tall it is. */
+const LEVEL_FLOOR = m(-500);
+const LEVEL_CEILING = m(400);
+
+/** A cell's key from its column and row (`layer.ts` `cellOf`). */
+const keyOf = (i: number, j: number): string => `${i},${j}`;
+
+interface Cell {
+  mesh: Mesh | null;
+  /** Its buildings have no mass (lots only): drawn by its detail alone, always near. */
+  massless: boolean;
+  /** Its masses came and are held (a mesh, or none to have): what its tile waits for before it gives way (`choose`). */
+  landed: boolean;
+  readonly i: number;
+  readonly j: number;
+  /** Its box in the plan (map x/y) and its highest point, for the distance to the eye. */
+  x0: number; y0: number; x1: number; y1: number; top: number;
+  /** Its lowest point (the ground under its buildings), for the view's frustum. */
+  bottom: number;
+  near: boolean;
+  /** Drawn near and at full detail (L0); near and not fine: its facade level (L1). */
+  fine: boolean;
+  /** Near and within `PAIR_REACH` times the detail's reach: its two levels made together. */
+  pair: boolean;
+  /** Its tile or its plate is drawn in its place: far, its mass hidden. */
+  covered: boolean;
+}
+
+/** A tile or a plate: one mesh of its cells' masses, simplified as far as its `error` says (`massing.ts` `MassDetail`). */
+interface Level {
+  readonly key: string;
+  mesh: Mesh | null;
+  readonly i0: number;
+  readonly j0: number;
+  readonly n: number;
+  x0: number; y0: number; x1: number; y1: number; top: number;
+  /** What it leaves out of the detail, m: the cells' far level's and what it left out on top. */
+  error: number;
+  /** Drawn in place of its children (Cesium's replacement refinement). */
+  coarse: boolean;
+  /** A plate's four tiles' keys (none for a tile). */
+  readonly tiles: readonly string[];
+  /** What its level may leave out before its masses come (`massing.ts` `TILE_DETAIL`, `PLATE_DETAIL`): the error the view is judged by meanwhile. */
+  readonly bound: number;
+  /** Its masses came and none of its buildings has any: its children stand for it. */
+  empty: boolean;
+  /** A tile: wanted by the view (its plate refined), so asked of the workers (`massLevels.ts` `wanted`); a plate always is. */
+  wanted: boolean;
+  /** A tile refined too: its cells drawn one by one, each cell's masses wanted (`exposedCells`). */
+  exposed: boolean;
+  /** Its masses let go for the budget (`evictLevels`): out of the view, or in it and drawn by its children; asked again only once the view meets it and wants it whole (`askable`), and not waited for till then. */
+  evicted: boolean;
+  /** The view wanted it drawn in place of its children at the last `choose` (out of the view, a level always is): one idle in the view is not, its children drawn. */
+  whole: boolean;
+  /** The last `choose` it met the view's frustum at (`chooseSerial`): the least recently seen go first (`evictLevels`). */
+  seenAt: number;
+}
+
+/** A base's piece on the GPU: its mesh, and its cells' runs of indices (`BasePiece.cells`). */
+interface BasePart { readonly mesh: Mesh; readonly cells: Int32Array; readonly count: number }
+/** The base over a plate's square (`massBase.ts`): planned once its square has buildings, its pieces once they come. */
+interface Base { readonly key: string; parts: BasePart[]; landed: boolean }
+
+/** What draws a cell of buildings now (`MassCells.census`): its detail, its masses, its tile's or plate's, the base's; 'empty' where none of its buildings stands from afar (lots of grass alone), null where nothing does (a hole). */
+export type CellDrawn = 'detail' | 'mass' | 'tile' | 'plate' | 'base' | 'empty' | null;
+
+/** The ledger's class of a level's mesh. */
+const levelClass = (key: string): GpuClass => (key[0] === 't' ? 'tile masses' : 'plate masses');
+
+/** A base's piece as a mesh (`massBase.ts`): its vertices one interleaved buffer of shorts (the place on its grid, read normalised; the paint), put in place by the mesh's matrix, drawn by the groups `syncBases` leaves it (one material, every group). */
+function baseMesh(piece: BasePiece, place: { readonly x: number; readonly y: number; readonly z: number; readonly step: number }, kit: BuildingKit): Mesh {
+  const g = new BufferGeometry();
+  const vertices = new InterleavedBuffer(piece.vertices, BASE_VERTEX);
+  g.setAttribute('position', new InterleavedBufferAttribute(vertices, 3, 0, true));
+  g.setAttribute('basePaint', new InterleavedBufferAttribute(vertices, 1, 3, true));
+  g.setIndex(new BufferAttribute(piece.index, 1));
+  const span = place.step * 65535;
+  g.boundingBox = boxOf(piece.bounds);
+  const sphere = sphereOf(piece.bounds);
+  sphere.center.set((sphere.center.x - place.x) / span, (sphere.center.y - place.y) / span, (sphere.center.z - place.z) / span);
+  sphere.radius /= span;
+  g.boundingSphere = sphere;
+  const mesh = new Mesh(g, [kit.massingBase]);
+  mesh.position.set(place.x, place.y, place.z);
+  mesh.scale.setScalar(span);
+  mesh.updateMatrix();
+  gpuOnlyAttributes(mesh, { vertices, index: g.index! }, () => ({}));
+  mesh.name = 'building-massing-base';
+  mesh.matrixAutoUpdate = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.visible = false;
+  return mesh;
+}
+
+export interface MassCells {
+  readonly group: Group;
+  /** A cell whose masses are asked (new, or its buildings changed): kept as it stands until they come (`land`); `bottom`/`top` its buildings' heights till then (the view's frustum). */
+  plan(key: string, bottom?: number, top?: number): void;
+  /** A cell's masses come: its mesh made of them (null: its buildings have no mass, the cell always near). */
+  land(key: string, mass: CellMass | null): void;
+  /** A cell with no building left: gone. */
+  remove(key: string): void;
+  /** A tile's or a plate's masses come (`massLevels.ts`; null: none of its buildings has any): the old ones stood until now. */
+  landLevel(key: string, mass: CellMass | null): void;
+  /** A tile or a plate with no building left: gone. */
+  removeLevel(key: string): void;
+  /** A tile or a plate that has buildings, its masses asked or not yet (`massLevels.ts` `plan`). */
+  planLevel(key: string): void;
+  /** Whether the view wants a tile's masses (its plate refined); a plate's always. */
+  wanted(key: string): boolean;
+  /** The cells drawn one by one now (their tile refined, `choose`): the only cells whose own masses are asked (`layer.ts`). */
+  exposedCells(): Iterable<string>;
+  /** Levels the view would draw and whose masses have not come: the town is not shown whole before they do (`layer.ts` `pending`). */
+  readonly waiting: number;
+  /** Of `waiting`, those that meet the view's frustum: what the opening's picture waits for (`layer.ts` coarsePending). The levels out of view are drawn whole once they come, after the curtain. */
+  readonly waitingInView: number;
+  /** The tiles' and plates' masses out of the view let go, the least recently seen first, until every mass of the town (cells, tiles, plates) holds `budget` bytes or less: what was freed, bytes. A level let go is asked again once the view meets it (`evicted`). */
+  evictLevels(budget: number): number;
+  /** Whether a tile's or a plate's masses were let go for the budget and not asked again since (`evictLevels`). */
+  evicted(key: string): boolean;
+  /** Whether a tile or a plate let go for the budget may be asked again: the view meets it and wants it drawn whole (true for one not let go). DO NOT ask one let go while its children draw it: it lands and is let go again, every frame. */
+  askable(key: string): boolean;
+  /** Whether a tile or a plate has its masses on the GPU (drawn or ready to be). */
+  levelDrawn(key: string): boolean;
+  /** Whether a tile or a plate met the view's frustum, grown by `VIEW_KEEP`, at the last `choose` (false before any `choose`; true for every level of a `choose` with no frustum): a plate out of it is not asked while the curtain is up (`massLevels.ts` deferred). */
+  levelSeen(key: string): boolean;
+  /** Whether the view wants a tile or a plate drawn whole (in place of its children) at the last `choose` (true for one not chosen yet). */
+  levelWhole(key: string): boolean;
+  /** Whether a tile or a plate is drawn in place of its cells. */
+  coarse(key: string): boolean;
+  /** Every cell there is (the whole town filed again, `layer.ts`). */
+  keys(): IterableIterator<string>;
+  /** Which cells are drawn near (their detail) and which far (their masses), from the eye (map x/y, height) and the screen */
+  /** - DO NOT give detail to a cell out of `view` (Cesium's HLOD culls by the frustum before the screen error): in the view from above a metre spans the same pixels everywhere, and the whole region came in detail (2026-10-16: 45 cells, 981 MB, the GPU out of memory on the 10 km city) */
+  choose(eyeX: number, eyeY: number, eyeZ: number, pxAtMetre: number, orthoPx: number | null, allNear: boolean | ReadonlySet<string>, reach?: number, view?: Frustum | null): void;
+  /** DO NOT draw more detail than the budget holds (the brief: detail residency capped in bytes, falling back to L1): the farthest near cells fall back to their facade level, then to their masses, until `bytesOf` the cells left near fits `budget`; those forced near stay */
+  cap(eyeX: number, eyeY: number, budget: number, bytesOf: (key: string, fine: boolean) => number, forced: boolean | ReadonlySet<string>, farOf?: (key: string) => number): void;
+  /** The triangles drawn for what is not near: the tiles and plates shown and the far cells' masses (a near cell's masses, hidden under its detail or standing until it lands, are counted by its level: `layer.ts` chosenTriangles). */
+  farTriangles(): number;
+  /** TEMPORARY (DEV only, to be taken out): what `choose` reads of a cell from the last eye and view (`layer.ts` __budgetLog). */
+  explain(key: string): Record<string, number | boolean | string> | null;
+  /** What it keeps, by book: cells, tiles and plates known, masses standing (`BuildingLayer.books`). */
+  books(): Readonly<Record<string, number>>;
+  /** The frame's choosing is over (`layer.ts` levelOfDetail): what its last choice left unexposed or unwanted let go. */
+  settle(): void;
+  /** The triangles of a cell's masses (0 before they came): what it costs sent far (`layer.ts` capTriangles). */
+  massTriangles(key: string): number;
+  /** The bytes a cell's masses hold on the GPU (0 before they came): what a level of it never landed is reckoned at (`layer.ts` capNow). */
+  massBytes(key: string): number;
+  /** A far sun cascade being drawn (`layer.ts` castInto): the cells drawn in detail whose masses can stand for them shown for the pass, their keys given (the layer leaves their detail out); false: as they are drawn, none given. */
+  shadowMasses(on: boolean): string[];
+  /** A base's prisms come (`massLevels.ts` landBase; null: none of its buildings stands from afar). */
+  landBase(key: string, base: BaseMass | null): void;
+  /** Bases planned whose prisms have not come: the town has holes until they do (`layer.ts` coarsePending). */
+  readonly basesWaiting: number;
+  /** The bases drawn under exactly the cells nothing finer draws (three's geometry groups): asked before each frame is drawn (`layer.ts` cullDetails). */
+  syncBases(): void;
+  /** What draws each cell of buildings now, by key (the census of holes, `tests/perf/massBase.spec.ts`). */
+  census(): Map<string, CellDrawn>;
+  /** Whether a cell is drawn near; a cell with no mass (lawns only), or none known, always is. */
+  near(key: string): boolean;
+  /** Whether a cell is drawn at full detail (L0) rather than its facade level (L1); a cell not near is not. */
+  fine(key: string): boolean;
+  /** Whether a cell near is within `PAIR_REACH` times the detail's reach: its detail and its facade level made by one walk (`cellWork.ts` CellJob.pair). */
+  pair(key: string): boolean;
+  /** The cells drawn near now (what the streaming of the detail reads, `layer.ts` `landCells`). */
+  nearKeys(): Iterable<string>;
+  /** Whether a cell's detail is shown (`layer.ts` streaming): a near cell keeps its mass shown until its detail lands */
+  setDetailed(key: string, detailed: boolean): void;
+  /** The highest point of any cell's masses (the shadow's reach over the view, `renderer.ts`); -Infinity with none. */
+  top(): number;
+  /** The pixels `metres` spans at a cell from the last eye (`choose`): what its upload is ranked by (`uploads.ts`). */
+  pixels(key: string, metres: number): number;
+  /** The frame's error scale for the next `choose` (`frameBudget.ts`): every error is allowed this many times the pixels it is allowed at 1. */
+  setErrorScale(scale: number): void;
+  /** Whether a cell has its masses on the GPU, or a tile or plate drawn in its place (`layer.ts` drawnOver): what stands for it before its detail; `current`, whether a level's mesh is of its buildings now (`MassLevels.outdated`): one made before the cell's buildings came in stands for nothing of them. */
+  drawn(key: string, current?: (levelKey: string) => boolean): boolean;
+  /** The cells the frame's budget holds back (`layer.ts` capTriangles): `far` never drawn near, `coarse` never at full detail, until let go there. DO NOT decide them by the eye again next frame: they blinked, capped and brought back by turns. */
+  hold(far: ReadonlySet<string>, coarse: ReadonlySet<string>): void;
+  dispose(): void;
+}
+
+const boxOf = (b: Float64Array): Box3 => new Box3(new Vector3(b[0], b[1], b[2]), new Vector3(b[3], b[4], b[5]));
+const sphereOf = (b: Float64Array): Sphere => new Sphere(new Vector3(b[6], b[7], b[8]), b[9]);
+
+/** A mesh put on the GPU: registered in the ledger, sent ahead ranked by `priority` (never uploaded mid-frame; a cell of masses out of view kept its copy on the CPU). */
+function sendUp(mesh: Mesh, cls: GpuClass, priority: () => number): void {
+  const cost = geometryCost(mesh.geometry);
+  gpuLedger.set(mesh, cls, cost.bytes, cost.triangles);
+  void warmLooseAhead([mesh], priority);
+}
+
+/** What the eye reads of a box (`measureSeen`): a metre's pixels there, the pixels allowed, its distance across the plan; `scale`, the frame's error scale (`frameBudget.ts`: 1 draws for 2 px, 2 for 4 px...). */
+export interface Seen { perMetre: number; allowed: number; across: number; scale?: number }
+
+/** What the eye reads of a box (plan x/y, top), as Cesium measures to a tile's bounding volume; the eye low, the farther the box the more error it may make (`HORIZON_HALF`); the pixels allowed scaled by the frame's budget (`Seen.scale`). */
+export function measureSeen(seen: Seen, eyeX: number, eyeY: number, eyeZ: number, pxAtMetre: number, orthoPx: number | null, x0: number, y0: number, x1: number, y1: number, top: number): void {
+  const dx = Math.max(x0 - eyeX, 0, eyeX - x1);
+  const dy = Math.max(y0 - eyeY, 0, eyeY - y1);
+  seen.across = Math.hypot(dx, dy);
+  const scale = seen.scale ?? 1;
+  seen.allowed = NEAR_PIXELS * scale;
+  if (orthoPx !== null) { seen.perMetre = orthoPx; return; }
+  const d = Math.max(Math.hypot(dx, dy, Math.max(eyeZ - top, 0)), 1);
+  seen.perMetre = pxAtMetre / d;
+  const street = Math.max(0, 1 - eyeZ / STREET_EYE);
+  seen.allowed = NEAR_PIXELS * scale * (1 + (street * d) / HORIZON_HALF);
+}
+
+/** A cell's mesh from its masses' arrays, taken as they came */
+export function cellMesh(mass: CellMass, kit: BuildingKit, name = 'building-massing'): Mesh {
+  const g = new BufferGeometry();
+  // Floats, or on the square's grid: four unsigned shorts read normalised, the mesh's matrix putting them in place (`cellArrays.ts` `massGrid`).
+  const place = mass.place;
+  g.setAttribute('position', place ? new BufferAttribute(mass.position, 4, true) : new BufferAttribute(mass.position, 3));
+  g.setAttribute('normal', new BufferAttribute(mass.normal, 4, true));
+  // Half floats where a vertex's numbers allow (`CellMass`): three uploads a Uint16Array as HALF_FLOAT where the attribute says so (r186 `WebGLAttributes.createBuffer`).
+  const half = (array: Uint16Array, size: number): BufferAttribute => Object.assign(new BufferAttribute(array, size), { isFloat16BufferAttribute: true });
+  g.setAttribute('color', half(mass.color, 4));
+  g.setAttribute('facade', new BufferAttribute(mass.facade, MASS_FACADE));
+  g.setAttribute('facadeGrid', half(mass.grid, MASS_GRID));
+  g.setAttribute('glazingSeed', new BufferAttribute(mass.seed, 1));
+  g.setIndex(new BufferAttribute(mass.index, 1));
+  // The box in the world, as the levels read it (`farLevels.ts`, `land`); the sphere in the mesh's own frame, as three culls by it.
+  g.boundingBox = boxOf(mass.bounds);
+  g.boundingSphere = sphereOf(mass.bounds);
+  const mesh = new Mesh(g, kit.massing);
+  if (place) {
+    const span = place.step * 65535;
+    g.boundingSphere.center.set((g.boundingSphere.center.x - place.x) / span, (g.boundingSphere.center.y - place.y) / span, (g.boundingSphere.center.z - place.z) / span);
+    g.boundingSphere.radius /= span;
+    mesh.position.set(place.x, place.y, place.z);
+    mesh.scale.setScalar(span);
+    mesh.updateMatrix();
+  }
+  gpuOnly(mesh, () => ({}));
+  mesh.name = name;
+  mesh.matrixAutoUpdate = false;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+/** `released`: a cell's or a level's masses let go, neither drawn nor wanted (or refused as they came): to be asked again once wanted (`layer.ts`). */
+/** `current`: whether a tile's or plate's masses are of its buildings as they are now (`MassLevels.outdated`): a level made before they changed is never coarsened into. */
+/** `changed`: what `choose` and `cap` read changed from outside them (a cell or level planned, landed or gone, a cell's detail shown or hidden, a tile let go at `settle`): `layer.ts` levelOfDetail chooses again then. */
+export function createMassCells(kit: BuildingKit, cellSize: number, released: (key: string) => void = () => {},
+  current: (levelKey: string) => boolean = () => true, changed: () => void = () => {}): MassCells {
+  const group = new Group();
+  group.name = 'buildings-far';
+  group.matrixAutoUpdate = false;
+  /** The tiles' and plates' meshes, beside the cells'. */
+  const levelGroup = new Group();
+  levelGroup.name = 'buildings-far-levels';
+  levelGroup.matrixAutoUpdate = false;
+  group.add(levelGroup);
+  const cells = new Map<string, Cell>();
+  const tiles = new Map<string, Level>();
+  const plates = new Map<string, Level>();
+  /** THE BASES (`massBase.ts`), by key, under their own group; `basesStale`, whether what draws a cell may have changed since `syncBases`. */
+  const bases = new Map<string, Base>();
+  const baseGroup = new Group();
+  baseGroup.name = 'buildings-far-base';
+  baseGroup.matrixAutoUpdate = false;
+  group.add(baseGroup);
+  let basesStale = true;
+  /** The levels let go for the budget so far (`evictLevels`). */
+  let evictions = 0;
+  const dropBase = (base: Base): void => {
+    for (const { mesh } of base.parts) {
+      gpuLedger.remove(mesh);
+      cancelWarm([mesh]);
+      baseGroup.remove(mesh);
+      mesh.geometry.dispose();
+    }
+    base.parts = [];
+  };
+  /** DO NOT walk every cell of the town each frame to choose */
+  const nearKeys = new Set<string>();
+  const detailed = new Set<string>();
+  /** Held back by the frame's budget (`hold`). */
+  let heldFar: ReadonlySet<string> = new Set(), heldCoarse: ReadonlySet<string> = new Set();
+  /** How far a cell's box reaches past its square (a building over its edge), the most of any: the eye's search is grown by it. */
+  let overhang = 0;
+  /** The masses standing for what is not near (`farTriangles`), each with its triangles, and their sum: kept as they are shown and hidden, DO NOT count the ones hidden (the ledger's every mass: a cell in detail was counted twice, its masses under it, and the budget cut cells that fit). */
+  const standing = new Map<Mesh, number>();
+  let standingTriangles = 0;
+  const stand = (mesh: Mesh, on: boolean): void => {
+    const was = standing.get(mesh);
+    if (on && was === undefined) {
+      const n = geometryCost(mesh.geometry).triangles;
+      standing.set(mesh, n);
+      standingTriangles += n;
+    } else if (!on && was !== undefined) {
+      standing.delete(mesh);
+      standingTriangles -= was;
+    }
+  };
+  /** DO NOT walk the cells' meshes for it (`Box3.setFromObject` at every cell landed): the highest cell top, walked again only when that cell went or fell. */
+  let highest = -Infinity;
+  let highestStale = false;
+  const lowered = (top: number): void => { if (top >= highest) highestStale = true; };
+  /** Whether a cell's tile or plate stands in its place now. */
+  const coveredAt = (i: number, j: number): boolean => (tiles.get(tileOf(i, j))?.coarse ?? false) || (plates.get(plateOf(i, j))?.coarse ?? false);
+  /** A cell's mass shown: far, or near with no detail to stand in for it; never under its tile or plate. */
+  const showMass = (key: string, cell: Cell): void => {
+    basesStale = true;
+    if (!cell.mesh) return;
+    cell.mesh.visible = !cell.covered && (!cell.near || !detailed.has(key));
+    stand(cell.mesh, !cell.covered && !cell.near);
+  };
+  const setNear = (key: string, cell: Cell, near: boolean, fine = near): void => {
+    cell.near = near;
+    cell.fine = near && fine;
+    if (near) nearKeys.add(key); else nearKeys.delete(key);
+    showMass(key, cell);
+  };
+  /** A cell under a tile or plate drawn in its place: far (its detail let go by the layer), its mass hidden; one with no mass stays near. */
+  const cover = (key: string, cell: Cell, covered: boolean): void => {
+    cell.covered = covered;
+    if (covered && !cell.massless) setNear(key, cell, false);
+    else showMass(key, cell);
+  };
+  const dropMesh = (mesh: Mesh): void => {
+    basesStale = true;
+    stand(mesh, false);
+    gpuLedger.remove(mesh);
+    cancelWarm([mesh]);
+    mesh.parent?.remove(mesh);
+    mesh.geometry.dispose();
+  };
+  const drop = (cell: Cell): void => {
+    basesStale = true;
+    if (!cell.mesh) return;
+    stand(cell.mesh, false);
+    gpuLedger.remove(cell.mesh);
+    cancelWarm([cell.mesh]);
+    group.remove(cell.mesh);
+    cell.mesh.geometry.dispose();
+    cell.mesh = null;
+  };
+  /** A cell's square on the map. */
+  const square = (i: number, j: number): { x0: number; y0: number; x1: number; y1: number } =>
+    ({ x0: i * cellSize, y0: j * cellSize, x1: (i + 1) * cellSize, y1: (j + 1) * cellSize });
+  /** A level drawn in place of its cells or not: its mesh shown, its cells covered or uncovered (16 or 64 looked up, on a change only). */
+  const setCoarse = (level: Level, coarse: boolean): void => {
+    if (level.coarse === coarse) return;
+    level.coarse = coarse;
+    basesStale = true;
+    if (level.mesh) { level.mesh.visible = coarse; stand(level.mesh, coarse); }
+    for (let i = level.i0; i < level.i0 + level.n; i++) {
+      for (let j = level.j0; j < level.j0 + level.n; j++) {
+        const key = keyOf(i, j);
+        const cell = cells.get(key);
+        if (!cell) continue;
+        const covered = coveredAt(i, j);
+        if (covered !== cell.covered) cover(key, cell, covered);
+      }
+    }
+  };
+  const levelsOf = (key: string): Map<string, Level> => (key[0] === 't' ? tiles : plates);
+  /** The tiles refined to their cells now (`choose`). */
+  const exposedTiles = new Set<string>();
+  let waiting = 0;
+  let waitingInView = 0;
+  /** The `choose` calls so far: when each level last met the view (`Level.seenAt`). */
+  let chooseSerial = 0;
+  /** The plates, and the tiles of the plates refined, in the view's frustum (grown by `VIEW_KEEP`) at the last `choose` (`levelSeen`); `allSeen`, a `choose` with no frustum. None before the first `choose`. */
+  const seenPlates = new Set<string>();
+  let allSeen = false;
+  /** A plate is kept while it has a mesh or a tile of its own: its tiles are found through it (`choose`), so a tile makes its plate. */
+  const ensure = (key: string): Level => {
+    const map = levelsOf(key);
+    let level = map.get(key);
+    if (level) return level;
+    const { i0, j0, n } = levelCells(key);
+    const children: string[] = [];
+    if (key[0] === 'p') for (let i = i0; i < i0 + n; i += TILE_CELLS) for (let j = j0; j < j0 + n; j += TILE_CELLS) children.push(tileOf(i, j));
+    const bound = Math.max(FAR_ERROR, (key[0] === 't' ? TILE_DETAIL : PLATE_DETAIL).drop);
+    level = {
+      key, mesh: null, i0, j0, n, x0: i0 * cellSize, y0: j0 * cellSize, x1: (i0 + n) * cellSize, y1: (j0 + n) * cellSize, top: 0, error: Infinity, coarse: false,
+      tiles: children, bound, empty: false, wanted: key[0] === 'p', exposed: false, evicted: false, whole: true, seenAt: 0,
+    };
+    map.set(key, level);
+    if (key[0] === 't') ensure(plateOf(i0, j0));
+    return level;
+  };
+  const forget = (level: Level): void => {
+    setCoarse(level, false);
+    if (level.mesh) { dropMesh(level.mesh); level.mesh = null; }
+    const plate = level.key[0] === 't' ? plates.get(plateOf(level.i0, level.j0)) : level;
+    if (level !== plate) { tiles.delete(level.key); exposedTiles.delete(level.key); }
+    if (plate && !plate.mesh && !plate.tiles.some((k) => tiles.has(k))) plates.delete(plate.key);
+  };
+  /** A tile no longer refined (its plate or itself drawn whole): its cells' masses let go, neither drawn nor wanted (farTree.ts does the same with its nodes). */
+  const setExposed = (tile: Level, exposed: boolean): void => {
+    if (exposed) exposedTiles.add(tile.key); else exposedTiles.delete(tile.key);
+    if (tile.exposed === exposed) return;
+    tile.exposed = exposed;
+    // DO NOT let its cells' masses go here: a frame chooses at several error scales (`frameBudget.ts` fitErrorScale), a coarser one let them go and the one kept asked them again, every frame of a still view (the masses in and out of the scene, the sun's stores never kept, `__stillLog`, 2026-10-17). Let go at `settle`, if the frame's last choice left it so.
+    if (!exposed) toSettle.add(tile);
+  };
+  /** The tiles a choice left unexposed or unwanted since the last `settle`. */
+  const toSettle = new Set<Level>();
+  /** A tile left unexposed by the frame's last choice: its cells' masses let go, neither drawn nor wanted. */
+  const letCellsGo = (tile: Level): void => {
+    for (let i = tile.i0; i < tile.i0 + tile.n; i++) {
+      for (let j = tile.j0; j < tile.j0 + tile.n; j++) {
+        const key = keyOf(i, j);
+        const cell = cells.get(key);
+        if (!cell?.mesh) continue;
+        drop(cell);
+        cell.landed = false;
+        released(key);
+      }
+    }
+  };
+  /** A tile no longer wanted (its plate drawn whole): its masses let go, asked again once its plate refines (`massLevels.ts` `release`). */
+  const setWanted = (tile: Level, wanted: boolean): void => {
+    if (tile.wanted === wanted) return;
+    tile.wanted = wanted;
+    if (wanted || !tile.mesh) return;
+    setCoarse(tile, false);
+    // Let go at `settle`, as the cells under an unexposed tile.
+    toSettle.add(tile);
+  };
+  /** A tile left unwanted by the frame's last choice: its masses let go, asked again once its plate refines. */
+  const letTileGo = (tile: Level): void => {
+    if (!tile.mesh) return;
+    dropMesh(tile.mesh);
+    tile.mesh = null;
+    tile.error = Infinity;
+    released(tile.key);
+  };
+  /** Whether every cell of a tile has its masses: until then the tile drawn before stands for them (Cesium keeps a parent until its children load). */
+  const cellsLanded = (tile: Level): boolean => {
+    for (let i = tile.i0; i < tile.i0 + tile.n; i++) {
+      for (let j = tile.j0; j < tile.j0 + tile.n; j++) {
+        const cell = cells.get(keyOf(i, j));
+        if (cell && !cell.landed) return false;
+      }
+    }
+    return true;
+  };
+  /** Each tile's state as `choose` works it out, one array for every plate. */
+  const tileState: { tile: Level; coarse: boolean }[] = [];
+  /** The last eye (`choose`), for `pixels`. */
+  const lastEye = { x: 0, y: 0, z: 0, pxAtMetre: 0, orthoPx: null as number | null, known: false };
+  // TEMPORARY (DEV only, to be taken out): the last reach `choose` was given (`explain`).
+  let lastReach = Infinity;
+  /** The tiles and plates holding a cell held near (`choose`'s `allNear`): never drawn in its place. */
+  const forcedLevels = new Set<string>();
+  /** What the eye reads of a box, one object for every box measured (`measureSeen`). */
+  const seen: Seen = { perMetre: 0, allowed: NEAR_PIXELS, across: 0 };
+  /** A cell's box as the view's frustum is met by it (three's axes: map y is -z, height is y), one for every cell. */
+  const viewBox = new Box3();
+  /** The view the cells were last tested in, and a serial that moves only when it changes (its six planes): DO NOT test every cell's box against a view that did not move (5.7 s of the opening's page, wprof6: `choose` runs several times a frame, the scale's fit and the cap). */
+  const testedView = new Frustum();
+  let testedKnown = false;
+  let viewSerial = 0;
+  const followView = (view: Frustum | null): void => {
+    if (!view) return;
+    if (testedKnown && sameFrustum(testedView, view)) return;
+    testedView.copy(view);
+    testedKnown = true;
+    viewSerial++;
+  };
+  /** Each cell's last test: the view's serial, the margin and the box it was made with, and its answer. */
+  const tested = new WeakMap<Cell, { serial: number; grow: number; x0: number; y0: number; x1: number; y1: number; bottom: number; top: number; inside: boolean }>();
+  const inView = (view: Frustum | null | undefined, cell: Cell, grow: number): boolean => {
+    if (!view) return true;
+    const t = tested.get(cell);
+    if (t && t.serial === viewSerial && t.grow === grow && t.x0 === cell.x0 && t.y0 === cell.y0 && t.x1 === cell.x1 && t.y1 === cell.y1 && t.bottom === cell.bottom && t.top === cell.top) return t.inside;
+    const g = grow * cellSize;
+    viewBox.min.set(cell.x0 - g, Math.min(cell.bottom, cell.top), -(cell.y1 + g));
+    viewBox.max.set(cell.x1 + g, Math.max(cell.bottom, cell.top), -(cell.y0 - g));
+    const inside = view.intersectsBox(viewBox);
+    tested.set(cell, { serial: viewSerial, grow, x0: cell.x0, y0: cell.y0, x1: cell.x1, y1: cell.y1, bottom: cell.bottom, top: cell.top, inside });
+    return inside;
+  };
+  /** A level's box (as tall as its masses, or as a tower before they come) meets the view's frustum grown by `grow` cells. */
+  const levelBox = new Box3();
+  const levelInView = (view: Frustum | null | undefined, level: Level, grow: number): boolean => {
+    if (!view) return true;
+    const g = grow * cellSize;
+    levelBox.min.set(level.x0 - g, LEVEL_FLOOR, -(level.y1 + g));
+    levelBox.max.set(level.x1 + g, Math.max(level.top, LEVEL_CEILING), -(level.y0 - g));
+    return view.intersectsBox(levelBox);
+  };
+  const measure = (eyeX: number, eyeY: number, eyeZ: number, pxAtMetre: number, orthoPx: number | null, x0: number, y0: number, x1: number, y1: number, top: number): void =>
+    measureSeen(seen, eyeX, eyeY, eyeZ, pxAtMetre, orthoPx, x0, y0, x1, y1, top);
+  /** A metre's pixels at a box from the last eye (1 before any). */
+  const ranked: Seen = { perMetre: 0, allowed: 0, across: 0 };
+  const perMetreAt = (x0: number, y0: number, x1: number, y1: number, top: number): number => {
+    if (!lastEye.known) return 1;
+    measureSeen(ranked, lastEye.x, lastEye.y, lastEye.z, lastEye.pxAtMetre, lastEye.orthoPx, x0, y0, x1, y1, top);
+    return ranked.perMetre;
+  };
+  const pixelsAt = (cell: Cell): number => perMetreAt(cell.x0, cell.y0, cell.x1, cell.y1, cell.top);
+  const levelPixels = (level: Level): number => perMetreAt(level.x0, level.y0, level.x1, level.y1, level.top);
+  /** What draws a cell other than the base: its tile or plate drawn in its place (with its masses), its detail shown near, its own masses; null for none. DO NOT read the meshes' `visible`: a far sun cascade and the occlusion turn it for a pass (`shadowMasses`, `layer.ts` hideOccluded), the level chosen does not change. */
+  const drawnBy = (key: string, cell: Cell): CellDrawn => {
+    if (cell.covered) {
+      const tile = tiles.get(tileOf(cell.i, cell.j)), plate = plates.get(plateOf(cell.i, cell.j));
+      if (tile?.coarse && tile.mesh) return 'tile';
+      if (plate?.coarse && plate.mesh) return 'plate';
+      return null;
+    }
+    if (cell.near && detailed.has(key)) return 'detail';
+    return cell.mesh ? 'mass' : null;
+  };
+  return {
+    group,
+    plan(key, bottom = 0, top = 0) {
+      changed();
+      const known = cells.get(key);
+      if (known) {
+        if (!known.mesh) { known.bottom = bottom; known.top = top; }
+        return;
+      }
+      const [i, j] = cellIndex(key);
+      // Near until the eye says otherwise (`choose`), as a cell made before the eye is known; far under a tile or plate drawn.
+      const covered = coveredAt(i, j);
+      const cell: Cell = { mesh: null, massless: false, landed: false, i, j, ...square(i, j), top, bottom, near: !covered, fine: !covered, pair: false, covered };
+      cells.set(key, cell);
+      setNear(key, cell, !covered);
+    },
+    land(key, mass) {
+      changed();
+      const known = cells.get(key);
+      if (known) drop(known);
+      const [i, j] = cellIndex(key);
+      const covered = coveredAt(i, j);
+      // DO NOT upload what came for a tile no longer refined: neither drawn nor wanted, asked again once it is.
+      const tile = tiles.get(tileOf(i, j));
+      const refused = mass !== null && tile !== undefined && !tile.exposed;
+      const cell: Cell = { mesh: null, massless: mass === null, landed: !refused, i, j, ...square(i, j), top: known?.top ?? 0, bottom: known?.bottom ?? 0,
+        near: known?.near ?? !covered, fine: known?.fine ?? !covered, pair: known?.pair ?? false, covered };
+      if (known) lowered(known.top);
+      if (refused) released(key);
+      else if (mass) {
+        const mesh = cellMesh(mass, kit);
+        const box = mesh.geometry.boundingBox!;
+        cell.mesh = mesh;
+        cell.top = mass.top;
+        cell.bottom = box.min.y;
+        // At least the old highest: the highest of all, whatever went before it.
+        if (cell.top >= highest) { highest = cell.top; highestStale = false; }
+        // A building reaching past its cell's edge: the cell's box is its masses'.
+        const { x0, y0, x1, y1 } = cell;
+        cell.x0 = Math.min(x0, box.min.x); cell.x1 = Math.max(x1, box.max.x); cell.y0 = Math.min(y0, -box.max.z); cell.y1 = Math.max(y1, -box.min.z);
+        overhang = Math.max(overhang, x0 - cell.x0, cell.x1 - x1, y0 - cell.y0, cell.y1 - y1);
+        group.add(mesh);
+        // DO NOT wait for the camera to frame it: a cell of masses out of view was never uploaded and kept its copy on the CPU
+        sendUp(mesh, 'cell masses', () => cell.top * pixelsAt(cell));
+      }
+      cells.set(key, cell);
+      // A cell with no mass is always near (its detail is all it has); one under its tile or plate far.
+      const near = cell.massless || (!covered && cell.near);
+      setNear(key, cell, near, cell.massless || cell.fine);
+    },
+    remove(key) {
+      const cell = cells.get(key);
+      if (!cell) return;
+      changed();
+      basesStale = true;
+      drop(cell);
+      cells.delete(key);
+      nearKeys.delete(key);
+      lowered(cell.top);
+    },
+    landLevel(key, mass) {
+      changed();
+      const level = ensure(key);
+      if (level.mesh) { dropMesh(level.mesh); level.mesh = null; }
+      const { i0, j0, n } = level;
+      Object.assign(level, { x0: i0 * cellSize, y0: j0 * cellSize, x1: (i0 + n) * cellSize, y1: (j0 + n) * cellSize, top: 0, error: Infinity });
+      // None of its buildings has a mass: its cells stand for it, whatever the eye says.
+      level.empty = !mass;
+      level.evicted = false;
+      if (!mass) { setCoarse(level, false); return; }
+      // DO NOT upload a tile its plate stands for now: asked again once the plate refines.
+      if (!level.wanted) { released(key); return; }
+      const mesh = cellMesh(mass, kit, key[0] === 't' ? 'building-massing-tile' : 'building-massing-plate');
+      const box = mesh.geometry.boundingBox!;
+      level.mesh = mesh;
+      level.top = mass.top;
+      // What it leaves out of the detail: the cells' far level's, and what its own level left out on top (`massing.ts` `leaves`).
+      level.error = Math.max(FAR_ERROR, mass.error);
+      level.x0 = Math.min(level.x0, box.min.x); level.x1 = Math.max(level.x1, box.max.x); level.y0 = Math.min(level.y0, -box.max.z); level.y1 = Math.max(level.y1, -box.min.z);
+      mesh.visible = level.coarse;
+      stand(mesh, level.coarse);
+      levelGroup.add(mesh);
+      // Sent ahead as the cells' are: shown from far off the first time the eye pulls back, never uploaded mid-frame.
+      sendUp(mesh, levelClass(key), () => level.top * levelPixels(level));
+    },
+    removeLevel(key) {
+      if (key[0] === 'b') {
+        const base = bases.get(key);
+        if (base) { changed(); dropBase(base); bases.delete(key); basesStale = true; }
+        return;
+      }
+      const level = levelsOf(key).get(key);
+      if (level) { changed(); forget(level); }
+    },
+    planLevel(key) {
+      changed();
+      if (key[0] === 'b') { if (!bases.has(key)) bases.set(key, { key, parts: [], landed: false }); return; }
+      ensure(key);
+    },
+    wanted(key) {
+      return key[0] === 'p' || (tiles.get(key)?.wanted ?? false);
+    },
+    *exposedCells() {
+      for (const key of exposedTiles) {
+        const tile = tiles.get(key);
+        if (!tile) continue;
+        for (let i = tile.i0; i < tile.i0 + tile.n; i++) for (let j = tile.j0; j < tile.j0 + tile.n; j++) { const cell = keyOf(i, j); if (cells.has(cell)) yield cell; }
+      }
+    },
+    get waiting() {
+      return waiting;
+    },
+    get waitingInView() {
+      return waitingInView;
+    },
+    levelSeen(key) {
+      return allSeen || seenPlates.has(key);
+    },
+    levelWhole(key) {
+      return levelsOf(key).get(key)?.whole ?? true;
+    },
+    evicted(key) {
+      return levelsOf(key).get(key)?.evicted ?? false;
+    },
+    askable(key) {
+      const level = levelsOf(key).get(key);
+      return !level?.evicted || ((allSeen || seenPlates.has(key)) && level.whole);
+    },
+    levelDrawn(key) {
+      return (levelsOf(key).get(key)?.mesh ?? null) !== null;
+    },
+    evictLevels(budget) {
+      // The bases with the rest: never let go, what they hold leaves the levels less room.
+      let total = gpuLedger.bytes('plate masses') + gpuLedger.bytes('tile masses') + gpuLedger.bytes('cell masses') + gpuLedger.bytes('base masses');
+      if (total <= budget || allSeen) return 0;
+      // Out of the view first; then IN THE VIEW AND IDLE, drawn by its children (Cesium's cache keeps a refined tile's content only while
+      // under `cacheBytes`): the plates and tiles a district view refines stood on the GPU beside the tiles and cells drawn in their place,
+      // 125 MB of the city of 25,000 buildings' 244 MB of masses on low against a budget of 96 (step-25k, 2026-10-21). DO NOT let go one
+      // drawn, or one the view wants whole: the hole it leaves waits for the workers. The base stands under all of them for good.
+      const out: Level[] = [];
+      for (const map of [plates, tiles]) {
+        for (const level of map.values()) if (level.mesh && (!seenPlates.has(level.key) || (!level.coarse && !level.whole))) out.push(level);
+      }
+      // The least recently seen first (the idle ones in the view were seen now: after every level out of it); of those seen as long ago, the largest.
+      const bytes = new Map(out.map((level) => [level, geometryCost(level.mesh!.geometry).bytes]));
+      out.sort((a, b) => a.seenAt - b.seenAt || bytes.get(b)! - bytes.get(a)!);
+      let freed = 0;
+      for (const level of out) {
+        if (total <= budget) break;
+        dropMesh(level.mesh!);
+        level.mesh = null;
+        level.error = Infinity;
+        level.evicted = true;
+        evictions++;
+        released(level.key);
+        total -= bytes.get(level)!;
+        freed += bytes.get(level)!;
+      }
+      if (freed > 0) changed();
+      return freed;
+    },
+    coarse(key) {
+      return levelsOf(key).get(key)?.coarse ?? false;
+    },
+    landBase(key, mass) {
+      changed();
+      basesStale = true;
+      let base = bases.get(key);
+      if (!base) bases.set(key, base = { key, parts: [], landed: false });
+      dropBase(base);
+      base.landed = true;
+      if (!mass) return;
+      base.parts = mass.pieces.map((piece) => ({ mesh: baseMesh(piece, mass.place, kit), cells: piece.cells, count: piece.cells.length / BASE_CELL_STRIDE }));
+      for (const { mesh } of base.parts) {
+        baseGroup.add(mesh);
+        gpuLedger.set(mesh, 'base masses', meshBytes(mesh), geometryCost(mesh.geometry).triangles);
+        // Sent ahead of every other mass: it is what stands where nothing else does.
+        void warmLooseAhead([mesh], () => Number.MAX_SAFE_INTEGER);
+      }
+    },
+    get basesWaiting() {
+      let n = 0;
+      for (const base of bases.values()) if (!base.landed) n++;
+      return n;
+    },
+    syncBases() {
+      if (!basesStale) return;
+      basesStale = false;
+      for (const base of bases.values()) {
+        for (const { mesh, cells: runs, count } of base.parts) {
+          // The runs of the cells nothing finer draws, joined where they follow one another (one draw each).
+          const groups = mesh.geometry.groups;
+          groups.length = 0;
+          let start = -1, end = -1;
+          for (let k = 0; k < count; k++) {
+            const at = k * BASE_CELL_STRIDE, n = runs[at + 3]!;
+            if (n === 0) continue;
+            const key = keyOf(runs[at]!, runs[at + 1]!);
+            const cell = cells.get(key);
+            // A cell gone from the town (an edit, its base asked again) is drawn by nobody.
+            if (!cell || drawnBy(key, cell) !== null) continue;
+            const first = runs[at + 2]!;
+            if (first === end) { end += n; continue; }
+            if (start >= 0) groups.push({ start, count: end - start, materialIndex: 0 });
+            start = first;
+            end = first + n;
+          }
+          if (start >= 0) groups.push({ start, count: end - start, materialIndex: 0 });
+          mesh.visible = groups.length > 0;
+        }
+      }
+    },
+    census() {
+      // The cells each base draws now, read off its groups as three draws them.
+      const byBase = new Set<string>(), empty = new Set<string>();
+      for (const base of bases.values()) {
+        for (const { mesh, cells: runs, count } of base.parts) {
+          const groups = mesh.visible ? mesh.geometry.groups : [];
+          for (let k = 0; k < count; k++) {
+            const at = k * BASE_CELL_STRIDE, first = runs[at + 2]!, n = runs[at + 3]!;
+            const key = keyOf(runs[at]!, runs[at + 1]!);
+            if (n === 0) { empty.add(key); continue; }
+            if (groups.some((g) => g.start <= first && first + n <= g.start + g.count)) byBase.add(key);
+          }
+        }
+      }
+      const out = new Map<string, CellDrawn>();
+      for (const [key, cell] of cells) {
+        const by = drawnBy(key, cell);
+        out.set(key, by ?? (byBase.has(key) ? 'base' : cell.massless || empty.has(key) ? 'empty' : null));
+      }
+      return out;
+    },
+    keys() {
+      return cells.keys();
+    },
+    choose(eyeX, eyeY, eyeZ, pxAtMetre, orthoPx, allNear, reach = Infinity, view = null) {
+      // Field by field, no literal each frame (PRD-30).
+      lastEye.x = eyeX; lastEye.y = eyeY; lastEye.z = eyeZ; lastEye.pxAtMetre = pxAtMetre; lastEye.orthoPx = orthoPx; lastEye.known = true;
+      if (import.meta.env.DEV) lastReach = reach;
+      followView(view);
+      // THE LEVELS FIRST, from the plates down (Cesium `selectTiles`): a level is drawn in place of its children while what it leaves out spans under the pixels the cells' masses are drawn for
+      forcedLevels.clear();
+      if (allNear !== true && allNear !== false) for (const key of allNear) { const [i, j] = cellIndex(key); forcedLevels.add(tileOf(i, j)); forcedLevels.add(plateOf(i, j)); }
+      /** Whether the view wants a level drawn in place of its children: judged by its error once its masses came, by what its level may leave out before. */
+      const coarseWanted = (level: Level): boolean => {
+        if (level.empty || allNear === true || forcedLevels.has(level.key)) return false;
+        measure(eyeX, eyeY, eyeZ, pxAtMetre, orthoPx, level.x0, level.y0, level.x1, level.y1, level.top);
+        // A tile or plate reaching into `DETAIL_REACH` gives way to its cells: the town keeps its own facades to 2 km, where a painted box is all its masses can be (the player, 2026-10-20).
+        // As the cells' reach (`decide`): only where a metre still spans enough pixels to be seen and at the frame's own scale - DO NOT hold the whole map's cells with the camera above it, nor stop the budget's coarsening.
+        // OUT OF THE VIEW, NOT REFINED (Cesium's traversal visits only the tiles in the frustum): its masses stand whole, its cells' not asked. DO NOT refine the whole map by the pixels a metre spans: in the view from above a metre spans the same pixels everywhere, and a district view of a city of 25,000 buildings held every cell's masses of the map (200 MB, three times the large city's for the same view), the room left for the view's detail went under nothing and the district was drawn in masses (step-25k, 2026-10-21).
+        if (!levelInView(view, level, level.coarse ? VIEW_COME : VIEW_KEEP)) return true;
+        if (seen.across <= DETAIL_REACH && seen.perMetre >= DETAIL_REACH_VISIBLE && (seen.scale ?? 1) <= 1) return false;
+        // Refined while its error spans the pixels, down to `HYSTERESIS` of them once refined (as a cell near stays near).
+        return (level.mesh ? level.error : level.bound) * seen.perMetre < seen.allowed * (level.coarse ? 1 : HYSTERESIS);
+      };
+      // DO NOT ask what a coarser level stands for (Cesium's selection, top down): a plate drawn whole needs neither its tiles nor its cells, which are let go.
+      waiting = 0;
+      waitingInView = 0;
+      seenPlates.clear();
+      allSeen = !view;
+      chooseSerial++;
+      /** A level waited for: by the opening's picture too while it meets the frustum (`waitingInView`). One let go for the budget out of the view is not: it is asked again once the view meets it. */
+      const wait = (level: Level): void => {
+        const seen = levelInView(view, level, VIEW_COME);
+        if (level.evicted && !seen) return;
+        waiting++;
+        if (seen) waitingInView++;
+      };
+      /** A level meeting the view (grown by `VIEW_KEEP`): seen now. */
+      const look = (level: Level): void => {
+        if (view && !levelInView(view, level, VIEW_KEEP)) return;
+        seenPlates.add(level.key);
+        level.seenAt = chooseSerial;
+      };
+      for (const plate of plates.values()) {
+        look(plate);
+        const plateWhole = coarseWanted(plate);
+        plate.whole = plateWhole;
+        // DO NOT coarsen into a plate made before its buildings changed (one drawn already may stay: nothing better is under it): its cells' masses were let go under a mesh without them, and the far tree had let their tiles go (the map's centre empty, conf20/03-map, 2026-10-17).
+        const plateDrawn = plateWhole && plate.mesh !== null && (plate.coarse || current(plate.key));
+        // Let go for the budget and still out of the view: its tiles neither wanted nor asked (DO NOT refine to them: their masses came in for the plate let go, and went out again).
+        const plateGone = plate.evicted && !seenPlates.has(plate.key);
+        if (plateWhole && !plateDrawn) wait(plate);
+        const plateHeld = forcedLevels.has(plate.key) || allNear === true;
+        let covered = true;
+        tileState.length = 0;
+        for (const key of plate.tiles) {
+          const tile = tiles.get(key);
+          if (!tile) continue;
+          if (plateDrawn || plateGone) { tileState.push({ tile, coarse: false }); setWanted(tile, false); setExposed(tile, false); tile.whole = true; continue; }
+          setWanted(tile, true);
+          look(tile);
+          const tileWhole = coarseWanted(tile);
+          tile.whole = tileWhole;
+          const tileDrawn = tileWhole && tile.mesh !== null && (tile.coarse || current(key));
+          if (tileWhole && !tileDrawn) wait(tile);
+          // Refining from a tile drawn: it stands until its cells' masses come (refinement without a hole).
+          const hold = !tileWhole && tile.coarse && tile.mesh !== null && !forcedLevels.has(key) && allNear !== true && !cellsLanded(tile);
+          if (hold) wait(tile);
+          // A tile OUT OF THE VIEW covers nothing the view sees (the plate's base draws under it, `syncBases`): DO NOT hold the plate drawn over the view for it.
+          // Let go for the budget, or never asked while the curtain is up (`layer.ts` deferred: out of the view behind the curtain), it does not come
+          // until the view meets it: the plate stood, waited for in the view, and the opening of the city of 25,000 buildings on low never ended (step-25k, 2026-10-21).
+          if (!tileDrawn && !hold && plate.coarse && !cellsLanded(tile) && seenPlates.has(tile.key)) covered = false;
+          tileState.push({ tile, coarse: tileDrawn || hold });
+          // Wanted whole and not come: its cells stay as they are (kept if held, not asked if not: coarsening without a hole).
+          setExposed(tile, tileWhole && !tileDrawn ? tile.exposed : !tileDrawn);
+        }
+        // Refining from the plate drawn: it stands until every tile under it is drawn or has its cells.
+        const plateStays = !plateWhole && plate.coarse && plate.mesh !== null && !plateHeld && !covered;
+        if (plateStays) wait(plate);
+        for (const { tile, coarse } of tileState) setCoarse(tile, coarse && !plateStays);
+        setCoarse(plate, plateDrawn || plateStays);
+      }
+      const decide = (key: string, cell: Cell): void => {
+        let near: boolean, fine = true, pair = false;
+        const forced = allNear === true || (allNear !== false && allNear.has(key));
+        if (forced) near = true;
+        else if (heldFar.has(key)) near = false;
+        // A cell of lots alone has its detail only: drawn while the view meets it.
+        else if (cell.massless) near = inView(view, cell, cell.near ? VIEW_KEEP : VIEW_COME);
+        else if (cell.covered) near = false;
+        else {
+          measure(eyeX, eyeY, eyeZ, pxAtMetre, orthoPx, cell.x0, cell.y0, cell.x1, cell.y1, cell.top);
+          const { perMetre, allowed, across } = seen;
+          // Within reach, with a margin for a cell already near (hysteresis); every cell within `DETAIL_REACH` of the eye is drawn near while it spans enough pixels to be seen (the player, 2026-10-20: the town keeps its buildings' own facades to 2 km; the whole map at once spans too few).
+          // The reach holds at the frame's own scale only: under load (a scale past 1) the budget must be able to step these cells down too, or it climbs to its coarsest and takes every other cell to its masses (the scale at 32 in a street view, 2026-10-20).
+          near = (FAR_ERROR * perMetre >= allowed * (cell.near ? HYSTERESIS : 1) || (across <= DETAIL_REACH && perMetre >= DETAIL_REACH_VISIBLE && (seen.scale ?? 1) <= 1))
+            && across <= reach * (cell.near ? 1.25 : 1)
+            && inView(view, cell, cell.near ? VIEW_KEEP : VIEW_COME);
+          // The full detail (L0) while a detail it draws, 0.3 m, spans a pixel: the building shows its own windows, frames and balconies at any zoom close enough to tell them apart (the player, 2026-10-20: no LOD within 1.4 km). The frame's own budget still trims it under load.
+          // DO NOT cap what is allowed (a `Math.min(1, …)` here left the budget no way to step the detail down: every cell within reach stayed at its heaviest level whatever the scale).
+          fine = !heldCoarse.has(key) && (FACADE_ERROR * perMetre >= (allowed / NEAR_PIXELS) * FINE_PIXELS * (cell.fine ? HYSTERESIS : 1));
+          pair = near && FACADE_ERROR * perMetre * PAIR_REACH >= (allowed / NEAR_PIXELS) * FINE_PIXELS;
+        }
+        cell.pair = pair;
+        if (near !== cell.near || (near && fine) !== cell.fine) setNear(key, cell, near, fine);
+      };
+      // Those near now may go far; those named stay near.
+      for (const key of [...nearKeys]) decide(key, cells.get(key)!);
+      if (allNear !== true && allNear !== false) for (const key of allNear) { const cell = cells.get(key); if (cell && !cell.near) decide(key, cell); }
+      // A far cell comes near only within the farthest a near cell may be on the map (at the frame's error scale)
+      const nearPixels = NEAR_PIXELS * (seen.scale ?? 1);
+      const within = allNear === true ? Infinity
+        : orthoPx !== null ? (FAR_ERROR * orthoPx >= nearPixels ? reach : 0)
+          : Math.min(reach, (FAR_ERROR * pxAtMetre) / nearPixels);
+      if (within <= 0) return;
+      const r = within + overhang;
+      const i0 = Math.floor((eyeX - r) / cellSize), i1 = Math.floor((eyeX + r) / cellSize);
+      const j0 = Math.floor((eyeY - r) / cellSize), j1 = Math.floor((eyeY + r) / cellSize);
+      const span = (i1 - i0 + 1) * (j1 - j0 + 1);
+      // Past the town's own cells (a view of the whole map): its cells, no more.
+      if (!Number.isFinite(span) || span > cells.size) {
+        for (const [key, cell] of cells) if (!cell.near) decide(key, cell);
+        return;
+      }
+      for (let i = i0; i <= i1; i++) {
+        for (let j = j0; j <= j1; j++) {
+          const key = keyOf(i, j);
+          const cell = cells.get(key);
+          if (cell && !cell.near) decide(key, cell);
+        }
+      }
+    },
+    cap(eyeX, eyeY, budget, bytesOf, forced, farOf = () => 0) {
+      if (!Number.isFinite(budget) || forced === true) return;
+      let total = 0;
+      // DO NOT coarsen by the distance to the eye's point on the plan: two cells as far from the camera on either side of it were drawn one in detail, one in masses (conferencia 30, 48). By the error on the screen, as `choose` picks: the cells whose step down shows least go first, ties the farthest from the eye first.
+      const movable: { readonly key: string; readonly cell: Cell; readonly px: number; readonly away: number }[] = [];
+      for (const key of nearKeys) {
+        const cell = cells.get(key);
+        if (!cell) continue;
+        total += bytesOf(key, cell.fine);
+        if (cell.massless || (forced !== false && forced.has(key))) continue;
+        const dx = Math.max(cell.x0 - eyeX, 0, eyeX - cell.x1), dy = Math.max(cell.y0 - eyeY, 0, eyeY - cell.y1);
+        movable.push({ key, cell, px: pixelsAt(cell), away: Math.hypot(dx, dy, lastEye.known ? Math.max(lastEye.z - cell.top, 0) : 0) });
+      }
+      if (total <= budget) return;
+      movable.sort((a, b) => a.px - b.px || b.away - a.away);
+      /** The cells of the same rank as `movable[at]` (the same error and distance): stepped down together, never one of two alike. */
+      const sameRank = (at: number): number => {
+        let end = at + 1;
+        while (end < movable.length && movable[end]!.px === movable[at]!.px && movable[end]!.away === movable[at]!.away) end++;
+        return end;
+      };
+      // Their detail for their facade level, then their facade level for their masses.
+      for (let at = 0; at < movable.length && total > budget;) {
+        const end = sameRank(at);
+        for (let k = at; k < end; k++) {
+          const { key, cell } = movable[k]!;
+          if (!cell.fine) continue;
+          total += bytesOf(key, false) - bytesOf(key, true);
+          setNear(key, cell, true, false);
+        }
+        at = end;
+      }
+      for (let at = 0; at < movable.length && total > budget;) {
+        const end = sameRank(at);
+        for (let k = at; k < end; k++) {
+          const { key, cell } = movable[k]!;
+          // DO NOT send a cell far before its masses (or its tile's, its plate's) can stand for it: its facade level stays, never a hole.
+          if (!this.drawn(key)) continue;
+          // What it costs far (its masses shown) comes in for what its facade level cost.
+          total += farOf(key) - bytesOf(key, false);
+          setNear(key, cell, false);
+        }
+        at = end;
+      }
+    },
+    massBytes(key) {
+      const mesh = cells.get(key)?.mesh;
+      return mesh ? meshBytes(mesh) : 0;
+    },
+    explain(key) {
+      const cell = cells.get(key);
+      if (!cell || !lastEye.known) return null;
+      measure(lastEye.x, lastEye.y, lastEye.z, lastEye.pxAtMetre, lastEye.orthoPx, cell.x0, cell.y0, cell.x1, cell.y1, cell.top);
+      const g = VIEW_COME * cellSize;
+      viewBox.min.set(cell.x0 - g, Math.min(cell.bottom, cell.top), -(cell.y1 + g));
+      viewBox.max.set(cell.x1 + g, Math.max(cell.bottom, cell.top), -(cell.y0 - g));
+      return {
+        errorPx: +(FAR_ERROR * seen.perMetre).toFixed(2), allowedPx: +seen.allowed.toFixed(2), across: Math.round(seen.across), near: cell.near, covered: cell.covered,
+        massless: cell.massless, landed: cell.landed, heldFar: heldFar.has(key), inViewNow: testedKnown ? testedView.intersectsBox(viewBox) : 'no view',
+        memo: String(tested.get(cell)?.inside ?? 'none'), box: `${Math.round(cell.x0)},${Math.round(cell.y0)}..${Math.round(cell.x1)},${Math.round(cell.y1)} y ${Math.round(cell.bottom)}..${Math.round(cell.top)}`,
+        eye: `${Math.round(lastEye.x)},${Math.round(lastEye.y)},${Math.round(lastEye.z)}`, reach: Math.round(lastReach),
+        // The square far cells are looked for in (`choose`: within the farthest a near cell may be, round the eye).
+        within: Math.round(lastEye.orthoPx !== null ? lastReach : Math.min(lastReach, (FAR_ERROR * lastEye.pxAtMetre) / (NEAR_PIXELS * (seen.scale ?? 1)))),
+      };
+    },
+    books() {
+      return { massCells: cells.size, massTiles: tiles.size, massPlates: plates.size, massBases: bases.size, massEvictions: evictions, massStanding: standing.size, massNear: nearKeys.size };
+    },
+    settle() {
+      if (toSettle.size) changed();
+      for (const tile of toSettle) {
+        if (!tile.exposed) letCellsGo(tile);
+        if (!tile.wanted) letTileGo(tile);
+      }
+      toSettle.clear();
+    },
+    farTriangles() {
+      return standingTriangles;
+    },
+    massTriangles(key) {
+      const mesh = cells.get(key)?.mesh;
+      return mesh ? geometryCost(mesh.geometry).triangles : 0;
+    },
+    shadowMasses(on) {
+      const swapped: string[] = [];
+      for (const key of detailed) {
+        const cell = cells.get(key);
+        if (!cell?.mesh) continue;
+        if (!on) { showMass(key, cell); continue; }
+        if (cell.covered || !cell.near) continue;
+        cell.mesh.visible = true;
+        swapped.push(key);
+      }
+      return swapped;
+    },
+    near(key) {
+      return cells.get(key)?.near ?? true;
+    },
+    fine(key) {
+      return cells.get(key)?.fine ?? true;
+    },
+    pair(key) {
+      return cells.get(key)?.pair ?? false;
+    },
+    nearKeys() {
+      return nearKeys;
+    },
+    setDetailed(key, on) {
+      if (on !== detailed.has(key)) changed();
+      if (on) detailed.add(key); else detailed.delete(key);
+      const cell = cells.get(key);
+      if (cell) showMass(key, cell);
+    },
+    top() {
+      if (highestStale) {
+        highestStale = false;
+        highest = -Infinity;
+        for (const cell of cells.values()) if (cell.mesh && cell.top > highest) highest = cell.top;
+      }
+      return highest;
+    },
+    pixels(key, metres) {
+      const cell = cells.get(key);
+      if (cell) return metres * pixelsAt(cell);
+      const [i, j] = cellIndex(key);
+      const { x0, y0, x1, y1 } = square(i, j);
+      return metres * perMetreAt(x0, y0, x1, y1, 0);
+    },
+    setErrorScale(scale) {
+      seen.scale = scale;
+    },
+    hold(far, coarse) {
+      heldFar = far;
+      heldCoarse = coarse;
+    },
+    drawn(key, current = () => true) {
+      const cell = cells.get(key);
+      if (!cell) return false;
+      // Its own masses only where they are shown: a cell under a tile or plate is drawn by that level, and only if it is of its buildings now.
+      if (cell.massless || (cell.mesh && !cell.covered)) return true;
+      const [i, j] = cellIndex(key);
+      const tile = tiles.get(tileOf(i, j)), plate = plates.get(plateOf(i, j));
+      return (!!tile?.coarse && !!tile.mesh && current(tileOf(i, j))) || (!!plate?.coarse && !!plate.mesh && current(plateOf(i, j)));
+    },
+    dispose() {
+      for (const cell of cells.values()) drop(cell);
+      cells.clear();
+      for (const base of bases.values()) dropBase(base);
+      bases.clear();
+      for (const map of [tiles, plates]) {
+        for (const level of map.values()) if (level.mesh) dropMesh(level.mesh);
+        map.clear();
+      }
+      exposedTiles.clear();
+      waiting = 0;
+      waitingInView = 0;
+      seenPlates.clear();
+      allSeen = false;
+      lastEye.known = false;
+      highest = -Infinity;
+      highestStale = false;
+      standing.clear();
+      toSettle.clear();
+      standingTriangles = 0;
+      nearKeys.clear();
+      detailed.clear();
+    },
+  };
+}
+
+/** Whether two frusta are the same: every plane's normal and constant. */
+export function sameFrustum(a: Frustum, b: Frustum): boolean {
+  for (let i = 0; i < 6; i++) {
+    const p = a.planes[i]!, q = b.planes[i]!;
+    if (p.constant !== q.constant || !p.normal.equals(q.normal)) return false;
+  }
+  return true;
+}

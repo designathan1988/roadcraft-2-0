@@ -1,0 +1,750 @@
+import type { Aabb } from '@core/aabb';
+import { Digest } from '@core/digest';
+import { Polyline, newFrame } from '@core/polyline';
+import type { SegmentId } from './ids';
+import { ROAD_GROUND_CLEARANCE, type RoadStructure } from './structures';
+import { m } from './units';
+import { hypot2 } from '@core/hypot';
+
+/** THE READS OF THE ROADS' HEIGHT FIELD (`elevation.ts`) */
+
+/** Softness of the blend between neighbouring profiles, in world units. */
+export const BLEND_TAU = m(1);
+/** A road this much farther than the nearest one weighs under the blend's 1e-4 cut for sure (exp(-9.26) < 9.6e-5) */
+const BLEND_SKIP = BLEND_TAU * (Math.log(1e4) + 0.05);
+/** How far from a road its own profile is the whole answer. */
+export const PROFILE_REACH = m(24);
+/** How far out the road's influence fades to nothing. */
+export const PROFILE_FADE = m(44);
+/** Side of the spatial index's cells, world units: two cells of the drawn terrain (`render/terrainGrid.ts`). */
+export const INDEX_CELL = m(25);
+
+/** Rounding between a box's distance and a line's (`closestInto` measures it its own way): a road this close to the cut is measured. */
+const BOX_SLACK = 1e-6;
+
+/** The distance from a point to a box (0 inside it): never more than to anything in the box. */
+function boxDistance(b: Aabb, x: number, y: number): number {
+  const dx = x < b.minX ? b.minX - x : x > b.maxX ? x - b.maxX : 0;
+  const dy = y < b.minY ? b.minY - y : y > b.maxY ? y - b.maxY : 0;
+  return hypot2(dx, dy);
+}
+
+/** What a query reads of one road's solved profile. */
+export interface FieldProfile {
+  readonly id: SegmentId;
+  readonly structure: RoadStructure;
+  /** A player-authored vertical alignment, independent of legacy structure modes. */
+  readonly manualVertical: boolean;
+  /** The class index the road was drawn with, for per-class surface tinting. */
+  readonly type: number;
+  /** Half the casing width — how far this road's surface reaches sideways. */
+  readonly half: number;
+  /** Central reservation width, zero when the class has none. */
+  readonly median: number;
+  /** Authored footway width, including the kerb: the wider side's. */
+  readonly sidewalk: number;
+  /** Each side's footway, left and right of a -> b. */
+  readonly sidewalkLeft: number;
+  readonly sidewalkRight: number;
+  readonly line: Polyline;
+  readonly length: number;
+  readonly step: number;
+  /** Deck height at station `i`, i.e. at arc `i * step`. */
+  readonly h: ArrayLike<number>;
+  readonly bbox: Aabb;
+}
+
+interface RoadSample {
+  /** Distance along the nearest road, in world units. */
+  readonly along: number;
+  /** Signed offset across it. */
+  readonly across: number;
+  /** Class index of that road, or -1 when there is no road near the point. */
+  readonly type: number;
+  /** Half the casing width of that road. */
+  readonly half: number;
+  /** Its central reservation width. */
+  readonly median: number;
+  /** Its actual footway width, including the kerb. Optional for older query adapters. */
+  readonly sidewalk?: number;
+  /** Each side's footway, left and right of a -> b, when they differ. */
+  readonly sidewalkLeft?: number;
+  readonly sidewalkRight?: number;
+  /** The segment the point was read off. */
+  readonly segment?: SegmentId;
+}
+
+/** `RoadSample` as `roadAtInto` writes it, one kept by its reader: every field written at each read. */
+export interface RoadSampleOut {
+  along: number;
+  across: number;
+  type: number;
+  half: number;
+  median: number;
+  sidewalk: number | undefined;
+  sidewalkLeft: number | undefined;
+  sidewalkRight: number | undefined;
+  segment: SegmentId | undefined;
+}
+
+/** A sample to hand `roadAtInto`. */
+export const roadSampleOut = (): RoadSampleOut => ({
+  along: 0, across: 0, type: -1, half: 0, median: 0, sidewalk: undefined, sidewalkLeft: undefined, sidewalkRight: undefined, segment: undefined,
+});
+
+/** The reads of the field a road surface makes per vertex (`render/roadSurfaceReads.ts`). */
+export interface RoadReads {
+  /** Deck height of the road surface at a world point. */
+  at(x: number, y: number, structures?: ReadonlySet<RoadStructure>, includeManual?: boolean): number;
+  /** Deck height on one specific segment — what an agent riding it stands on. */
+  onSegment(segment: SegmentId, x: number, y: number): number;
+  /** Everything a surface needs to know about the road nearest a point. */
+  roadAt(x: number, y: number, structures?: ReadonlySet<RoadStructure>, includeManual?: boolean): RoadSample;
+  /** `roadAt` written into `out`, nothing made (the paving read under every building's footprint, `paving.ts`); `sidewalkLeft`/`Right` only when they differ. */
+  roadAtInto?(x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined, out: RoadSampleOut, includeManual?: boolean): RoadSampleOut;
+  /** Texture coordinates of (x, y) in the frame of the road nearest to */
+  surfaceFrameAt(
+    x: number,
+    y: number,
+    structures: ReadonlySet<RoadStructure> | undefined,
+    pickX: number,
+    pickY: number,
+    includeManual?: boolean,
+    segment?: SegmentId,
+    /** Lay `along` at the true length of each line parallel to the road */
+    panel?: number,
+  ): { along: number; across: number };
+  /** `surfaceFrameAt` written into `out`, nothing made (asked for every vertex of a road surface, `roadSurfaceReads.ts`). */
+  surfaceFrameInto?(x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined, pickX: number, pickY: number,
+    includeManual: boolean | undefined, segment: SegmentId | undefined, panel: number | undefined, out: { along: number; across: number }): { along: number; across: number };
+  /** Runs `work` with every point it reads remembered, so a point asked again */
+  remembering?<T>(work: () => T): T;
+}
+
+/** 0 below `a`, 1 above `b`, smooth in between. */
+export function smoothstep(a: number, b: number, value: number): number {
+  const u = Math.min(1, Math.max(0, (value - a) / Math.max(1e-6, b - a)));
+  return u * u * (3 - 2 * u);
+}
+
+/** Linear read of a profile at an arc position — continuous, never stepped. */
+export function heightAtArc(profile: { readonly h: ArrayLike<number>; readonly step: number }, s: number): number {
+  const { h, step } = profile;
+  const at = Math.min(h.length - 1, Math.max(0, s / step));
+  const low = Math.floor(at);
+  const high = Math.min(h.length - 1, low + 1);
+  const a = h[low] as number;
+  const b = h[high] as number;
+  return a + (b - a) * (at - low);
+}
+
+// ------------------------------------------------------------ spatial index
+
+export const cellKeyOf = (x: number, y: number): number => x * 73_856_093 + y * 19_349_663;
+/** A box over more cells than this is filed apart, read by every query (a road across the whole map would fill the grid). */
+export const OVERSIZED_CELLS = 4096;
+
+/** What the field's reads ask of an index: the roads a point may read. */
+interface NearIndex<P> {
+  near(x: number, y: number): readonly P[];
+}
+
+/** A uniform grid over the segments' influence boxes. */
+export class SpatialIndex<P extends { readonly bbox: Aabb }> {
+  private readonly cell = INDEX_CELL;
+  private readonly buckets = new Map<number, P[]>();
+  private readonly oversized: P[] = [];
+  private readonly oversizedSet = new Set<P>();
+  /** By a set: asked for every profile of the build (`profileSummaries`). */
+  isOversized(profile: P): boolean {
+    return this.oversizedSet.has(profile);
+  }
+  private readonly all: readonly P[];
+
+  constructor(profiles: readonly P[], private readonly answers?: ReadonlySet<number>) {
+    this.all = profiles;
+    for (const profile of profiles) {
+      const box = profile.bbox;
+      const x0 = Math.floor(box.minX / this.cell);
+      const x1 = Math.floor(box.maxX / this.cell);
+      const y0 = Math.floor(box.minY / this.cell);
+      const y1 = Math.floor(box.maxY / this.cell);
+      // A pathological box (a road across the whole map) would fill the grid
+      if ((x1 - x0 + 1) * (y1 - y0 + 1) > OVERSIZED_CELLS) {
+        this.oversized.push(profile);
+        this.oversizedSet.add(profile);
+        continue;
+      }
+      for (let x = x0; x <= x1; x++) {
+        for (let y = y0; y <= y1; y++) {
+          const key = cellKeyOf(x, y);
+          const bucket = this.buckets.get(key);
+          if (bucket) bucket.push(profile);
+          else this.buckets.set(key, [profile]);
+        }
+      }
+    }
+  }
+
+  /** Digest of every profile `near` can return for a point of the rectangle, in its order; a profile `of` gives null for is left out. */
+  digest(minX: number, minY: number, maxX: number, maxY: number, of: (profile: P) => number | null): number {
+    // The same reading with or without buckets: a network with no bucketed road
+    const digest = new Digest();
+    for (let x = Math.floor(minX / this.cell); x <= Math.floor(maxX / this.cell); x++) {
+      for (let y = Math.floor(minY / this.cell); y <= Math.floor(maxY / this.cell); y++) {
+        const key = cellKeyOf(x, y);
+        digest.add(key);
+        for (const profile of this.buckets.get(key) ?? EMPTY) {
+          const value = of(profile);
+          if (value !== null) digest.add(value);
+        }
+      }
+    }
+    digest.add(-1);
+    for (const profile of this.oversized) {
+      const value = of(profile);
+      if (value !== null) digest.add(value);
+    }
+    return digest.value();
+  }
+
+  /** Each profile's place in the list the index was built from, and a mark per place (`meeting`). */
+  private ranks: Map<P, number> | null = null;
+  private marks: Uint32Array | null = null;
+  private mark = 0;
+
+  /** Every profile `near` can return for a point of the rectangles, and `also`, in the order the index was built from */
+  meeting(rects: readonly (readonly [number, number, number, number])[], also: readonly P[] = []): { profiles: P[]; cells: number[] } {
+    if (!this.ranks) {
+      this.ranks = new Map(this.all.map((p, i) => [p, i]));
+      this.marks = new Uint32Array(this.all.length);
+    }
+    const ranks = this.ranks, marks = this.marks!;
+    if (++this.mark === 0xffffffff) { marks.fill(0); this.mark = 1; }
+    const mark = this.mark;
+    const picked: number[] = [];
+    const take = (profile: P): void => {
+      const rank = ranks.get(profile)!;
+      if (marks[rank] === mark) return;
+      marks[rank] = mark;
+      picked.push(rank);
+    };
+    for (const profile of this.oversized) take(profile);
+    for (const profile of also) take(profile);
+    const cells = new Set<number>();
+    for (const [minX, minY, maxX, maxY] of rects) {
+      for (let x = Math.floor(minX / this.cell); x <= Math.floor(maxX / this.cell); x++) {
+        for (let y = Math.floor(minY / this.cell); y <= Math.floor(maxY / this.cell); y++) {
+          const key = cellKeyOf(x, y);
+          if (cells.has(key)) continue;
+          cells.add(key);
+          const bucket = this.buckets.get(key);
+          if (bucket) for (const profile of bucket) take(profile);
+        }
+      }
+    }
+    picked.sort((a, b) => a - b);
+    return { profiles: picked.map((rank) => this.all[rank]!), cells: [...cells] };
+  }
+
+  near(x: number, y: number): readonly P[] {
+    const key = cellKeyOf(Math.floor(x / this.cell), Math.floor(y / this.cell));
+    // DO NOT answer a point the roads handed over do not cover: its list could lack a road.
+    if (this.answers && !this.answers.has(key)) throw new Error(`the road field was not handed the roads at (${x}, ${y})`);
+    if (this.buckets.size === 0) return this.all;
+    const bucket = this.buckets.get(key);
+    if (this.oversized.length === 0) return bucket ?? EMPTY;
+    if (!bucket) return this.oversized;
+    // DO NOT join a cell's roads to the oversized ones at each read: once per cell (the index never changes).
+    let joined = this.joined.get(key);
+    if (!joined) this.joined.set(key, joined = [...bucket, ...this.oversized]);
+    return joined;
+  }
+  /** Each cell's roads with the oversized ones, as first asked (`near`). */
+  private readonly joined = new Map<number, readonly P[]>();
+}
+
+const EMPTY: readonly never[] = Object.freeze([]);
+
+// ------------------------------------------------------------ point memo
+
+/** A coordinate's bits, to hash it: one per table. */
+interface HashScratch {
+  readonly f64: Float64Array;
+  readonly u32: Uint32Array;
+}
+const hashScratch = (): HashScratch => {
+  const f64 = new Float64Array(1);
+  return { f64, u32: new Uint32Array(f64.buffer) };
+};
+
+/** The slot of (x, y) in an open-addressed table of `mask + 1` slots, probing over `xs`/`ys` (entries + 1 in `slots`). */
+function slotOf(hash: HashScratch, slots: Int32Array, xs: Float64Array, ys: Float64Array, x: number, y: number): number {
+  const { f64, u32 } = hash;
+  f64[0] = x + 0;
+  let h = Math.imul(u32[0]! ^ Math.imul(u32[1]!, 0x27d4eb2d), 0x9e3779b1);
+  f64[0] = y + 0;
+  h = Math.imul(h ^ u32[0]! ^ Math.imul(u32[1]!, 0x85ebca6b), 0xc2b2ae35);
+  const mask = slots.length - 1;
+  let at = (h ^ (h >>> 15)) & mask;
+  for (;;) {
+    const e = slots[at]! - 1;
+    if (e < 0 || (xs[e] === x && ys[e] === y)) return at;
+    at = (at + 1) & mask;
+  }
+}
+
+/** What the height field found at each point of one piece of work */
+class PointMemo<R> {
+  private readonly hash = hashScratch();
+  private slots = new Int32Array(1 << 12);
+  private xs: Float64Array = new Float64Array(1 << 11);
+  private ys: Float64Array = new Float64Array(1 << 11);
+  s: Float64Array = new Float64Array(1 << 11);
+  distance: Float64Array = new Float64Array(1 << 11);
+  height: Float64Array = new Float64Array(1 << 11);
+  manual: Uint8Array = new Uint8Array(1 << 11);
+  roads: (R | null)[] = [];
+  structures: (ReadonlySet<RoadStructure> | undefined)[] = [];
+  private size = 0;
+
+  /** The entry of (x, y), or -1. */
+  find(x: number, y: number): number {
+    return this.slots[slotOf(this.hash, this.slots, this.xs, this.ys, x, y)]! - 1;
+  }
+
+  put(x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined, includeManual: boolean,
+    road: R | null, s: number, distance: number, height: number): void {
+    let at = slotOf(this.hash, this.slots, this.xs, this.ys, x, y);
+    let e = this.slots[at]! - 1;
+    if (e >= 0) {
+      // Asked with other filters: the first answer stays (DO NOT overwrite and evict it).
+      if (this.structures[e] !== structures || this.manual[e] !== (includeManual ? 1 : 0)) return;
+    } else {
+      if ((this.size + 1) * 2 > this.slots.length) {
+        this.grow();
+        at = slotOf(this.hash, this.slots, this.xs, this.ys, x, y);
+      }
+      e = this.size++;
+      if (e >= this.xs.length) this.growEntries();
+      this.slots[at] = e + 1;
+      this.xs[e] = x;
+      this.ys[e] = y;
+    }
+    this.structures[e] = structures;
+    this.manual[e] = includeManual ? 1 : 0;
+    this.roads[e] = road;
+    this.s[e] = s;
+    this.distance[e] = distance;
+    this.height[e] = height;
+  }
+
+  /** Forgets every point; keeps the arrays, sized for the largest piece of work so far. */
+  clear(): void {
+    if (this.size === 0) return;
+    this.slots.fill(0);
+    this.roads.length = 0;
+    this.structures.length = 0;
+    this.size = 0;
+  }
+
+  private grow(): void {
+    this.slots = new Int32Array(this.slots.length * 2);
+    for (let e = 0; e < this.size; e++) this.slots[slotOf(this.hash, this.slots, this.xs, this.ys, this.xs[e]!, this.ys[e]!)] = e + 1;
+  }
+
+  private growEntries(): void {
+    const n = this.xs.length * 2;
+    const f64 = (a: Float64Array): Float64Array => { const b = new Float64Array(n); b.set(a); return b; };
+    this.xs = f64(this.xs);
+    this.ys = f64(this.ys);
+    this.s = f64(this.s);
+    this.distance = f64(this.distance);
+    this.height = f64(this.height);
+    const manual = new Uint8Array(n);
+    manual.set(this.manual);
+    this.manual = manual;
+  }
+}
+
+/** Heights of the ground at exact points, handed over by the page (a road tile worker's terrain, `render/roadTileMesh.ts`) */
+export class PointHeights {
+  private readonly hash = hashScratch();
+  private slots = new Int32Array(1 << 12);
+  private xs: Float64Array = new Float64Array(1 << 11);
+  private ys: Float64Array = new Float64Array(1 << 11);
+  private hs: Float64Array = new Float64Array(1 << 11);
+  private size = 0;
+
+  get count(): number {
+    return this.size;
+  }
+
+  /** The height at (x, y), or undefined when none was given. */
+  get(x: number, y: number): number | undefined {
+    const e = this.slots[slotOf(this.hash, this.slots, this.xs, this.ys, x, y)]! - 1;
+    return e < 0 ? undefined : this.hs[e]!;
+  }
+
+  /** Whether (x, y) is held; adds it with `height` when it is not. */
+  add(x: number, y: number, height: number): boolean {
+    let at = slotOf(this.hash, this.slots, this.xs, this.ys, x, y);
+    if (this.slots[at]! > 0) return true;
+    if ((this.size + 1) * 2 > this.slots.length) {
+      this.slots = new Int32Array(this.slots.length * 2);
+      for (let e = 0; e < this.size; e++) this.slots[slotOf(this.hash, this.slots, this.xs, this.ys, this.xs[e]!, this.ys[e]!)] = e + 1;
+      at = slotOf(this.hash, this.slots, this.xs, this.ys, x, y);
+    }
+    const e = this.size++;
+    if (e >= this.xs.length) {
+      const n = this.xs.length * 2;
+      const f64 = (a: Float64Array): Float64Array => { const b = new Float64Array(n); b.set(a); return b; };
+      this.xs = f64(this.xs);
+      this.ys = f64(this.ys);
+      this.hs = f64(this.hs);
+    }
+    this.slots[at] = e + 1;
+    this.xs[e] = x;
+    this.ys[e] = y;
+    this.hs[e] = height;
+    return false;
+  }
+}
+
+// ------------------------------------------------------------ the field
+
+/** The reads of a solved field over `profiles` (`index` built over them, in that order). */
+export function roadField<P extends FieldProfile>(
+  index: NearIndex<P>,
+  byId: { get(id: SegmentId): P | undefined },
+  terrainAt: (x: number, y: number) => number,
+): Required<RoadReads> {
+  const hit = { s: 0, distance: 0 };
+  /** The frame a read's side is taken from (`roadAt`): one, never kept. */
+  const frame = newFrame();
+  const sampleProfile = (profile: P, x: number, y: number): number => {
+    profile.line.closestInto(x, y, hit);
+    return heightAtArc(profile, hit.s);
+  };
+
+  const distances: number[] = [];
+  const arcs: number[] = [];
+  const picked: P[] = [];
+
+  /** The last point asked about, and what was found there */
+  const last = {
+    x: NaN,
+    y: NaN,
+    structures: undefined as ReadonlySet<RoadStructure> | undefined,
+    includeManual: true,
+    road: null as P | null,
+    s: 0,
+    distance: Infinity,
+    /** NaN until the height itself has been asked for at this point. */
+    height: NaN,
+  };
+  /** DO NOT keep it across `remembering` calls, nor cap it and evict (CLAUDE.md: a capped cache that evicts and recomputes). */
+  const memo = new PointMemo<P>();
+  let memoOn = false;
+  const remembers = (x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined,
+    includeManual: boolean): boolean => {
+    if (last.x === x && last.y === y && last.structures === structures && last.includeManual === includeManual) return true;
+    if (!memoOn) return false;
+    const e = memo.find(x, y);
+    if (e < 0 || memo.structures[e] !== structures || memo.manual[e] !== (includeManual ? 1 : 0)) return false;
+    last.x = x;
+    last.y = y;
+    last.structures = structures;
+    last.includeManual = includeManual;
+    last.road = memo.roads[e]!;
+    last.s = memo.s[e]!;
+    last.distance = memo.distance[e]!;
+    last.height = memo.height[e]!;
+    return true;
+  };
+  const remember = (x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined,
+    includeManual: boolean, road: P | null, s: number, distance: number, height: number): void => {
+    last.x = x;
+    last.y = y;
+    last.structures = structures;
+    last.includeManual = includeManual;
+    last.road = road;
+    last.s = s;
+    last.distance = distance;
+    last.height = height;
+    if (memoOn) memo.put(x, y, structures, includeManual, road, s, distance, height);
+  };
+
+  /** The road nearest a point, out of the structural levels asked for; its arc and distance in `last`. */
+  const nearest = (
+    x: number,
+    y: number,
+    structures?: ReadonlySet<RoadStructure>,
+    includeManual = true,
+  ): P | null => {
+    if (remembers(x, y, structures, includeManual)) return last.road;
+    let best: P | null = null;
+    let bestDistance = Infinity;
+    let bestS = 0;
+    for (const profile of index.near(x, y)) {
+      if (structures && !structures.has(profile.structure)) continue;
+      if (!includeManual && profile.manualVertical) continue;
+      // Exact: a road whose line's box is no nearer than the best so far is no nearer itself.
+      if (boxDistance(profile.line.bbox, x, y) > bestDistance + BOX_SLACK) continue;
+      profile.line.closestInto(x, y, hit);
+      if (hit.distance < bestDistance) {
+        bestDistance = hit.distance;
+        best = profile;
+        bestS = hit.s;
+      }
+    }
+    remember(x, y, structures, includeManual, best, bestS, bestDistance, NaN);
+    return best;
+  };
+
+  /** The height at a point from the `found` candidates just measured. */
+  const blend = (x: number, y: number, best: number, found: number): number => {
+    // DO NOT read it first for all.
+    if (found === 0) return terrainAt(x, y) + ROAD_GROUND_CLEARANCE;
+    // How much the roads have to say here at all
+    const authority = 1 - smoothstep(PROFILE_REACH, PROFILE_FADE, best);
+    if (authority <= 0) return terrainAt(x, y) + ROAD_GROUND_CLEARANCE;
+    let sum = 0;
+    let weight = 0;
+    for (let i = 0; i < found; i++) {
+      // Surely under the cut below: no exponential for a road that cannot count.
+      if ((distances[i] as number) - best > BLEND_SKIP) continue;
+      const w = Math.exp(-((distances[i] as number) - best) / BLEND_TAU);
+      if (w < 1e-4) continue;
+      sum += w * heightAtArc(picked[i] as P, arcs[i] as number);
+      weight += w;
+    }
+    if (weight <= 0) return terrainAt(x, y) + ROAD_GROUND_CLEARANCE;
+    const road = sum / weight;
+    return authority >= 1 ? road : road * authority + (terrainAt(x, y) + ROAD_GROUND_CLEARANCE) * (1 - authority);
+  };
+
+  const query = (x: number, y: number, structures?: ReadonlySet<RoadStructure>, includeManual = true): number => {
+    if (remembers(x, y, structures, includeManual) && !Number.isNaN(last.height)) return last.height;
+    const candidates = index.near(x, y);
+    let best = Infinity;
+    let road: P | null = null;
+    let roadS = 0;
+    let found = 0;
+    for (const profile of candidates) {
+      if (structures && !structures.has(profile.structure)) continue;
+      if (!includeManual && profile.manualVertical) continue;
+      // DO NOT measure a road the blend leaves out whatever it measures (`blend`: past `BLEND_SKIP` of the nearest): its line's box is already that far past the best so far, and the best only comes nearer. Exact.
+      if (boxDistance(profile.line.bbox, x, y) - best > BLEND_SKIP + BOX_SLACK) continue;
+      profile.line.closestInto(x, y, hit);
+      distances[found] = hit.distance;
+      arcs[found] = hit.s;
+      picked[found] = profile;
+      found++;
+      if (hit.distance < best) {
+        best = hit.distance;
+        road = profile;
+        roadS = hit.s;
+      }
+    }
+    const height = blend(x, y, best, found);
+    remember(x, y, structures, includeManual, road, roadS, best, height);
+    return height;
+  };
+
+  /** The frames a surface's texture coordinates are read in (`frameInto`): two, never kept. DO NOT make a frame a vertex (`Polyline.sampleAt`): three objects for every vertex of every road surface of a near job. */
+  const uvFrame = newFrame(), panelFrame = newFrame();
+  const frameInto = (x: number, y: number, structures: ReadonlySet<RoadStructure> | undefined, pickX: number, pickY: number,
+    includeManual: boolean, segment: SegmentId | undefined, panel: number | undefined, out: { along: number; across: number }): { along: number; across: number } => {
+    const best = segment === undefined
+      ? nearest(pickX, pickY, structures, includeManual)
+      : byId.get(segment);
+    if (!best) { out.along = y; out.across = x; return out; }
+    let s = segment === undefined ? last.s : 0;
+    if (segment !== undefined) {
+      best.line.closestInto(pickX, pickY, hit);
+      s = hit.s;
+    }
+    if (pickX !== x || pickY !== y) {
+      best.line.closestInto(x, y, hit);
+      s = hit.s;
+    }
+    const f = best.line.sampleAtInto(s, uvFrame);
+    const dx = x - f.p.x;
+    const dy = y - f.p.y;
+    const across = dx * f.n.x + dy * f.n.y;
+    let along = s + dx * f.t.x + dy * f.t.y;
+    if (panel !== undefined && panel > 0) {
+      // A line `across` to the left of a curve is shorter than the centreline by `across` times the turn: d(along) =
+      const start = Math.floor(Math.max(0, Math.min(best.length, s)) / panel) * panel;
+      const t0 = best.line.sampleAtInto(start, panelFrame).t;
+      const turn = Math.atan2(t0.x * f.t.y - t0.y * f.t.x, t0.x * f.t.x + t0.y * f.t.y);
+      along -= across * turn;
+    }
+    out.along = along;
+    out.across = across;
+    return out;
+  };
+
+  return {
+    at: query,
+    remembering(work) {
+      if (memoOn) return work();
+      memoOn = true;
+      try {
+        return work();
+      } finally {
+        memoOn = false;
+        memo.clear();
+      }
+    },
+    onSegment(segment, x, y) {
+      const profile = byId.get(segment);
+      if (!profile) return terrainAt(x, y) + ROAD_GROUND_CLEARANCE;
+      return sampleProfile(profile, x, y);
+    },
+    roadAtInto(x, y, structures, out, includeManual = true) {
+      const best = nearest(x, y, structures, includeManual);
+      if (!best) {
+        out.along = y; out.across = x; out.type = -1; out.half = 0; out.median = 0;
+        out.sidewalk = undefined; out.sidewalkLeft = undefined; out.sidewalkRight = undefined; out.segment = undefined;
+        return out;
+      }
+      const { s, distance } = last;
+      best.line.sampleAtInto(s, frame);
+      out.along = s;
+      out.across = distance * (Math.sign((x - frame.p.x) * frame.n.x + (y - frame.p.y) * frame.n.y) || 1);
+      out.type = best.type; out.half = best.half; out.median = best.median; out.sidewalk = best.sidewalk;
+      const apart = best.sidewalkLeft !== best.sidewalkRight;
+      out.sidewalkLeft = apart ? best.sidewalkLeft : undefined;
+      out.sidewalkRight = apart ? best.sidewalkRight : undefined;
+      out.segment = best.id;
+      return out;
+    },
+    roadAt(x, y, structures, includeManual = true) {
+      const best = nearest(x, y, structures, includeManual);
+      if (!best) return { along: y, across: x, type: -1, half: 0, median: 0 };
+      const { s, distance } = last;
+      // Signed offset, so the two halves of a carriageway do not mirror the texture into a seam down the centre line.
+      best.line.sampleAtInto(s, frame);
+      const sign = Math.sign((x - frame.p.x) * frame.n.x + (y - frame.p.y) * frame.n.y) || 1;
+      return {
+        along: s,
+        across: distance * sign,
+        type: best.type,
+        half: best.half,
+        median: best.median,
+        sidewalk: best.sidewalk,
+        ...(best.sidewalkLeft !== best.sidewalkRight ? { sidewalkLeft: best.sidewalkLeft, sidewalkRight: best.sidewalkRight } : {}),
+        segment: best.id,
+      };
+    },
+    surfaceFrameAt(x, y, structures, pickX, pickY, includeManual = true, segment, panel) {
+      return frameInto(x, y, structures, pickX, pickY, includeManual, segment, panel, { along: 0, across: 0 });
+    },
+    surfaceFrameInto(x, y, structures, pickX, pickY, includeManual = true, segment, panel, out) {
+      return frameInto(x, y, structures, pickX, pickY, includeManual, segment, panel, out);
+    },
+  };
+}
+
+// ------------------------------------------------------------ handed over
+
+/** Figures per profile in `FieldData.numbers`. */
+const STRIDE = 13;
+
+/** The profiles a batch of road tiles reads, as typed arrays handed to a worker (MDN, "Transferable objects") */
+export interface FieldData {
+  readonly ids: Float64Array;
+  readonly structures: readonly RoadStructure[];
+  /** Per profile: manual, type, half, median, sidewalk, left, right, length, step, box (4). */
+  readonly numbers: Float64Array;
+  /** Where each profile's line ends in `lines`, and its heights in `heights`. */
+  readonly lineEnds: Uint32Array;
+  readonly lines: Float64Array;
+  readonly heightEnds: Uint32Array;
+  readonly heights: Float64Array;
+  /** The index cells the profiles answer for (`SpatialIndex.meeting`). */
+  readonly cells: Float64Array;
+}
+
+/** `profiles` (in the field's own order) as `FieldData`, its arrays fresh: the buffers to hand over in `transfer`. */
+export function packField(profiles: readonly FieldProfile[], cells: readonly number[]): { data: FieldData; transfer: ArrayBuffer[] } {
+  let lineLength = 0;
+  let heightLength = 0;
+  for (const p of profiles) { lineLength += p.line.xy.length; heightLength += p.h.length; }
+  const ids = new Float64Array(profiles.length);
+  const numbers = new Float64Array(profiles.length * STRIDE);
+  const lineEnds = new Uint32Array(profiles.length);
+  const lines = new Float64Array(lineLength);
+  const heightEnds = new Uint32Array(profiles.length);
+  const heights = new Float64Array(heightLength);
+  const structures: RoadStructure[] = [];
+  let atLine = 0;
+  let atHeight = 0;
+  profiles.forEach((p, i) => {
+    ids[i] = p.id;
+    structures.push(p.structure);
+    const o = i * STRIDE;
+    numbers[o] = p.manualVertical ? 1 : 0;
+    numbers[o + 1] = p.type;
+    numbers[o + 2] = p.half;
+    numbers[o + 3] = p.median;
+    numbers[o + 4] = p.sidewalk;
+    numbers[o + 5] = p.sidewalkLeft;
+    numbers[o + 6] = p.sidewalkRight;
+    numbers[o + 7] = p.length;
+    numbers[o + 8] = p.step;
+    numbers[o + 9] = p.bbox.minX;
+    numbers[o + 10] = p.bbox.minY;
+    numbers[o + 11] = p.bbox.maxX;
+    numbers[o + 12] = p.bbox.maxY;
+    lines.set(p.line.xy, atLine);
+    atLine += p.line.xy.length;
+    lineEnds[i] = atLine;
+    for (let k = 0; k < p.h.length; k++) heights[atHeight + k] = p.h[k]!;
+    atHeight += p.h.length;
+    heightEnds[i] = atHeight;
+  });
+  const data: FieldData = { ids, structures, numbers, lineEnds, lines, heightEnds, heights, cells: Float64Array.from(cells) };
+  return { data, transfer: [ids, numbers, lineEnds, lines, heightEnds, heights, data.cells].map((array) => array.buffer as ArrayBuffer) };
+}
+
+/** The profiles of `FieldData`, in its order. */
+export function unpackField(data: FieldData): FieldProfile[] {
+  const out: FieldProfile[] = [];
+  let atLine = 0;
+  let atHeight = 0;
+  for (let i = 0; i < data.ids.length; i++) {
+    const o = i * STRIDE;
+    const n = data.numbers;
+    const line = Polyline.fromFlat(data.lines.subarray(atLine, data.lineEnds[i]!));
+    const h = data.heights.subarray(atHeight, data.heightEnds[i]!);
+    atLine = data.lineEnds[i]!;
+    atHeight = data.heightEnds[i]!;
+    out.push({
+      id: data.ids[i]! as SegmentId,
+      structure: data.structures[i]!,
+      manualVertical: n[o] === 1,
+      type: n[o + 1]!,
+      half: n[o + 2]!,
+      median: n[o + 3]!,
+      sidewalk: n[o + 4]!,
+      sidewalkLeft: n[o + 5]!,
+      sidewalkRight: n[o + 6]!,
+      length: n[o + 7]!,
+      step: n[o + 8]!,
+      bbox: { minX: n[o + 9]!, minY: n[o + 10]!, maxX: n[o + 11]!, maxY: n[o + 12]! },
+      line,
+      h,
+    });
+  }
+  return out;
+}
+
+/** The field over `FieldData`, answering for its cells alone. */
+export function fieldOf(data: FieldData, terrainAt: (x: number, y: number) => number): Required<RoadReads> {
+  const profiles = unpackField(data);
+  const index = new SpatialIndex(profiles, new Set(data.cells));
+  return roadField(index, new Map(profiles.map((p) => [p.id, p])), terrainAt);
+}

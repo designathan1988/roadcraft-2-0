@@ -1,0 +1,123 @@
+import { Digest } from '@core/digest';
+import type { BuildingStore } from '@world/buildings/store';
+import type { Building, BuildingId } from '@world/buildings/types';
+import { CellFiling } from '@world/cells';
+import type { GardenChange, GardenPlant } from './gardens';
+import type { GroundRecord, Rect } from './groundChanges';
+
+/** DO NOT hand the gardens every planted building's list at every change */
+
+export interface GardenLists {
+  /** The lists to place and to take away since the last call, null when none. */
+  update(buildings: BuildingStore, settled: boolean): GardenChange | null;
+}
+
+/** A planted building: its plants digested, its bank, and its plants on the ground (once placed) with the ground change they follow. DO NOT keep its record: every planted building of the map was held decoded (the table decodes a record while it is read, `tableRows.ts`); read from the store when its plants are placed. */
+interface Site { key: number; box: Rect; plants: readonly GardenPlant[] | null; seen: number }
+
+/** `ground`: where and when the drawn ground changed */
+export function gardenLists(
+  ground: GroundRecord,
+  bankBox: (b: Building) => Rect,
+  plantsOf: (b: Building) => readonly GardenPlant[],
+): GardenLists {
+  /** DO NOT key it by the JSON text: a string kept for every building with a garden. */
+  const plantKey = new WeakMap<Building, number>();
+  const plantKeyOf = (b: Building): number => {
+    let key = plantKey.get(b);
+    if (key === undefined) {
+      const plants = (b.elements ?? []).filter((el: { kind: string }) => el.kind === 'tree' || el.kind === 'shrub' || el.kind === 'hedge' || el.kind === 'flowers');
+      key = plants.length ? new Digest().add(b.x).add(b.y).add(b.rotation).addPlain(plants).value() : -1;
+      plantKey.set(b, key);
+    }
+    return key;
+  };
+  /** The planted buildings, taken in by the ids the diary gives (`BuildingStore.changedSince`), and filed by their banks. */
+  const sites = new Map<BuildingId, Site>();
+  const banks = new CellFiling<BuildingId, Site>();
+  /** The buildings whose plants are to be placed (again): new or changed, or the ground moved under them. */
+  const pending = new Set<BuildingId>();
+  /** The lists placed before that are to be taken away. */
+  const gone: (readonly GardenPlant[])[] = [];
+  let read = -1;
+  let groundRead = -1;
+  /** A building's record taken in. */
+  const take = (id: BuildingId, b: Building | undefined): void => {
+    const key = b ? plantKeyOf(b) : -1;
+    const site = sites.get(id);
+    if (key < 0) {
+      if (!site) return;
+      if (site.plants) gone.push(site.plants);
+      sites.delete(id);
+      banks.remove(id);
+      pending.delete(id);
+      return;
+    }
+    if (site?.key === key) return;
+    const box = bankBox(b!);
+    if (site) {
+      if (site.plants) gone.push(site.plants);
+      Object.assign(site, { key, box, plants: null });
+      banks.remove(id);
+      banks.file(id, site, box);
+    } else {
+      const fresh: Site = { key, box, plants: null, seen: -1 };
+      sites.set(id, fresh);
+      banks.file(id, fresh, box);
+    }
+    pending.add(id);
+  };
+  /** @rebuild Every building of the store and every site taken in again: the first time, or when what changed cannot be said. */
+  const takeAll = (buildings: BuildingStore): void => {
+    const seen = new Set<BuildingId>();
+    for (const b of buildings.all()) { seen.add(b.id); take(b.id, b); }
+    for (const id of [...sites.keys()]) if (!seen.has(id)) take(id, undefined);
+  };
+  /** The whole store read only the first time or when the diary cannot say which buildings changed (a map loaded or cleared). */
+  const follow = (buildings: BuildingStore): void => {
+    if (read === buildings.revision) return;
+    const ids = read < 0 ? null : buildings.changedSince(read);
+    if (ids) for (const id of ids) take(id, buildings.get(id));
+    else takeAll(buildings);
+    read = buildings.revision;
+  };
+  /** A placed site the ground moved under since it was placed: placed again. */
+  const check = (id: BuildingId, site: Site): void => {
+    if (site.plants && ground.touches(site.seen, site.box)) pending.add(id);
+  };
+  /** @rebuild The banks a change of the ground since the last look reached; every placed bank only when the record cannot say where. */
+  const groundMoved = (): void => {
+    const version = ground.version;
+    if (version === groundRead) return;
+    const since = groundRead;
+    groundRead = version;
+    if (since < 0) return;
+    const rects = ground.rectsSince ? ground.rectsSince(since) : null;
+    if (rects) {
+      // Every placed site was placed at `groundRead` or before
+      for (const id of banks.idsMeetingAny(rects)) if (sites.get(id)!.plants) pending.add(id);
+      return;
+    }
+    for (const [id, site] of sites) check(id, site);
+  };
+
+  return {
+    update(buildings, settled) {
+      follow(buildings);
+      groundMoved();
+      if (!settled || (pending.size === 0 && gone.length === 0)) return null;
+      const added: (readonly GardenPlant[])[] = [];
+      for (const id of pending) {
+        const site = sites.get(id);
+        const b = site ? buildings.get(id) : undefined;
+        if (!site || !b) continue;
+        if (site.plants) gone.push(site.plants);
+        site.plants = plantsOf(b);
+        site.seen = ground.version;
+        added.push(site.plants);
+      }
+      pending.clear();
+      return { added, removed: gone.splice(0) };
+    },
+  };
+}
