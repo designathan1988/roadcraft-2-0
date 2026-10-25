@@ -21,8 +21,11 @@ export const FAR_ERROR = m(1.5);
 const FACADE_ERROR = FLAT_DEPTH;
 /** The detail is drawn while what the far level leaves out spans this many pixels or more. */
 const NEAR_PIXELS = 2;
-/** The full detail (L0) while what the facade level lays flat, 0.3 m, spans this many pixels at the frame's own scale (~280 m at 1080 p). DO NOT take it to half a pixel: twice the cells in detail cost 26 ms of GPU a frame in a district view against 19 (measured 2026-10-20); the facade level past it draws the same glass and windows (`facadeLevel.ts`), and the frame's budget steps it down under load. */
-const FINE_PIXELS = 1;
+/** The full detail (L0) while what the facade level lays flat, 0.3 m, spans this many pixels at the frame's own scale (~560 m at 1080 p). Half a
+ *  pixel, not one: at one the downtown view a few hundred metres up drew no cell in detail, and its glass towers stood as the facade level's flat
+ *  grey runs where the detail draws their black panes (the player, F7 audit 2026-10-25). The frame's budget steps it down under load (`frameBudget.ts`);
+ *  the 26 against 19 ms of GPU measured at half a pixel on 2026-10-20 was before the hidden faces and the parts' levels. */
+const FINE_PIXELS = 0.5;
 /** Within this many times the detail's reach (`FINE_PIXELS`: what the facade level lays flat spanning half its pixels) a cell's detail and
  *  facade level are made by one walk of each building and kept together (`cellWork.ts` CellJob.pair): the cell steps between them as the eye
  *  comes and goes, and reads the other kept. Past it the facade level alone (the detail of a cell that far is not asked soon). */

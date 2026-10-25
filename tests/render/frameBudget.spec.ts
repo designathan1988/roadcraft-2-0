@@ -91,9 +91,11 @@ describe('the cells at an error scale', () => {
     cells.dispose();
   });
 
-  it('at 7: near at their facade level (14 px allowed: the detail no longer resolves, the facade level does)', () => {
+  // The detail while 0.3 m spans half a pixel at the scale (`massCells.ts` FINE_PIXELS): at 7.4 it asks 3.7 px (3.15 with the hysteresis of a cell
+  // fine) and 0.3 m spans 3; the masses' 1.5 m spans 15 of the 14.8 allowed, so the cell stays near.
+  it('at 7.4: near at their facade level (14.8 px allowed: the detail no longer resolves, the facade level does)', () => {
     const cells = row();
-    cells.setErrorScale(7);
+    cells.setErrorScale(7.4);
     cells.choose(CELL / 2, CELL / 2, m(300), 1000, 10, false, Infinity);
     for (let i = 0; i < 5; i++) expect([cells.near(`${i},0`), cells.fine(`${i},0`)]).toEqual([true, false]);
     cells.dispose();
