@@ -15,6 +15,7 @@ import {
 import type { PostSwitches } from './effectSwitches';
 import type { SceneEnvironment } from './environment';
 import { DEFAULT_OPTIMIZATIONS, type Optimizations } from './optimizations';
+import { shadowShapes } from './shadowLevels';
 
 /** THE OPTIMISATIONS IN THE RENDERER (`optimizations.ts`, the lab's "Optimisations"): what `renderer.ts` asks of them each frame, and what they change in three's renderer, its materials and textures. Every one at its default: nothing here touches the drawing. */
 
@@ -216,6 +217,10 @@ export function createOptimizer(deps: OptimizerDeps): Optimizer {
         shadows = true;
       }
       if (before.castMasses !== next.castMasses || before.castTexel !== next.castTexel || before.agentShadows !== next.agentShadows) shadows = true;
+      if (before.shadowShapes !== next.shadowShapes) {
+        shadowShapes.byTexel = next.shadowShapes !== 'model';
+        shadows = true;
+      }
       if (before.precision !== next.precision || before.anisotropy !== next.anisotropy || before['q.anisotropy'] !== next['q.anisotropy'] || before.frustumCull !== next.frustumCull) {
         programs = giveBack() || programs;
         programs = walk() || programs;

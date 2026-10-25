@@ -21,6 +21,7 @@ import { type Bounds, growInto, planeMask } from './instanceCull';
 import { impostorPick, thinWant } from './plantImpostors';
 import { trianglesOf } from './propGeometry';
 import { castBySize } from './shadowCasters';
+import { type ShadowLadder, shadowLadderOf, shadowShapes } from './shadowLevels';
 
 /**
  * INSTANCES KEPT CELL BY CELL, DRAWN AT THE LEVEL THEIR SIZE ON THE SCREEN CALLS FOR: the gardens'
@@ -251,6 +252,17 @@ function posedGeometry(model: BufferGeometry, poses: InstancedInterleavedBuffer)
   return g;
 }
 
+/** A caster's posed shadow shapes let go (`shadowShape`): every attribute taken off first, the poses too, which its colour shape still draws (or
+ *  which went with it). */
+function dropCopies(s: MeshState): void {
+  for (const g of s.shadowCopies.values()) {
+    for (const name of Object.keys(g.attributes)) g.deleteAttribute(name);
+    g.setIndex(null);
+    g.dispose();
+  }
+  s.shadowCopies.clear();
+}
+
 /** A posed geometry let go: the model's attributes and index taken off first, so three frees the poses' buffer and the vertex arrays only (r186 `WebGLGeometries` frees every attribute a disposed geometry holds). */
 function letGo(g: BufferGeometry): void {
   for (const name of Object.keys(g.attributes)) if (name !== POSE_A && name !== POSE_B) g.deleteAttribute(name);
@@ -421,6 +433,12 @@ interface MeshState {
   uncast: (() => void) | null;
   /** Where it was put (its owner's group) while it is out of the scene with nothing to draw (`settleInScene`). */
   home: Object3D | null;
+  /** A caster's model and its lighter shapes for the cascades (`shadowLevels.ts`); null: it casts its model, or nothing. */
+  readonly ladder: ShadowLadder | null;
+  /** The shape it draws in the colour pass, posed (what `castCastersInto` puts back between the passes). */
+  shape: BufferGeometry | null;
+  /** Its lighter shapes posed on its level's poses, by their place in the ladder, made as a cascade first asks each (`shadowShape`). */
+  readonly shadowCopies: Map<number, BufferGeometry>;
 }
 
 interface Kind {
@@ -491,7 +509,10 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
     return {
       index, spec, centre: centre ?? new Vector3(), reach: centre ? reach : 1, levels,
       meshes: spec.meshes.map((m) => {
-        const s: MeshState = { spec: m, level: levels[m.mid ? MID : m.far ? FAR : NEAR], near: !m.mid && !m.far, mesh: null, wasDrawn: false, uncast: null, home: null };
+        // A caster drawn from a model (not a picture, not leaf cards): its cascades draw the shape their texel asks (`shadowShape`).
+        const ladder = m.castShadow && !m.far && !m.cards ? shadowLadderOf(m.geometry) : null;
+        const s: MeshState = { spec: m, level: levels[m.mid ? MID : m.far ? FAR : NEAR], near: !m.mid && !m.far, mesh: null, wasDrawn: false, uncast: null, home: null,
+          ladder, shape: null, shadowCopies: new Map() };
         s.level.meshes.push(s);
         return s;
       }),
@@ -619,7 +640,8 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
       if (!mesh) continue;
       mesh.dispose();
       letGo(mesh.geometry);
-      mesh.geometry = posedGeometry(s.spec.geometry, poses);
+      mesh.geometry = s.shape = posedGeometry(s.spec.geometry, poses);
+      dropCopies(s);
       mesh.instanceColor = tints;
     }
     b.poses = poses; b.tints = tints; b.capacity = capacity; b.shown = shown;
@@ -631,7 +653,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
     const spec = s.spec, b = s.level;
     if (!b.poses) sizeLevel(k, b, MIN_CAPACITY, 0);
     // The level's buffers, not a copy each: a plant's body and its cards draw the same instances.
-    const mesh = dressedMesh(spec, posedGeometry(spec.geometry, b.poses!), format);
+    const mesh = dressedMesh(spec, s.shape = posedGeometry(spec.geometry, b.poses!), format);
     mesh.instanceColor = b.tints;
     s.mesh = mesh;
     meshList = null;
@@ -652,9 +674,28 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
     // in the scene, 1.5 M in the cascades, `npm run diagnose`, 2026-10-22) for shadows PCF spreads to nothing.
     // Its instances in the colour pass and in the cascades (`Level.front`): the near level casts what it draws and what stands under the
     // cover; the far level draws all it holds and casts what stands past the cover.
+    // Its shape in a cascade by the cascade's texel alone (`shadowShape`): the camera's level never the shadow's.
     s.uncast = castBySize({ mesh, casts: spec.castShadow, radius: () => b.largest, texels: castTexelsOf(k),
-      counts: { colour: () => colourCount(s), shadow: () => (!s.wasDrawn ? 0 : !s.near ? b.front : b.drawn) } });
+      counts: { colour: () => colourCount(s), shadow: () => (!s.wasDrawn ? 0 : !s.near ? b.front : b.drawn) },
+      ...(s.ladder ? { levels: { shadow: (texel: number) => shadowShape(s, texel), colour: () => s.shape! } } : {}) });
     return mesh;
+  };
+  /**
+   * The shape a caster draws into a cascade of `texel` world units: the lightest of its ladder whose error, at its level's widest instance
+   * (`Level.largest` over its model's radius: the scale it is drawn at, or more), is under the texel; its colour shape when none is. A shape
+   * off by under a texel throws the same shadow (`shadowLevels.ts`). DO NOT choose it by the camera's level: the shadow would follow the camera.
+   */
+  const shadowShape = (s: MeshState, texel: number): BufferGeometry => {
+    if (!shadowShapes.byTexel) return s.shape!;
+    const shapes = s.ladder!.shapes, b = s.level;
+    const radius = s.spec.geometry.boundingSphere?.radius ?? 0;
+    const scale = radius > 0 ? b.largest / radius : Infinity;
+    let pick = 0;
+    for (let i = shapes.length - 1; i > 0; i--) if (shapes[i]!.error * scale < texel) { pick = i; break; }
+    if (pick === 0 || !b.poses) return s.shape!;
+    let copy = s.shadowCopies.get(pick);
+    if (!copy) s.shadowCopies.set(pick, copy = posedGeometry(shapes[pick]!.geometry, b.poses));
+    return copy;
   };
 
   const scratch = new Float32Array(16), point = new Vector3(), matrix = new Matrix4();
@@ -1212,7 +1253,8 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
           for (const s of b.meshes) {
             if (!s.mesh || !b.poses) continue;
             letGo(s.mesh.geometry);
-            s.mesh.geometry = posedGeometry(s.spec.geometry, b.poses);
+            s.mesh.geometry = s.shape = posedGeometry(s.spec.geometry, b.poses);
+            dropCopies(s);
           }
         }
         for (const s of k.meshes) if (s.wasDrawn !== drawnNow(k, s)) k.current = false;
@@ -1264,7 +1306,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
       nearBox = null;
     },
     dispose() {
-      for (const k of kinds) for (const s of k.meshes) { s.uncast?.(); s.uncast = null; }
+      for (const k of kinds) for (const s of k.meshes) { s.uncast?.(); s.uncast = null; dropCopies(s); }
       for (const mesh of meshes()) {
         mesh.dispose();
         letGo(mesh.geometry);

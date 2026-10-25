@@ -99,6 +99,12 @@ const BASE = [
     tradeoff: 'Disc: no cascade redraws for whatever moves; generic shadow.',
     choices: [{ value: 'cast', label: 'in the cascades' }, { value: 'disc', label: 'disc' }],
   },
+  {
+    id: 'shadowShapes', system: 'shadows', title: 'Plants and props cast by their lighter shapes',
+    what: 'A plant, a street prop or a stone casts into each cascade the lightest of its shapes off by under that cascade\'s texel (shadowLevels.ts), as today. "Model": its full model in every cascade.',
+    tradeoff: 'Model: the shadow passes draw the plants\' and props\' full models for the same shadow.',
+    choices: [{ value: 'texel', label: 'by texel' }, { value: 'model', label: 'full model' }],
+  },
   // ---- post
   {
     id: 'postChain', system: 'post', title: 'Whole post chain',
@@ -245,6 +251,7 @@ const AFFECTS: Readonly<Record<(typeof BASE)[number]['id'], readonly string[]>> 
   castMasses: ['shadows', 'layer:buildings', 'name:building-*'],
   castTexel: ['shadows', 'layer:buildings', 'name:building-*'],
   agentShadows: ['shadows', 'layer:people', 'name:procedural-people', 'name:person'],
+  shadowShapes: ['shadows', 'layer:vegetation', 'layer:furniture', 'name:garden-*', 'name:street-*', 'name:nature-tree-*'],
   postChain: ['post', 'pass:ambientOcclusion', 'pass:canyonLight', 'pass:bloom', 'pass:clouds', 'pass:smaa', 'pass:sharpen'],
   msaa: ['post', 'all'],
   aoResolution: ['post', 'pass:ambientOcclusion'],
