@@ -105,6 +105,12 @@ const BASE = [
     tradeoff: 'Model: the shadow passes draw the plants\' and props\' full models for the same shadow.',
     choices: [{ value: 'texel', label: 'by texel' }, { value: 'model', label: 'full model' }],
   },
+  {
+    id: 'farStride', system: 'terrain', title: 'Far ground drawn at the stride its relief allows',
+    what: 'Each far patch of the ground drawn every 2nd, 4th... 32nd corner where its relief strays under half a pixel from its full grid (farGround.ts strideFor), as today. "Full grid": every patch at its 32 x 32 quads.',
+    tradeoff: 'Full grid: thousands of triangles a flat patch for the same ground.',
+    choices: [{ value: 'relief', label: 'by relief' }, { value: 'full', label: 'full grid' }],
+  },
   // ---- post
   {
     id: 'postChain', system: 'post', title: 'Whole post chain',
@@ -252,6 +258,7 @@ const AFFECTS: Readonly<Record<(typeof BASE)[number]['id'], readonly string[]>> 
   castTexel: ['shadows', 'layer:buildings', 'name:building-*'],
   agentShadows: ['shadows', 'layer:people', 'name:procedural-people', 'name:person'],
   shadowShapes: ['shadows', 'layer:vegetation', 'layer:furniture', 'name:garden-*', 'name:street-*', 'name:nature-tree-*'],
+  farStride: ['layer:terrain', 'name:flat-world-far'],
   postChain: ['post', 'pass:ambientOcclusion', 'pass:canyonLight', 'pass:bloom', 'pass:clouds', 'pass:smaa', 'pass:sharpen'],
   msaa: ['post', 'all'],
   aoResolution: ['post', 'pass:ambientOcclusion'],
