@@ -111,6 +111,7 @@ export function createCasualties(): CasualtyLayer {
     });
     pullTowardEye(material, 3, 3);
     const mesh = new InstancedMesh(geometry, material, MAX);
+    mesh.name = 'casualties-blood';
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;
     mesh.frustumCulled = false;

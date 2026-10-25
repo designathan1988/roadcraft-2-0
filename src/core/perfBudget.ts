@@ -48,7 +48,7 @@ export const VIEW_BUDGETS: Readonly<Record<CityView, { readonly triangles: numbe
 };
 
 /** What holds geometry on the GPU, by the plan's levels (§8.3); `null` budget: the plan sets none. */
-export type MemoryGroup = 'L0 shells' | 'L0 building parts' | 'L1 masses' | 'L2 tiles' | 'L3 plates' | 'roads' | 'poles and wires' | 'terrain' | 'vegetation' | 'people and vehicles' | 'other';
+export type MemoryGroup = 'L0 shells' | 'L0 building parts' | 'L1 masses' | 'L2 tiles' | 'L3 plates' | 'roads' | 'poles and wires' | 'terrain' | 'vegetation' | 'people and vehicles' | 'effects and weather' | 'other';
 
 /** MB of GPU memory each group may hold (§8.6, a city of 80 000 buildings). */
 const MEMORY_BUDGETS_MB: Readonly<Record<MemoryGroup, number | null>> = {
@@ -62,6 +62,7 @@ const MEMORY_BUDGETS_MB: Readonly<Record<MemoryGroup, number | null>> = {
   terrain: null,
   vegetation: null,
   'people and vehicles': null,
+  'effects and weather': null,
   // DO NOT leave it without a budget: a mesh with a name no group knows fell here and never failed (report JOB-15). Nothing is meant to be
   // here, so 0: what lands is a name to classify in `memoryGroup`, listed by the row.
   other: 0,
@@ -77,12 +78,15 @@ export function memoryGroup(name: string): MemoryGroup {
   if (name.startsWith('building-preview')) return 'other';
   if (name.startsWith('building-shell')) return 'L0 shells';
   if (name.startsWith('building-massing')) return 'L1 masses';
-  if (name.startsWith('building-')) return 'L0 building parts';
-  if (/^(asphalt|footway|kerb|verge|curb-ramp|median-|road)/.test(name)) return 'roads';
+  if (name.startsWith('building-') || name.startsWith('flag')) return 'L0 building parts';
+  // The plants before the street's furniture: a street tree is a `street-` too.
+  if (/^(gardens?-|nature-tree|element-|wildflowers|street-trees|street-bushes|far-forest|forest|tree|grass|woods|far-woods)/.test(name)) return 'vegetation';
+  // The roads' surfaces and what stands on them: signals, signs, street lights, benches, bins and the rest of the furniture.
+  if (/^(asphalt|footway|kerb|verge|curb-ramp|median-|road|deck-edge|street-|benches|hydrants|post-boxes|phones|drains|tree-pits|barriers|signal-|traffic-signals|sign-|signs)/.test(name)) return 'roads';
   if (name.startsWith('utility-')) return 'poles and wires';
   if (/^(terrain-|flat-world)/.test(name)) return 'terrain';
-  if (/^(garden-|far-forest|forest|tree|grass|woods|far-woods)/.test(name)) return 'vegetation';
-  if (/^(citizen-|car-|bus-|truck-|vehicle|male-|female-)/.test(name)) return 'people and vehicles';
+  if (/^(citizen-|car-|bus-|truck-|bike-|bicycle-|rider-|metro-|vehicle|male-|female-|densityCars|held-|transit-|person-|rigged-citizens)/.test(name)) return 'people and vehicles';
+  if (/^(sky|rain|blast|casualties|gore|destruction|exhaust|lightning|tracers|canyon-light|grid-flash)/.test(name)) return 'effects and weather';
   return 'other';
 }
 

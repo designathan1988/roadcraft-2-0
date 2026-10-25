@@ -232,6 +232,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
     .translate(0, 0, -0.5).rotateX(-Math.PI / 2);
   const slabs = new InstancedMesh(slabGeometry, debrisMaterial, MAX_PIECES);
   for (const mesh of [boxes, cylinders, shells, slabs]) {
+    mesh.name = 'blast-debris';
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;
     mesh.frustumCulled = false;
@@ -265,11 +266,13 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   const craterMeshes = craterMaterials.map((material, i) => {
     if (i === 2) {
       const mesh = new InstancedMesh(craterGeometry, material, MAX_SOOT);
+      mesh.name = 'blast-soot';
       mesh.count = 0; mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.receiveShadow = true; mesh.visible = false;
       group.add(mesh);
       return mesh;
     }
     const mesh = new InstancedMesh(craterGeometry, material, MAX_CRATERS);
+    mesh.name = 'blast-craters';
     mesh.count = 0;
     mesh.frustumCulled = false;
     mesh.renderOrder = 3;
@@ -281,6 +284,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   // The shockwave: a bright ring racing out over the ground.
   const ringMaterial = new MeshBasicMaterial({ color: 0xfff1d0, transparent: true, opacity: 0, side: DoubleSide, depthWrite: false, blending: AdditiveBlending });
   const ring = new Mesh(new RingGeometry(0.86, 1, 48).rotateX(-Math.PI / 2), ringMaterial);
+  ring.name = 'blast-ring';
   ring.visible = false;
   ring.renderOrder = 6;
   group.add(ring);
@@ -290,6 +294,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   const wirePositions = new Float32Array(MAX_WIRES * (WIRE_POINTS - 1) * 2 * 3);
   wireGeometry.setAttribute('position', new BufferAttribute(wirePositions, 3));
   const wires = new LineSegments(wireGeometry, new LineBasicMaterial({ color: 0x141414 }));
+  wires.name = 'blast-wires';
   wires.frustumCulled = false;
   wires.visible = false;
   group.add(wires);

@@ -39,7 +39,8 @@ const chromeArgs = process.env.LOOK_CHROME_ARGS ? process.env.LOOK_CHROME_ARGS.s
 /** `--electron`: the desktop build as the player runs it (`desktop/main.cjs`, the game from `dist/`: build it first, `--mode development` for the probes the steps call), its window hidden at 1920x1080 (`ROADCRAFT_LOOK`), no Steam. */
 const electron = flags.includes('--electron');
 // ONE TIMED LOOK AT A TIME ON THIS MACHINE: sessions working side by side share the GPU and the CPU, and two cities opened at once made each other's frame times worthless. A run that times anything (record, usage, trace) waits for the one before it (a lock file holding its pid; a dead holder's lock is taken over); a run of shots and counts (memory, draws, the console) goes at once: those do not depend on what else runs. LOOK_NO_LOCK=1 skips it.
-const timed = (steps) => (steps ?? []).some((step) => step.record || step.usage || step.usageStart || step.trace || step.compare || (step.steps && timed(step.steps)));
+// A step's `steps` is a group of steps, or a drag's number of moves (`drag`): only a group is looked into.
+const timed = (steps) => (steps ?? []).some((step) => step.record || step.usage || step.usageStart || step.trace || step.compare || (Array.isArray(step.steps) && timed(step.steps)));
 const lockFile = join(tmpdir(), 'roadcraft-look.lock');
 if (!process.env.LOOK_NO_LOCK && timed(plan.steps)) {
   let said = false;

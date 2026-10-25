@@ -26,6 +26,19 @@ describe("the city plan's budgets", () => {
     expect(memoryGroup('terrain-ground')).toBe('terrain');
     expect(memoryGroup('garden-bushes-bush')).toBe('vegetation');
     expect(memoryGroup('citizen-male-adult-sport-casual-person')).toBe('people and vehicles');
+    // The names the street's map view still put in `other` (2026-10-25): the gardens' far cells, the signals' lenses, the signs' plates,
+    // the rain and the blasts' pools of debris.
+    expect(memoryGroup('gardens-far-cells')).toBe('vegetation');
+    expect(memoryGroup('street-trees-oak')).toBe('vegetation');
+    expect(memoryGroup('signal-lenses')).toBe('roads');
+    expect(memoryGroup('sign-plates')).toBe('roads');
+    expect(memoryGroup('street-lights-far-cells')).toBe('roads');
+    expect(memoryGroup('densityCars')).toBe('people and vehicles');
+    expect(memoryGroup('bike-motorcycle-body')).toBe('people and vehicles');
+    expect(memoryGroup('bicycle-spokes')).toBe('people and vehicles');
+    expect(memoryGroup('sky')).toBe('effects and weather');
+    expect(memoryGroup('rain')).toBe('effects and weather');
+    expect(memoryGroup('blast-debris')).toBe('effects and weather');
   });
 
   it('lists the rows furthest over first, by how many times over', () => {
