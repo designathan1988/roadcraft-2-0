@@ -1,4 +1,4 @@
-/** A JOB PROCESS: a utility process (Electron `utilityProcess`) whose threads run the page's long job workers (`src/desktopJobs.ts`), each port from the page a thread of its own (Node `worker_threads`), so their heaps are in this process's V8 cage, not the page's */
+/** A JOB PROCESS: a utility process (Electron `utilityProcess`) whose threads run the page's long job workers (`src/desktopJobs.ts`), each port from the page a thread of its own (Node `worker_threads`), so their heaps are in this process's V8 cage, not the page's. The simulation's process is one of these too, its thread's code the simulation host (`desktop/main.cjs` sim:connect, `src/nodeSimHost.ts`). */
 const { MessageChannel, Worker } = require('node:worker_threads');
 
 /** Every buffer of its own in `value` (not shared), each once: moved to the thread, not copied a second time. */
@@ -23,6 +23,22 @@ function threadPort(main) {
   return port2;
 }
 
+/** The ports that came with a message put back where the page named them (`src/jobs/processWorker.ts` withPortFields: `portFields`, one field a port in the ports' order; a field that held a list gets them appended); a message naming none puts the first in `port` (the store's, `editor/workerParts.ts`). */
+function withPorts(data, given) {
+  if (!given.length || !data || typeof data !== 'object') return data;
+  const fields = Array.isArray(data.portFields) ? data.portFields : null;
+  if (!fields) return { ...data, port: given[0] };
+  const message = { ...data };
+  delete message.portFields;
+  given.forEach((port, i) => {
+    const field = fields[i];
+    if (typeof field !== 'string') return;
+    const was = message[field];
+    message[field] = Array.isArray(was) ? [...was, port] : port;
+  });
+  return message;
+}
+
 /** The page's port to one thread: what comes from the page posted to the thread (a port in it made a thread's, `threadPort`), what the thread posts sent back; the thread's failure said as a message (`src/jobs/processWorker.ts` ThreadFailed). */
 function serve(page, host) {
   const thread = new Worker(host);
@@ -33,10 +49,9 @@ function serve(page, host) {
     try { page.postMessage({ threadFailed: why }); } catch (error) { console.error('[jobs] the page could not be told', error); }
   };
   page.on('message', ({ data, ports }) => {
-    // A port in the message (the store's, `editor/workerParts.ts`; a lane's, `jobPool.ts` jobChannel): the field that named it given the thread's end.
+    // The ports in the message (the store's, `editor/workerParts.ts`; a lane's, `jobPool.ts` jobChannel; the simulation's lanes): each given the thread's end, where the page named it.
     const given = ports.map(threadPort);
-    const message = given.length && data && typeof data === 'object' ? { ...data, port: given[0] } : data;
-    thread.postMessage(message, [...given, ...buffersIn(data)]);
+    thread.postMessage(withPorts(data, given), [...given, ...buffersIn(data)]);
   });
   thread.on('message', (data) => page.postMessage(data));
   thread.on('error', (error) => { console.error('[jobs] a job thread failed', error); fail(error instanceof Error ? error.message : String(error)); });
@@ -54,4 +69,4 @@ if (process.parentPort) {
   });
 }
 
-module.exports = { buffersIn, serve, threadPort };
+module.exports = { buffersIn, serve, threadPort, withPorts };

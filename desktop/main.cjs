@@ -251,6 +251,13 @@ function serveIpc() {
     jobsProcess(at).postMessage(null, [port2]);
     event.senderFrame.postMessage('jobs:port', at, [port1]);
   });
+  // The simulation's own line to a thread of the simulation process (`jobs.cjs` run with the simulation host, `src/desktopSim.ts`): the whole map's traffic graphs in a V8 cage of their own.
+  ipcMain.on('sim:connect', (event) => {
+    if (!fromGame(event) || !event.senderFrame) return;
+    const { port1, port2 } = new MessageChannelMain();
+    simProcess().postMessage(null, [port2]);
+    event.senderFrame.postMessage('sim:port', null, [port1]);
+  });
   // The page's own line to the saves' writer (Electron, "MessagePorts": a `MessageChannelMain` between the page and a utility process; nothing of a save passes through here).
   ipcMain.on('saves:connect', (event) => {
     if (!fromGame(event) || !event.senderFrame) return;
@@ -276,6 +283,22 @@ function jobsProcess(at) {
     for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('jobs:lost', at);
   });
   jobs[at] = child;
+  return child;
+}
+
+/** THE SIMULATION PROCESS (`jobs.cjs` with the simulation host, `src/nodeSimHost.ts`): the page's simulation worker as a thread of a utility process of its own, a V8 cage of its own (one cage a process): a 10 km city's lane graph, walkways and network of the simulation no longer fill the page's. One process, one thread a page. */
+const SIM_HOST = path.join(GAME, 'desktop-jobs', 'simHost.mjs');
+let simulation = null;
+function simProcess() {
+  if (simulation) return simulation;
+  const child = utilityProcess.fork(path.join(__dirname, 'jobs.cjs'), [SIM_HOST], { serviceName: 'Roadcraft simulation' });
+  // Gone (a crash, a cage full): the page's simulation client fails as its worker would, and the game says so (`src/desktopSim.ts`).
+  child.once('exit', (code) => {
+    console.error('the simulation process stopped', code);
+    if (simulation === child) simulation = null;
+    for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('sim:lost');
+  });
+  simulation = child;
   return child;
 }
 

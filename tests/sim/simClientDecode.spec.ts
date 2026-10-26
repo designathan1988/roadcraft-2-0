@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { SimClient } from '@sim/host/simClient';
 import { H, P, PARKED_STRIDE, PED_STRIDE, PK, V, VEHICLE_STRIDE, headBase, pedBase, vehicleBase, type FromSim, type PedRich, type ParkedChanges, type SimStats } from '@sim/host/protocol';
 import { RoadDoc } from '@world/doc';
+import type { WorkerLike } from '@/jobs/processWorker';
 
 /** THE PAGE READS THE WORKER'S FRAME (`SimClient.readTick`): each vehicle's view kept from tick to tick and written in place, those not in a tick let go */
 
@@ -107,6 +108,35 @@ describe("the page's reading of the fleet", () => {
     const moved = [...was.keys()].filter((k) => now.get(k) !== was.get(k));
     expect(moved).toHaveLength(1);
     expect(client.parkedCellsIn({ x0: far, y0: -1, x1: far + 2, y1: 1 }, [])[0]!.key).toBe(moved[0]);
+  });
+
+  it('reads the frame a worker in another process posts with its tick, no frames shared with it (the desktop\'s simulation process)', async () => {
+    // The worker made by the client's maker (`useWorkerMaker`, `desktopSim.ts`): what it is sent kept.
+    const sent: unknown[] = [];
+    const worker: WorkerLike = { onmessage: null, onerror: null, onmessageerror: null, postMessage: (message: unknown) => { sent.push(message); }, terminate: () => {} };
+    const client = new SimClient(new RoadDoc());
+    client.useWorkerMaker(() => worker);
+    const ready = client.start(1, new Map(), null, 'edges');
+    const init = sent.find((m) => (m as { type: string }).type === 'init') as { frames: unknown };
+    expect(init.frames).toBeNull();
+    worker.onmessage!({ data: { type: 'ready' } } as MessageEvent);
+    await ready;
+    // A tick's numbers in a buffer of its own (slot 0 from offset 0), as `SimHost.publish` posts them without shared frames.
+    const data = new Float64Array(pedBase(0) + PED_STRIDE);
+    data[headBase(0) + H.vehicles] = 1; data[headBase(0) + H.peds] = 1; data[headBase(0) + H.time] = 42;
+    const at = vehicleBase(0);
+    data[at + V.id] = 7; data[at + V.free] = 0; data[at + V.x] = 12; data[at + V.y] = 34; data[at + V.bx] = 12; data[at + V.by] = 34; data[at + V.segment] = -1; data[at + V.inSegment] = -1; data[at + V.lot] = -1;
+    const p = pedBase(0);
+    data[p + P.id] = 9; data[p + P.x] = 5; data[p + P.segment] = -1;
+    const stats = { issues: [] } as unknown as SimStats;
+    inside(client).receive({ type: 'tick', slot: 0, vehicles: [], peds: [[9, { gesture: null } as unknown as PedRich]], signals: [], layout: null, trains: [], parked: null, stats, wounds: [], casualties: [], frame: data.buffer as ArrayBuffer });
+    expect(client.time).toBe(42);
+    expect(client.traffic.map((v) => v.id)).toEqual([7]);
+    expect(client.vehicles.get(7)!.frames).toMatchObject({ x: 12, y: 34 });
+    expect(client.pedViews.map((v) => v.id)).toEqual([9]);
+    expect(client.pedViews[0]!.x).toBe(5);
+    // The shared frames untouched: nothing of this tick was read from them.
+    expect(inside(client).data[headBase(0) + H.vehicles]).toBe(0);
   });
 
   it("keeps a gesture's clock from the age it was told at, with no gesture told each tick", () => {

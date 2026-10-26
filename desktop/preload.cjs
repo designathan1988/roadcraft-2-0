@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('roadcraftDesktop', {
   connectSaves: () => ipcRenderer.send('saves:connect'),
   // A long job worker's port in a job process (`src/desktopJobs.ts`), handed on as the saves' is.
   connectJobs: () => ipcRenderer.send('jobs:connect'),
+  // The simulation's port in the simulation process (`src/desktopSim.ts`), handed on the same way.
+  connectSim: () => ipcRenderer.send('sim:connect'),
   // The lab recorder's report written into the data folder (`src/lab/recorder/deliver.ts`): the folder it went to, or null.
   saveLabReport: (stamp, json, md) => ipcRenderer.invoke('lab:report', { stamp, json, md }),
   // A field problem written to the local log by the main process (`src/fieldReport.ts`, `problems.cjs`): fire and forget, so it still goes out as the page closes.
@@ -24,3 +26,5 @@ ipcRenderer.on('saves:lost', () => window.postMessage('roadcraft:saves-lost', '*
 ipcRenderer.on('desktop:shown', (event, shown) => window.postMessage({ roadcraftShown: shown === true }, '*'));
 ipcRenderer.on('jobs:port', (event, process) => window.postMessage({ roadcraftJobsPort: process }, '*', event.ports));
 ipcRenderer.on('jobs:lost', (event, process) => window.postMessage({ roadcraftJobsLost: process }, '*'));
+ipcRenderer.on('sim:port', (event) => window.postMessage('roadcraft:sim-port', '*', event.ports));
+ipcRenderer.on('sim:lost', () => window.postMessage('roadcraft:sim-lost', '*'));

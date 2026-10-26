@@ -11,7 +11,7 @@ import { desktopJobWorkers } from '@/desktopJobs';
 
 /** A port of the shell's (`MessagePortMain`): its messages as `{ data, ports }`, `start`, `close`. */
 interface MainPort { on(event: string, listener: (...args: never[]) => void): void; postMessage(data: unknown): void; start(): void }
-const { serve } = createRequire(import.meta.url)('../../desktop/jobs.cjs') as { serve(page: MainPort, host: string): void };
+const { serve, withPorts } = createRequire(import.meta.url)('../../desktop/jobs.cjs') as { serve(page: MainPort, host: string): void; withPorts(data: unknown, given: readonly unknown[]): unknown };
 const ECHO = fileURLToPath(new URL('./support/echoThread.cjs', import.meta.url));
 
 /** The page's end as the job process sees it: what the test sends comes as the shell's messages do; what the process posts back is kept. */
@@ -95,14 +95,26 @@ function sentPort(): { readonly port: MessagePort; readonly sent: { readonly dat
 }
 
 describe("a message the shell's port can carry (Electron MessagePortMain)", () => {
-  it('names no port inside it: the port goes in the list alone, the job process puts it back (`jobs.cjs` serve)', async () => {
+  it('names no port inside it: each port goes in the list, its field named (`portFields`), and the job process puts it back (`jobs.cjs` withPorts)', async () => {
     const { port, sent } = sentPort();
     const worker = new ProcessWorker(() => Promise.resolve(port));
     const { port1, port2 } = new MessageChannel();
-    closers.push(() => { port1.close(); port2.close(); });
+    const lanes = [new MessageChannel(), new MessageChannel(), new MessageChannel()];
+    closers.push(() => { port1.close(); port2.close(); for (const l of lanes) { l.port1.close(); l.port2.close(); } });
     worker.postMessage({ storeSetup: true, port: port1 }, [port1 as unknown as Transferable]);
+    // The simulation's lanes: two lists of ports, each port named once in the order it goes.
+    const [a, b, c] = lanes.map((l) => l.port1);
+    worker.postMessage({ type: 'lanes', bays: [a, b], conflicts: [c] }, [a, b, c] as unknown as Transferable[]);
     await Promise.resolve();
-    expect(sent).toEqual([{ data: { storeSetup: true, port: null }, moved: [port1] }]);
+    expect(sent).toEqual([
+      { data: { storeSetup: true, port: null, portFields: ['port'] }, moved: [port1] },
+      { data: { type: 'lanes', bays: [], conflicts: [], portFields: ['bays', 'bays', 'conflicts'] }, moved: [a, b, c] },
+    ]);
+    // The job process's side: each port back where its name says; a message naming none puts the first in `port` (the store's).
+    expect(withPorts(sent[1]!.data, ['A', 'B', 'C'])).toEqual({ type: 'lanes', bays: ['A', 'B'], conflicts: ['C'] });
+    expect(withPorts(sent[0]!.data, ['P'])).toEqual({ storeSetup: true, port: 'P' });
+    expect(withPorts({ storeSetup: true, port: null }, ['P'])).toEqual({ storeSetup: true, port: 'P' });
+    expect(withPorts({ k: 1 }, [])).toEqual({ k: 1 });
   });
 
   it("moves no buffer: a buffer is copied with it, still the page's", async () => {

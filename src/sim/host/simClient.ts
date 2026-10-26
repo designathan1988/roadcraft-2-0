@@ -5,51 +5,27 @@ import type { NodeId, SegmentId } from '@world/ids';
 import type { LotPlan } from '@world/lots';
 import type { BuildingId } from '@world/buildings/types';
 import { buildingChangesOf, trafficMapOf } from '../agents/trafficBuildings';
-import { ARCHETYPES, archetypeById, type Archetype } from '../vehicles/archetypes';
-import type { KerbStop } from '../vehicles/kerbStops';
-import type { PedView, PersonAgeClass } from '../people/view';
-import type { VehicleFrames } from '../pose';
+import { ARCHETYPES, archetypeById } from '../vehicles/archetypes';
+import type { PedView } from '../people/view';
 import type { SignalState } from '../signals/query';
 import type { JunctionAnswer, TrafficCount } from './simAnswers';
 import type { Casualty } from '../people/casualties';
 import { type FleetCell, FleetGrid, type GroundBox } from './fleetGrid';
 import type { MesoDelta } from '../meso/memory';
+import type { WorkerLike } from '@core/workerLike';
+import { readDerivedSome, writeDerivedMany } from '@core/derivedCache';
+import { type VehicleView, colourString, fillMap, newView, recordOf, setFrames, setFree } from './simViews';
 import {
   C, H, P, PARKED_STRIDE, PED_STRIDE, PK, V, VEHICLE_STRIDE, headBase, makeSharedFrames, pedBase, vehicleBase,
   type FromSim, type ParkedChanges, type SignalLayout, type SimAct, type SimAsk, type SimControls, type SimStats, type ToSim, type TrainState, type Wound,
 } from './protocol';
 
+export type { VehicleView } from './simViews';
+
 
 /** Meso deltas kept for the page before they are let go and every link asked for again (`SimClient.keepMeso`): ten seconds of frames. */
 const MESO_KEPT = 600;
 /** THE PAGE'S SIDE OF THE SIMULATION'S WORKER (`simHost.ts`): the map's changes sent, the frame read, the panels' questions asked */
-
-/** A vehicle as the page draws it: its numbers of the last tick and what it carries (`VehicleRich`). */
-export interface VehicleView {
-  readonly id: number;
-  archetype: Archetype;
-  color: string;
-  doors: readonly number[];
-  kerbStop: KerbStop | null;
-  people: readonly number[];
-  peopleAge: readonly (PersonAgeClass | undefined)[];
-  seats: number;
-  slain: boolean;
-  age: number;
-  v: number;
-  readonly prev: { v: number };
-  /** Off the road: its pose a tick ago and now, and the lot it stands on; null on a lane. */
-  free: { px: number; py: number; pangle: number; x: number; y: number; angle: number; lot: number | null } | null;
-  readonly frames: VehicleFrames;
-  /** The road its lane belongs to (undefined on a junction's connector), and the road it came from on one. */
-  segment: SegmentId | undefined;
-  inSegment: SegmentId | undefined;
-  indicator: -1 | 0 | 1;
-  curvature: number;
-  odometer: number;
-  /** The client's own: the tick it was last read in (`readTick`), those not read in a tick being gone. */
-  tickRead: number;
-}
 
 /** A walker's view as the page makes it (`readTick`): the tick it was last read in, as a vehicle's. */
 type PedRead = PedView & { tickRead: number };
@@ -84,7 +60,9 @@ const FOLLOWED: readonly DocChangeKind[] = [...Object.keys(RECORD_KINDS), ...Obj
 export class SimClient implements JournalReader {
   /** The kinds the worker's copy follows: the diary keeps them until this client has sent them (`changes.follow`). */
   readonly kinds = FOLLOWED;
-  private worker: Worker | null = null;
+  private worker: WorkerLike | null = null;
+  /** Where the worker is made instead of the page's own `Worker` (`useWorkerMaker`: the desktop's simulation process, `desktopSim.ts`); null: the page's. A worker so made is in another process: no frames are shared with it, each tick carries its own (`FromSim` tick `frame`). */
+  private maker: (() => WorkerLike) | null = null;
   private readonly frames = makeSharedFrames();
   private readonly data = new Float64Array(this.frames.data);
   private readonly control = new Int32Array(this.frames.control);
@@ -254,11 +232,16 @@ export class SimClient implements JournalReader {
     return this.casualtyList;
   }
 
+  /** Where the worker is made (the desktop's simulation process, a V8 cage of its own, `desktopSim.ts`), before `start`; null: the page's own `Worker`. */
+  useWorkerMaker(maker: (() => WorkerLike) | null): void {
+    this.maker = maker;
+  }
+
   /** The worker made and given the map; resolved once it stands. */
   /** `lanes`: the page's job lanes for the worker's bays and conflict pairs (`main.ts`, `jobPool.ts` jobChannel), handed before `init`; none: it opens its own. */
   start(seed: number, zones: ReadonlyMap<string, Float64Array | null>, zonesPrefix: string | null, ambient: 'view' | 'edges',
     lanes: { readonly bays: readonly MessagePort[]; readonly conflicts: readonly MessagePort[] } | null = null): Promise<void> {
-    const worker = new Worker(new URL('../sim.worker.ts', import.meta.url), { type: 'module' });
+    const worker: WorkerLike = this.maker ? this.maker() : new Worker(new URL('../sim.worker.ts', import.meta.url), { type: 'module' });
     this.worker = worker;
     if (lanes) {
       const message: ToSim = { type: 'lanes', bays: lanes.bays, conflicts: lanes.conflicts };
@@ -277,7 +260,8 @@ export class SimClient implements JournalReader {
       worker.onmessageerror = () => lost('a message from the worker could not be read');
     });
     this.markSent();
-    this.send({ type: 'init', frames: this.frames, map: trafficMapOf(this.doc), seed, zones, zonesPrefix, ambient, bake: this.bake() });
+    // No frames shared with a worker of another process (a SharedArrayBuffer never crosses one): it is told so, and posts its frames with each tick.
+    this.send({ type: 'init', frames: this.maker ? null : this.frames, map: trafficMapOf(this.doc), seed, zones, zonesPrefix, ambient, bake: this.bake() });
     return ready;
   }
 
@@ -534,6 +518,14 @@ export class SimClient implements JournalReader {
         return;
       }
       case 'ready': return;
+      // A worker in another process reads and keeps the conflict zones through this page's store (`core/derivedCache.ts`), which that process has none of.
+      case 'derivedAsk':
+        void readDerivedSome<Float64Array | null>(message.prefix, message.keys).then(
+          (values) => this.send({ type: 'derivedAnswer', id: message.id, values }),
+          (error: unknown) => { console.warn('[sim] the kept zones could not be read for the simulation', error); this.send({ type: 'derivedAnswer', id: message.id, values: new Map() }); },
+        );
+        return;
+      case 'derivedKeep': writeDerivedMany(message.prefix, message.values); return;
       // DO NOT stay silent: the frame asked of it never comes, and the city would stand still with no word.
       case 'failed':
         // Told once (each frame after may fail the same way), the last kept for the probes.
@@ -544,12 +536,13 @@ export class SimClient implements JournalReader {
     }
   }
 
-  /** The frame the worker wrote: read from its slot (marked as being read), its rich parts from the message. */
+  /** The frame the worker wrote: read from its slot (marked as being read), or from the frame the tick carries (a worker in another process, slot 0 of it), its rich parts from the message. */
   private readTick(message: Extract<FromSim, { type: 'tick' }>): void {
     this.inFlight = false;
-    const slot = Atomics.load(this.control, C.latest);
-    Atomics.store(this.control, C.reading, slot);
-    const data = this.data, h = headBase(slot);
+    const shared = message.frame === undefined;
+    const slot = shared ? Atomics.load(this.control, C.latest) : 0;
+    if (shared) Atomics.store(this.control, C.reading, slot);
+    const data = shared ? this.data : new Float64Array(message.frame!), h = headBase(slot);
     this.time = data[h + H.time]!;
     this.minutes = data[h + H.minutes]!;
     this.alpha = data[h + H.alpha]!;
@@ -679,7 +672,7 @@ export class SimClient implements JournalReader {
       if (view.tickRead !== stamp) { view.tickRead = stamp; pedRead++; }
     }
     if (pedRead !== this.pedById.size) for (const [id, view] of this.pedById) if (view.tickRead !== stamp) this.pedById.delete(id);
-    Atomics.store(this.control, C.reading, -1);
+    if (shared) Atomics.store(this.control, C.reading, -1);
     this.trains = message.trains;
     this.tick++;
     if (message.wounds.length) this.wounds.push(...message.wounds);
@@ -754,43 +747,3 @@ export class SimClient implements JournalReader {
   }
 }
 
-/** A map emptied and filled with the pairs. */
-function fillMap<K, V>(map: Map<K, V>, pairs: readonly (readonly [K, V])[]): Map<K, V> {
-  map.clear();
-  for (const [k, v] of pairs) map.set(k, v);
-  return map;
-}
-
-/** The client's own caches: a gesture's clock origin, and a colour as the worker numbers it (0xrrggbb) as its palette writes it. */
-// Kept by the client, not loose in the module (`eslint-rules/no-module-state.js`).
-function colourString(n: number): string {
-  return `#${n.toString(16).padStart(6, '0')}`;
-}
-
-function newView(id: number): VehicleView {
-  return {
-    id, archetype: archetypeById('car'), color: '#888888', doors: [], kerbStop: null, people: [], peopleAge: [], seats: 0, slain: false, age: 0, v: 0, prev: { v: 0 },
-    free: null, frames: { bx: 0, by: 0, bangle: 0, x: 0, y: 0, angle: 0, yawBefore: 0, yawNow: 0, jump: false },
-    segment: undefined, inSegment: undefined, indicator: 0, curvature: 0, odometer: 0, tickRead: -1,
-  };
-}
-
-/** A view off the road: its two poses and its lot, into the pose it already has (DO NOT make one a vehicle a tick). */
-function setFree(view: VehicleView, px: number, py: number, pangle: number, x: number, y: number, angle: number, lot: number | null): void {
-  const free = view.free ?? (view.free = { px, py, pangle, x, y, angle, lot });
-  free.px = px; free.py = py; free.pangle = pangle; free.x = x; free.y = y; free.angle = angle; free.lot = lot;
-}
-
-function setFrames(f: VehicleFrames, bx: number, by: number, bangle: number, x: number, y: number, angle: number): void {
-  f.bx = bx; f.by = by; f.bangle = bangle; f.x = x; f.y = y; f.angle = angle; f.yawBefore = 0; f.yawNow = 0; f.jump = false;
-}
-
-/** A record of the map by its part, for the worker's copy (never a building's: `buildingChangesOf`). */
-function recordOf(doc: RoadDoc, part: RecordPart, id: number): unknown {
-  switch (part) {
-    case 'nodes': return doc.nodes.get(id as NodeId);
-    case 'segments': return doc.segments.get(id as SegmentId);
-    case 'lots': return doc.lotStore.get(id);
-    default: return undefined;
-  }
-}

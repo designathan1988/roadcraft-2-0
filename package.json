@@ -86,6 +86,7 @@
       "desktop/saves.cjs",
       "desktop/jobs.cjs",
       "src/jobs/nodeJobHost.ts!",
+      "src/nodeSimHost.ts!",
       "src/lab/*Sheet.ts",
       "src/lab/optimization/sheet.ts",
       "src/lab/catalog/run.ts",

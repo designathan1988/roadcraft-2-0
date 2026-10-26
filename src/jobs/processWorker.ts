@@ -1,13 +1,9 @@
 /** A JOB WORKER IN ANOTHER PROCESS (the desktop's, `desktop/jobs.cjs`): the shape of a `Worker` the pool was written for (`jobPool.ts` grow), over a port to a thread of a utility process, so its heap is in that process's V8 cage, not in the page's (Electron `utilityProcess`; V8 pointer compression: one cage a process) */
 
-/** What the pool uses of a worker. */
-export interface WorkerLike {
-  onmessage: ((event: MessageEvent) => void) | null;
-  onerror: ((event: ErrorEvent) => void) | null;
-  onmessageerror: ((event: MessageEvent) => void) | null;
-  postMessage(message: unknown, transfer?: Transferable[]): void;
-  terminate(): void;
-}
+import type { WorkerLike } from '../core/workerLike';
+
+/** What the pool uses of a worker (`core/workerLike.ts`). */
+export type { WorkerLike };
 
 /** What the host in the other process posts when its thread failed or stopped (`desktop/jobs.cjs`). */
 interface ThreadFailed { readonly threadFailed: string }
@@ -101,6 +97,24 @@ export function restoreKept(value: unknown, keep: Map<number, ArrayBuffer>): unk
   return put(value);
 }
 
+/** A message's ports taken out of it for the shell's port (`ProcessWorker.send`): each top-level field holding a port, or a list of ports, emptied (null, or []) and named once a port in `portFields`, in the order the ports go in the transfer list; the job process puts each back where its name says (`desktop/jobs.cjs` withPorts). DO NOT leave a port in the message: the shell's deserializer reads none in it (Blink writes one as a host object, `shell/common/v8_util.cc` V8Deserializer knows only its NativeImage), and the message came out null (2026-10-22). */
+export interface PortFields { readonly portFields: readonly string[] }
+export function withPortFields<T>(message: T): { readonly message: T | (T & PortFields); readonly ports: MessagePort[] } {
+  if (typeof MessagePort === 'undefined' || typeof message !== 'object' || message === null || Array.isArray(message)) return { message, ports: [] };
+  const ports: MessagePort[] = [];
+  const fields: string[] = [];
+  const out: Record<string, unknown> = { ...(message as Record<string, unknown>) };
+  for (const [key, value] of Object.entries(out)) {
+    if (value instanceof MessagePort) { ports.push(value); fields.push(key); out[key] = null; continue; }
+    if (Array.isArray(value) && value.length && value.every((v) => v instanceof MessagePort)) {
+      for (const port of value as MessagePort[]) { ports.push(port); fields.push(key); }
+      out[key] = [];
+    }
+  }
+  if (!ports.length) return { message, ports };
+  return { message: { ...out, portFields: fields } as T & PortFields, ports };
+}
+
 /** Each buffer kept by job threads: its id, and the workers whose thread holds it. */
 const keptIds = new WeakMap<SharedArrayBuffer, number>();
 let nextKept = 1;
@@ -176,14 +190,13 @@ export class ProcessWorker implements WorkerLike {
     return { keptBuffer: id, bytes };
   }
 
-  private send(message: unknown, transfer: Transferable[]): void {
+  private send(message: unknown, _transfer: Transferable[]): void {
     // DO NOT move a buffer to the shell's port: only ports cross it (Electron `MessagePortMain.postMessage`, transfer `MessagePortMain[]`); the shell's deserializer reads the message's bytes alone, no buffer moved beside it (`shell/common/v8_util.cc` V8Deserializer: V8 reads a moved buffer only from a transfer map, none there), so the message comes out null - the cell jobs move their paving's buffers. A buffer is copied with the message; a buffer in shared memory is copied too (`unshared`).
-    const moved = transfer.filter((t) => typeof MessagePort !== 'undefined' && t instanceof MessagePort);
     try {
       const out = unshared(message, this.keeps ? (buffer) => this.kept(buffer) : undefined);
-      // DO NOT leave a port in the message: the shell's deserializer reads no port in it (Blink writes one as a host object, `shell/common/v8_util.cc` V8Deserializer knows only its NativeImage), and the message came out null - each job thread's store setup (`{ storeSetup, port }`, `main.ts`) killed the thread ("Cannot use 'in' operator to search for 'adopt' in null"). The port goes in the list alone; the job process puts it back as `port` (`desktop/jobs.cjs` serve).
-      const port = (out as { port?: unknown } | null)?.port;
-      this.port!.postMessage(typeof MessagePort !== 'undefined' && port instanceof MessagePort ? { ...(out as object), port: null } : out, moved);
+      // The ports taken out of the message and named by their fields (`withPortFields`): a job thread's store setup (`{ storeSetup, port }`, `main.ts`), the simulation's lanes (`{ type: 'lanes', bays, conflicts }`); the job process puts each back (`desktop/jobs.cjs` withPorts).
+      const { message: stripped, ports } = withPortFields(out);
+      this.port!.postMessage(stripped, ports);
     } catch (error) {
       this.fail(`a message could not reach the job process: ${String(error)}`);
     }

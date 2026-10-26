@@ -8,6 +8,7 @@ import { CITY_TABLES, type CityTable, type OpenedCity, type OpenedTables, noCity
 import { COOKED_CITY_SEEDS, readCookedCity } from './editor/cookedCities';
 import { tableBytes, tableFormat, tableIn } from '@world/buildings/recordTable';
 import { desktopJobWorkers } from './desktopJobs';
+import { desktopSimWorker } from './desktopSim';
 import { profileOf } from '@world/roads/profile';
 import { profiler } from '@core/profiler';
 import { mountProfilerHud } from '@ui/profilerHud';
@@ -297,6 +298,9 @@ function clearOldMapsOnce(): void {
 }
 /** The simulation, in a worker of its own (`sim/host/simHost.ts`): the page sends it the map's changes and reads its frames. */
 const sim = new SimClient(doc, net);
+/** On the desktop the simulation runs in the shell's simulation process, a V8 cage of its own (`desktopSim.ts`): the whole map's lane graph and walkways of the traffic no longer fill the page's. */
+const desktopSim = desktopSimWorker();
+if (desktopSim) sim.useWorkerMaker(desktopSim);
 /** The population the machine sustains (`sim/populationGovernor.ts`, run in the worker), never more than the device's own share. */
 let maxPopulationShare = 1;
 /** A measure running (`__roadcraft.measure`, `scripts/lib/measureCity.mjs`): `on` a frame drawn every refresh; `step` the simulation going on a fixed step of

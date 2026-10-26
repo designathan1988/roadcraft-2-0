@@ -24,11 +24,11 @@ import { answer } from './simAnswers';
 import { type Casualty, impactCasualties, takeWounds } from '../people/casualties';
 import type { PedView } from '../people/view';
 import {
-  C, H, MAX_PEDS, MAX_VEHICLES, P, PED_STRIDE, V, VEHICLE_STRIDE, headBase, pedBase, vehicleBase,
-  PARKED_STRIDE, PK, type FromSim, type ParkedChanges, type SimStats, type PedRich, type SignalLayout, type SignalLights, type SimAct, type SimAsk, type SimControls, type ToSim, type VehicleRich,
+  C, H, MAX_PEDS, MAX_VEHICLES, P, PED_STRIDE, SLOT_DOUBLES, V, VEHICLE_STRIDE, headBase, pedBase, vehicleBase,
+  PARKED_STRIDE, PK, type FromSim, type ParkedChanges, type SharedFrames, type SimStats, type PedRich, type SignalLayout, type SignalLights, type SimAct, type SimAsk, type SimControls, type ToSim, type VehicleRich,
 } from './protocol';
 
-/** THE SIMULATION IN ITS OWN THREAD: the page sends the map's changes and the player's controls, the worker steps the city */
+/** THE SIMULATION IN ITS OWN THREAD: the page sends the map's changes and the player's controls, the worker steps the city. A thread of the page's process writes the frames both hold (`SharedFrames`); a thread of the desktop's simulation process (`nodeSimHost.ts`, its own V8 cage) is given none, writes a buffer of its own and posts each tick's part of it (`frame`), and reads and keeps the conflict zones through the page (`derivedAsk`, `derivedKeep`). */
 
 /** Most milliseconds of steps a frame: the worker's own core, a frame's time at 60 Hz (the page's share is gone). */
 const STEP_BUDGET_MS = 14;
@@ -55,7 +55,11 @@ export class SimHost {
   private conflictPool: ConflictPool | null = null;
   private readonly governor = new PopulationGovernor(1);
   private data: Float64Array | null = null;
+  /** The control words of the shared frames; null in another process, where slot 0 of `data` is this thread's own and posted with each tick. */
   private control: Int32Array | null = null;
+  /** The page's answers to the kept zones asked of it (`derivedAsk`), by id. */
+  private readonly derivedAsked = new Map<number, (values: ReadonlyMap<string, Float64Array | null>) => void>();
+  private nextDerivedAsk = 1;
   private tick = 0;
   /** What each vehicle and person was last told with (`VehicleRich`, `PedRich`), by id: told again only when it changes. */
   private readonly vehicleSent = new Map<number, ToldVehicle>();
@@ -87,8 +91,14 @@ export class SimHost {
   async handle(message: ToSim): Promise<void> {
     switch (message.type) {
       case 'init':
-        await this.init(message.map, message.seed, message.zones, message.frames.data, message.frames.control, message.zonesPrefix, message.ambient, message.bake ?? null);
+        await this.init(message.map, message.seed, message.zones, message.frames, message.zonesPrefix, message.ambient, message.bake ?? null);
         return;
+      case 'derivedAnswer': {
+        const done = this.derivedAsked.get(message.id);
+        this.derivedAsked.delete(message.id);
+        done?.(message.values);
+        return;
+      }
       case 'load': this.load(message.map, message.bake ?? null); return;
       // The replica made the map again by its differences (`RoadDoc.replaceWith`): the frame rebuilds what moved, the vehicles drive on (rebound where their lanes went).
       case 'resync': takeTrafficMap(this.doc, this.buildings, message.map); return;
@@ -110,10 +120,11 @@ export class SimHost {
     }
   }
 
-  private async init(map: TrafficMap, seed: number, zones: ReadonlyMap<string, Float64Array | null>, data: SharedArrayBuffer, control: SharedArrayBuffer,
+  private async init(map: TrafficMap, seed: number, zones: ReadonlyMap<string, Float64Array | null>, frames: SharedFrames | null,
     prefix: string | null, ambient: 'view' | 'edges', bake: NetworkBake | null): Promise<void> {
-    this.data = new Float64Array(data);
-    this.control = new Int32Array(control);
+    // The frames both sides hold, or (another process) one slot of this thread's own, its written part posted with each tick.
+    this.data = frames ? new Float64Array(frames.data) : new Float64Array(SLOT_DOUBLES);
+    this.control = frames ? new Int32Array(frames.control) : null;
     takeTrafficMap(this.doc, this.buildings, map);
     // The page's junctions and ribbons, taken where their inputs are this copy's: DO NOT solve the whole map's junctions again (SIM-04).
     if (bake) this.net.offerBake(bake);
@@ -128,8 +139,8 @@ export class SimHost {
     sim.auditLevel = 'cheap';
     sim.auditEvery = 60;
     sim.conflicts.seed(zones);
-    // The zones kept in earlier sessions read by the pairs a build needs (`ConflictIndex.lookup`), never all at the start.
-    if (prefix) sim.conflicts.lookup = (keys) => readDerivedSome<Float64Array | null>(prefix, keys);
+    // The zones kept in earlier sessions read by the pairs a build needs (`ConflictIndex.lookup`), never all at the start: from this thread's store, or through the page's where this process has none (`derivedAsk`).
+    if (prefix) sim.conflicts.lookup = (keys) => (this.control ? readDerivedSome<Float64Array | null>(prefix, keys) : this.askDerived(prefix, keys));
     this.zonesPrefix = prefix;
     sim.usePedestrianEngine((await import('../agents/walk')).createAgentWalkEngine());
     sim.followCity = true;
@@ -198,12 +209,23 @@ export class SimHost {
     this.publish(alpha);
   }
 
-  /** The frame written into the slot neither the page reads nor was written last (a triple buffer), then made the latest. */
+  /** The kept zones asked of the page (another process: this thread's store is none), answered with `derivedAnswer`. */
+  private askDerived(prefix: string, keys: readonly string[]): Promise<ReadonlyMap<string, Float64Array | null>> {
+    const id = this.nextDerivedAsk++;
+    return new Promise((done) => {
+      this.derivedAsked.set(id, done);
+      this.post({ type: 'derivedAsk', id, prefix, keys });
+    });
+  }
+
+  /** The frame written into the slot neither the page reads nor was written last (a triple buffer), then made the latest; in another process, into slot 0 of this thread's own buffer, posted with the tick. */
   private publish(alpha: number): void {
-    const sim = this.sim!, data = this.data!, control = this.control!;
-    const latest = Atomics.load(control, C.latest), reading = Atomics.load(control, C.reading);
+    const sim = this.sim!, data = this.data!, control = this.control;
     let slot = 0;
-    while (slot === latest || slot === reading) slot++;
+    if (control) {
+      const latest = Atomics.load(control, C.latest), reading = Atomics.load(control, C.reading);
+      while (slot === latest || slot === reading) slot++;
+    }
     const vehicles: [number, VehicleRich][] = [];
     const peds: [number, PedRich][] = [];
     const frame = ++this.published;
@@ -268,14 +290,20 @@ export class SimHost {
     const h = headBase(slot);
     data[h + H.tick] = ++this.tick; data[h + H.time] = sim.clock.time; data[h + H.vehicles] = n; data[h + H.peds] = m;
     data[h + H.alpha] = alpha; data[h + H.steps] = sim.clock.lastSteps; data[h + H.stepMs] = sim.clock.lastStepMs; data[h + H.minutes] = sim.city.minutes(sim);
-    Atomics.store(control, C.latest, slot);
+    if (control) Atomics.store(control, C.latest, slot);
     const parked = this.parked();
     const meso = this.meso.takeDelta();
     const transfer: Transferable[] = parked ? [parked.cars.buffer] : [];
     if (meso) transfer.push(...deltaTransfer(meso));
+    // No frames shared (another process): the slot's written part (its head, its vehicles, its people) goes with the tick, in a buffer of its own.
+    let slotBytes: ArrayBuffer | undefined;
+    if (!control) {
+      slotBytes = data.buffer.slice(0, (pb + m * PED_STRIDE) * 8) as ArrayBuffer;
+      transfer.push(slotBytes);
+    }
     this.post({
       type: 'tick', slot, vehicles, peds, ...this.signals(), trains: sim.city.transit.trains().map((t) => ({ colour: t.colour, metro: t.metro, cars: t.cars })),
-      parked, meso, stats: this.stats(), wounds: takeWounds(sim),
+      parked, meso, ...(slotBytes ? { frame: slotBytes } : {}), stats: this.stats(), wounds: takeWounds(sim),
       casualties: impactCasualties(sim, 0).filter((c) => !this.casualtiesSent.has(c) && (this.casualtiesSent.add(c), true)),
     }, transfer.length ? transfer : undefined);
   }
@@ -356,8 +384,12 @@ export class SimHost {
     // The issues reported since the last frame, the last of them still kept (the list keeps 512).
     const issues = issuesSince(sim, this.issuesSent).map((i) => ({ code: i.code, subject: String(i.subject), detail: String(i.detail), tick: i.tick }));
     this.issuesSent = sim.issuesReported;
-    // The zones measured since kept for the next session from here, as the conflicts' workers keep theirs: DO NOT pass them through the page to the store.
-    if (++this.measuredDue % 300 === 0 && this.zonesPrefix) writeDerivedMany(this.zonesPrefix, sim.conflicts.takeMeasured());
+    // The zones measured since kept for the next session from here, as the conflicts' workers keep theirs: DO NOT pass them through the page to the store - unless this thread is in another process, whose store is none (`derivedKeep`).
+    if (++this.measuredDue % 300 === 0 && this.zonesPrefix) {
+      const measured = sim.conflicts.takeMeasured();
+      if (this.control) writeDerivedMany(this.zonesPrefix, measured);
+      else if (measured.size) this.post({ type: 'derivedKeep', prefix: this.zonesPrefix, values: measured });
+    }
     const measured: SimStats['measured'] = [];
     return {
       vehicles: sim.vehicles.size, people: sim.pedViews.length, completedTrips: sim.completedTrips, entryDemandLost: sim.entryDemandLost,
