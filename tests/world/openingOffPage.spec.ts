@@ -6,17 +6,19 @@ import { preparedCity } from '@editor/preparedCity';
 import { RoadDoc, type SerializedDoc } from '@world/doc';
 import { tableIn } from '@world/buildings/recordTable';
 import { Network } from '@world/network';
+import { roadsOfTiles, tilesMeeting } from '@world/networkWindow';
 import { networkWork } from '@world/rebuildWork';
 import { rampsMeeting, rampsOfNode, walkingRise } from '@world/curbRamps';
-import { bakeNetwork } from '../../src/networkBake.worker';
+import { solveMap } from '../../src/networkBake.worker';
 import { networkLines } from './support/roadDigest';
 
 /**
- * A CITY'S OPENING OFF THE PAGE (`networkBake.worker.ts`, `curbRamps.ts`): the cooked small city's network solved as a job worker
- * solves it while the curtain is up, its bake cloned as a message clones it, and the page's own build taking it - every junction and
- * ribbon the same, number for number, as the page solving it alone (`networkLines`: every level of every junction, every ribbon's
- * centrelines and outlines), almost none solved again. And the dropped kerbs worked out region by region as they are asked (a
- * walker's point, a cell's rectangle): the same ramps and the same walking heights as every ramp of the map worked out first.
+ * A CITY'S OPENING OFF THE PAGE (`networkBake.worker.ts`, `curbRamps.ts`): the cooked small city's whole network solved as a job worker
+ * solves it while the curtain is up, the bake of the tiles the map opens with cloned as a message clones it, and the page's own build,
+ * holding those tiles' roads alone (`Network.scope`), taking it - every junction and ribbon the same, number for number, as the page
+ * solving the whole map alone (`networkLines`: every level of every junction, every ribbon's centrelines and outlines), none solved again;
+ * the map's far level made there too. And the dropped kerbs worked out region by region as they are asked (a walker's point, a cell's
+ * rectangle): the same ramps and the same walking heights as every ramp of the map worked out first.
  */
 
 function opened(): { doc: RoadDoc; data: SerializedDoc; table: ArrayBufferLike } {
@@ -30,20 +32,36 @@ function opened(): { doc: RoadDoc; data: SerializedDoc; table: ArrayBufferLike }
   return { doc, data: city.data, table };
 }
 
+/** The tiles the whole small city lies in: what it opens with. */
+function cityTiles(doc: RoadDoc): number[] {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of doc.nodes.values()) { minX = Math.min(minX, n.x); minY = Math.min(minY, n.y); maxX = Math.max(maxX, n.x); maxY = Math.max(maxY, n.y); }
+  return [...tilesMeeting([minX, minY, maxX, maxY])];
+}
+
 describe('a city opened off the page', () => {
-  it("takes the network a worker solved, the same as the page's own", () => {
-    const { doc, data, table } = opened();
+  it("takes the network a worker solved for the tiles it opens with, the same as the page's own of the whole map; the map's far level made there", () => {
+    const { doc, data } = opened();
     const alone = new Network(doc);
     alone.rebuild({ full: true });
-    const bake = structuredClone(bakeNetwork({ data, table, generated: true }));
+    const tiles = cityTiles(doc);
+    const { solved } = solveMap({ data, repair: false, cell: 250, openingTiles: tiles });
+    const bake = structuredClone(solved.bake);
+    expect(bake).not.toBeNull();
     const taken = new Network(doc);
-    taken.offerBake(bake);
+    taken.scope = roadsOfTiles(doc, tiles);
+    expect(taken.scope.size).toBe(doc.segments.size);
+    taken.offerBake(bake!);
     const before = { ...networkWork };
     taken.rebuild({ full: true });
     expect(networkLines(taken)).toEqual(networkLines(alone));
     // Every junction taken as solved there, none built again on the page.
     expect(networkWork.taken - before.taken).toBeGreaterThan(0);
     expect(networkWork.built - before.built).toBe(0);
+    // The far level of every road of the map, and nothing of a generated city to repair.
+    expect(solved.far.cells.length).toBeGreaterThan(1);
+    expect(solved.far.paints.length).toBe(doc.segments.size);
+    expect(solved.repairs).toEqual([]);
   });
 
   it('works the dropped kerbs out region by region, the same as all at once', () => {

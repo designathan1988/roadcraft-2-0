@@ -31,12 +31,17 @@ import { METERS_PER_UNIT } from '@world/units';
 import { type Vec2, dist } from '@core/vec2';
 import { clamp } from '@core/scalar';
 import { flattenSegment } from '@core/bezier';
-import { RoadDoc, type JunctionControl, type SerializedDoc } from '@world/doc';
+import { RoadDoc, type JunctionControl } from '@world/doc';
 import { cutLotsByRoads } from '@world/lots';
 import { DOC_CHANGE_KINDS, type Change, type ChangeKind, type ChangeRect } from '@world/changes';
 import { MIN_LINK_LENGTH } from '@world/approach';
 import { MAX_AUTHORED_GRADE } from '@world/elevation';
-import { Network, type NetworkBake } from '@world/network';
+import { Network } from '@world/network';
+import { NetworkWindow, tilesRound } from '@world/networkWindow';
+import { mapSolvedOffPage, openingTilesOf, roadBakeSource } from '@editor/offPageNetwork';
+import { type RepairStep, replayRepairs } from '@editor/repair';
+import type { FarLevel } from '@render/networkFarInput';
+import { CELL as ROAD_BLOCK } from '@render/roadSurfaceInputs';
 import { buildLargeCityMap, buildSmallCityMap } from '@editor/smallCityMap';
 import { LAST_UPGRADE_CLASS, ROAD_TYPES, roadProfile, roadType } from '@world/roadTypes';
 import { UNITS_PER_METER } from '@world/units';
@@ -101,8 +106,8 @@ import { carryStreetKit } from '@editor/roads/streetKit';
 import { drawProfile, setDrawProfile } from '@ui/roads/drawProfile';
 import { cutWallsChosen } from '@ui/roads/cutWalls';
 import { ROAD_PARKING_PRESETS, type RoadParkingPreset, roadParking, roadParkingPreset, setRoadParkingPreset } from '@editor/roadParking';
-import { History, followNetwork, openedGenerated, restoreInto, restoreSnapshot, serialize } from '@editor/history';
-import type { NetworkBakeAsk, NetworkBakeReply } from './networkBake.worker';
+import { History, docGenerated, followNetwork, openedGenerated, restoreInto, restoreSnapshot, serialize } from '@editor/history';
+import type { NetworkSolved } from './networkBake.worker';
 import { SampleRing, STUTTER_MS } from '@core/sampleRing';
 import { problems } from '@core/assert';
 import { SessionSummary, fieldReport, problemBridge, shaderErrorHook, watchContext, wireFieldReport } from './fieldReport';
@@ -195,6 +200,11 @@ doc.terrainRelief = NEW_RELIEF;
 const newNature = (region = DEFAULT_REGION): NatureSettings => ({ region, seed: Math.floor(Math.random() * 1_000_000_000) });
 doc.nature = newNature();
 const net = new Network(doc);
+/** The page's network holds the tiles near the view alone (`world/networkWindow.ts`): their junctions and ribbons solved off the page as the view comes to them (`roadBake.worker.ts`); an edit's tool pulls in the tiles it reads (`Network.holdNear`). DO NOT hold a 10 km city's every junction on the page for the street in view. */
+const networkWindow = new NetworkWindow(doc, net, roadBakeSource());
+net.holdNear = (rect) => networkWindow.ensure(rect);
+/** How far round the pointer the tiles are held ahead of a tool's reads (`NetworkWindow.wantAlso`). */
+const POINTER_ROADS_REACH = m(150);
 const camera = new Camera();
 /** Whether the whole module has run. */
 let booted = false;
@@ -262,7 +272,10 @@ function restoreBootSave(loaded: Awaited<ReturnType<Persistence['loadSessionAsyn
     const tables: OpenedTables | null = saved
       ? { buildings: saved.buildings ?? null, landscape: saved.landscape ?? null, lots: saved.lots ?? null, poles: saved.poles ?? null, spans: saved.spans ?? null }
       : asTable ? openedTables(asTable) : null;
-    const restored = restoreInto(doc, asTable?.data ?? map, net, tables);
+    // The page's network opens holding the tiles round the saved view alone (`world/networkWindow.ts`); the rest of the map's network is solved off the page once the scene stands (`farLevelOfMap`).
+    const data = asTable?.data ?? map;
+    networkWindow.open(openingTilesOf(data.nodes, openedGenerated(data, tables?.buildings ?? null), settings?.camera ? { x: settings.camera.x, y: settings.camera.y } : undefined));
+    const restored = restoreInto(doc, data, net, tables);
     performance.mark('boot:restored');
     doc.changes.causeNext('game');
     // Opened from the map's parts: those parts are this document, the next save writes only what changes (and what the restore repaired after the map stood).
@@ -654,6 +667,8 @@ canvas3d.setAttribute('aria-hidden', 'true');
 canvas3d.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;';
 canvas.parentElement?.insertBefore(canvas3d, canvas);
 /** The graphics options (`graphicsWiring.ts`): the tier the player chose, or the one this GPU holds at the first start, and their settings on it. */
+/** Every frame's whole time, the last 40 s (`sampleRing.ts`): the CPU the process spends a frame, sampled while it runs (`__roadcraft.usage`). Declared before the session's summary reads it: a page closed while it boots (a reload) sent the summary before the ring stood (ReferenceError, 2026-10-26). */
+const frameTimes = new SampleRing(2400);
 /** The session's summary told to the field log as the page closes (`fieldReport.ts`): the GPU, the tiers, the frames' times, the heap's peak. */
 const fieldSession = new SessionSummary(() => performance.now(), () => frameTimes, () => scene.gpu.label);
 const graphics = createGraphicsWiring((preset) => gameState.set('quality', preset, 'quality menu'), (level, by) => fieldSession.level(level, by));
@@ -680,6 +695,14 @@ performance.mark('boot:sim-asked');
 const engine = new Engine();
 performance.mark('boot:scene-asked');
 const scene: SceneHandle = createSceneRenderer(canvas3d, { x: camera.x, y: camera.y }, camera.zoom, graphics.level, requestDraw, engine, graphics.settings);
+// The roads' cells follow the page's network window (`render/roadWindowLink.ts`); the whole map's far level is solved off the page (`farLevelOfMap`).
+scene.useRoadWindow({
+  want: (tiles) => networkWindow.want(tiles),
+  step: () => networkWindow.step(),
+  holds: (tile) => networkWindow.holds(tile),
+  ensureTiles: (tiles) => networkWindow.ensureTiles(tiles),
+  farLevel: canQueueJobs() ? (d, cell) => farLevelOfMap(d, cell) : null,
+});
 performance.mark('boot:scene-made');
 // A WebGL context lost for good leaves a black canvas with the game still running behind it (Chrome after hours in a tab, a driver reset): a tab the browser does not give its context back comes back by itself, the session saved first.
 function comesBackFromLostContext(canvas: HTMLCanvasElement): void {
@@ -966,8 +989,13 @@ function snapshotApplied(): void {
 
 // ---------------------------------------------------------------- input
 /** The one conversion that differs between renderers. */
-/** The world point under a screen position, ON THE SURFACE THAT IS THERE. */
+/** The world point under a screen position, ON THE SURFACE THAT IS THERE; the roads round it held ahead of the tools' reads (`NetworkWindow.wantAlso`: the page's network holds the tiles near the view, a tool reads wherever the pointer is). */
 function worldAtScreen(px: number, py: number, heightOffset?: number): Vec2 {
+  const point = worldUnderScreen(px, py, heightOffset);
+  networkWindow.wantAlso(tilesRound(point.x, point.y, POINTER_ROADS_REACH));
+  return point;
+}
+function worldUnderScreen(px: number, py: number, heightOffset?: number): Vec2 {
   let point = view.toWorld(px, py, surface.cssW, surface.cssH);
   if (view.kind === '2d') return point;
   if (heightOffset === undefined) return firstSurfaceAt(px, py) ?? point;
@@ -2104,28 +2132,6 @@ function openedOf(reply: CityGenReply): OpenedCity {
     : { data: reply.data, table: null, buildings: null, ...noCityTables() };
 }
 
-/**
- * A document's network solved by a job worker (`networkBake.worker.ts`), as the page will restore it (`restoreInto`); null without a job
- * queue (a test) or when the worker failed: the page then solves it itself. DO NOT solve a large city's every junction on the page
- * behind the curtain: the page stood blocked 1.6 s in the network's rebuild for the city of 70,000 buildings (2026-10-22).
- */
-function networkBakeOf(data: SerializedDoc, table: ArrayBufferLike | null): Promise<NetworkBake | null> {
-  if (!canQueueJobs()) return Promise.resolve(null);
-  return new Promise((done) => {
-    submitJob({
-      service: 'networkBake', key: 'networkBake', priority: 0,
-      // The document and its buildings' table are all it reads: fit for a desktop job process (the table copied there).
-      crosses: true,
-      write: () => ({ data: { id: cityAskId++, data, table, generated: openedGenerated(data, table) } satisfies NetworkBakeAsk, transfer: [] }),
-      done: (answer) => {
-        const reply = answer as NetworkBakeReply;
-        if (!reply.bake) console.warn('[city] the network was not solved off the page', reply.error);
-        done(reply.bake ?? null);
-      },
-      failed: (message) => { console.warn('[city] the network was not solved off the page', message); done(null); },
-    });
-  });
-}
 
 /** The city's worker asked for a city (`priority`: the queue's, 0 first), its answer kept under `key` for the next opening of this seed. */
 function cityJob(ask: CityGenAsk, key: string | null, priority: number): Promise<CityGenReply> {
@@ -2202,12 +2208,15 @@ async function openCityNow(ask: CityGenAsk): Promise<void> {
   try {
     const city = await cityData(ask);
     performance.mark('city:data');
-    // Its network solved off the page while the curtain stays (`networkBake.worker.ts`): the page's build takes it.
-    const bake = await networkBakeOf({ ...city.data, relief: NEW_RELIEF, markingStyle: 'br' }, city.table);
+    const large = openedBuildings(city) > 5_000;
+    // Its whole network solved off the page while the curtain stays (`networkBake.worker.ts`): the map's far level, and the junctions of the tiles it opens with for the page's build to take.
+    const data = { ...city.data, relief: NEW_RELIEF, markingStyle: 'br' };
+    const opening = openingTilesOf(data.nodes, large);
+    const solved = await mapSolvedOffPage(data, !openedGenerated(data, city.table), ROAD_BLOCK, [...opening]);
     performance.mark('city:baked');
     generatingCity = false;
     // Its ecosystem laid by the city's own seed: the same city opens with the same woods every time (a random one moved them at each opening, 0.6-1.2 % of a district's pixels).
-    openCity({ ...city.data, nature: city.data.nature ?? { region: DEFAULT_REGION, seed: ask.seed ?? 7 } }, openedBuildings(city) > 5_000, openedTables(city), bake);
+    openCity({ ...city.data, nature: city.data.nature ?? { region: DEFAULT_REGION, seed: ask.seed ?? 7 } }, large, openedTables(city), solved, opening);
     performance.mark('city:applied');
   } catch (error) {
     console.error('The city could not be made.', error);
@@ -2232,13 +2241,16 @@ function openLargeCity(seed: number, radius?: number): Promise<void> {
 }
 
 /** `tables`: its buildings' and the other kinds' tables (`CITY_TABLES`), prepared by the city's worker (`editor/preparedCity.ts`). */
-function openCity(data: ReturnType<typeof buildSmallCityMap>, large = false, tables: OpenedTables | null = null, bake: NetworkBake | null = null): void {
+/** `solved`: its whole network solved off the page (`mapSolvedOffPage`): the far level of the map, the bake of the tiles it opens with (`opening`). */
+function openCity(data: ReturnType<typeof buildSmallCityMap>, large = false, tables: OpenedTables | null = null, solved: NetworkSolved | null = null, opening: ReadonlySet<number> = new Set()): void {
   history.begin(doc);
   // A large city opens at a district, its first world covering the view alone (`renderer.ts` openingBuild): the whole map's roads took tens of seconds the curtain showed nothing of.
   deferSessionSave = large;
   if (large) scene.scopeOpening(true);
-  // Taken by the rebuild of the map put in place (`restoreInto`): offered right before it, so no rebuild of the map before takes it.
-  if (bake) net.offerBake(bake);
+  // The page's network opens holding the tiles of the opening alone (`world/networkWindow.ts`), their junctions taken by the rebuild of the map put in place (`restoreInto`): offered right before it, so no rebuild of the map before takes it; the map's far level with them.
+  networkWindow.open(opening);
+  if (solved?.bake) net.offerBake(solved.bake);
+  if (solved) scene.offerFarLevel(solved.far);
   // A new map's ecosystem as well as its relief (`newNature`): the generator's document has none, and taken whole it set `nature` to null - no tree of the
   // ecosystem on a city made by the worker; the cooked city showed them only from the boot map's ecology its plates had not refreshed yet (2026-10-22).
   applySnapshot({ ...data, relief: NEW_RELIEF, markingStyle: 'br', nature: data.nature ?? newNature() }, 'import', tables);
@@ -2246,6 +2258,24 @@ function openCity(data: ReturnType<typeof buildSmallCityMap>, large = false, tab
   history.end(doc);
   roadTool.reset();
   if (large) fitOpeningView(); else fitView();
+  if (solved?.repairs.length) repairFromOffPage(solved.repairs);
+}
+
+/** A map's whole network solved off the page as the renderer asks it (`render/roadWindowLink.ts` farLevel): its far level, and a legacy map's repairs played again here first. */
+async function farLevelOfMap(d: RoadDoc, cell: number): Promise<FarLevel | null> {
+  const solved = await mapSolvedOffPage(d.roadsJSON(), !docGenerated(d), cell, []);
+  if (!solved) return null;
+  if (solved.repairs.length) repairFromOffPage(solved.repairs);
+  return solved.far;
+}
+
+/** A legacy map's repairs found by the whole network solved off the page (`editor/repair.ts` replayRepairs), made here as the map's own changes. */
+function repairFromOffPage(steps: readonly RepairStep[]): void {
+  const repaired = caused('map repaired', () => replayRepairs(doc, net, steps));
+  if (!repaired) return;
+  followNetwork(doc, net);
+  persistence.saveSessionSoon(doc, sessionSettings);
+  requestDraw();
 }
 
 /** The view a large city opens at: a district round its middle, in the detail its roads and buildings are drawn for; the whole map comes as the camera moves, the rest of the world filled after the curtain. */
@@ -2296,6 +2326,10 @@ function openSession(session: Extract<ImportResult, { status: 'ok' }>['session']
   // Opening a map is an edit like any other: undo gives the map before it back.
   history.begin(doc);
   try {
+    // The page's network opens holding the tiles round the map's view alone (`world/networkWindow.ts`); a large map opens at its view's district, as a generated city does.
+    const large = (session.document.buildings?.length ?? 0) > 5_000;
+    if (large) scene.scopeOpening(true);
+    networkWindow.open(openingTilesOf(session.document.nodes, large, session.settings?.camera ? { x: session.settings.camera.x, y: session.settings.camera.y } : undefined));
     applySnapshot(session.document, 'import');
   } catch (error) {
     console.error('The map could not be loaded.', error);
@@ -2659,8 +2693,6 @@ function syncLoadingCurtain(): void {
 }
 /** A frame has been drawn, and the first world has been put in place (the opening builds it in parts). */
 let drawnOnce = false;
-/** Every frame's whole time, the last 40 s (`sampleRing.ts`): the CPU the process spends a frame, sampled while it runs (`__roadcraft.usage`). */
-const frameTimes = new SampleRing(2400);
 let worldShown = false;
 /** @perFrame One frame: input, the topology catching up, the simulation, the drawing, the panels. */
 function frame(now: number): void {
@@ -4113,6 +4145,7 @@ if (PROBES) (window as unknown as { __roadcraft: unknown }).__roadcraft = {
   /** Replaces the map as loading a file does: document, network and simulation topology. */
   loadDoc: (data: ReturnType<RoadDoc['toJSON']>) => {
     history.begin(doc);
+    networkWindow.open(openingTilesOf(data.nodes, (data.buildings?.length ?? 0) > 5_000));
     applySnapshot(data, 'import');
   },
   /** Centres the play camera on a world point, so the next frame builds what is there */

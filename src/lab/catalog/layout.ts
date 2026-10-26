@@ -24,7 +24,8 @@ import { createFlatAtlas } from '../../render/flatAtlas';
 import { levelsOf } from '../../render/mesh/roadLod';
 import { coarseArrays } from '../../render/mesh/roadLodPure';
 import type { RoadTiler } from '../../render/roadTilePool';
-import { farLayerMaterial, farRoadInput } from '../../render/networkFarRoads';
+import { farLayerMaterial, pageSlots } from '../../render/networkFarRoads';
+import { farRoadInput } from '../../render/networkFarInput';
 import { FAR_CARRIAGEWAY, FAR_SECTION, buildFarRoadCells } from '../../render/networkFarRoadsBuild';
 import { CELL } from '../../render/roadSurfaceEntries';
 import { take, type BatchCache } from './capture';
@@ -228,7 +229,7 @@ function farLevelsOf(built: Group): Group {
 /** A network's far level (L2, `networkFarRoads.ts`): each cell's layer a mesh of its vertices' colours, at the heights the roads were solved at. */
 function networkLevelOf(net: Network, ground: (x: number, y: number) => number): Group {
   const elevation = buildRoadElevation(net, ground);
-  const { input } = farRoadInput(net, { onSegment: (s, x, y) => elevation.onSegment(s, x, y), at: (x, y) => elevation.at(x, y) }, ground, CELL, null);
+  const { input } = farRoadInput(net, { onSegment: (s, x, y) => elevation.onSegment(s, x, y), at: (x, y) => elevation.at(x, y) }, ground, CELL, null, pageSlots(net));
   const out = new Group();
   out.name = 'road-far-network';
   for (const cell of buildFarRoadCells(input)) {

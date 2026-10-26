@@ -2717,6 +2717,21 @@ export class RoadDoc {
     return this.serialized(true);
   }
 
+  /** The map's roads alone as a file holds them (its nodes and segments, the land's stamps and relief, the paint's standard): what a network is solved from off the page (`networkBake.worker.ts`). DO NOT write the whole map for it. */
+  roadsJSON(): SerializedDoc {
+    return {
+      version: 1,
+      unit: METERS_PER_UNIT,
+      nodes: inIdOrder(this.nodes.values()).map(savedNode),
+      segments: inIdOrder(this.segments.values()).map(savedSegment),
+      terrain: [],
+      ...this.worldPart('terrain'),
+      ...this.worldPart('markingStyle'),
+      poles: [],
+      poleSpans: [],
+    };
+  }
+
   /** `toJSON` with the buildings' list empty in its place, as a city's data goes with its buildings' table apart (`editor/preparedCity.ts`): DO NOT read every record to throw the list away (a city grown off the page holds its buildings in a table, `editor/smallCityMap.ts` buildCityTable). */
   toJSONBuildingsApart(): SerializedDoc {
     return this.serialized('apart');

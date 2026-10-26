@@ -22,10 +22,10 @@ function input(shapes: readonly ShapeIn[], cell = 100): FarRoadInput {
     }
   }
   return {
-    cell, exclude: null, owners: new Int32Array(owners), layers: new Uint8Array(layers), colors: new Float32Array(colors),
+    cell, owners: new Int32Array(owners), layers: new Uint8Array(layers), colors: new Float32Array(colors),
     kinds: new Uint8Array(kinds), sizes: new Uint32Array(sizes), points: new Float64Array(points),
     // Each point's offset across: its y (the chains here run along x); each shape's paint slot: its index.
-    across: Float32Array.from({ length: points.length / 4 }, (_, i) => points[i * 4 + 1]!), slots: Float32Array.from(kinds, (_, i) => i),
+    across: Float32Array.from({ length: points.length / 4 }, (_, i) => points[i * 4 + 1]!), slots: Float64Array.from(kinds, (_, i) => i),
   };
 }
 
@@ -147,7 +147,8 @@ describe('the network far roads\' paint, from a network', () => {
     const { RoadDoc } = await import('@world/doc');
     const { Network } = await import('@world/network');
     const { ROAD_TYPES, Level, sideHalfWidth } = await import('@world/roadTypes');
-    const { farRoadInput } = await import('@render/networkFarRoads');
+    const { farRoadInput } = await import('@render/networkFarInput');
+    const { pageSlots } = await import('@render/networkFarRoads');
     const { roadPaint } = await import('@render/roadPaint');
     const { lookOf } = await import('@render/roadSurfacePass');
     const doc = new RoadDoc();
@@ -156,7 +157,7 @@ describe('the network far roads\' paint, from a network', () => {
     for (const [x, y] of [[70, 0], [0, 70], [-70, 0], [0, -70]] as const) doc.addSegment(centre.id, doc.addNode({ x, y }).id, urban);
     const net = new Network(doc);
     net.rebuild();
-    const { input } = farRoadInput(net, { onSegment: () => 0, at: () => 0 }, () => 0, 1000, null);
+    const { input } = farRoadInput(net, { onSegment: () => 0, at: () => 0 }, () => 0, 1000, null, pageSlots(net));
     const table = roadPaint.resolverOf(doc);
     const roadSlots = new Set([...net.ribbons.keys()].map((id) => table(lookOf(net, id)!.paint!)));
     const plate = -2 - table(roadPaint.nodeSlot(doc, centre.id));
@@ -180,17 +181,18 @@ describe('the network far roads\' paint, from a network', () => {
 });
 
 describe('the network far roads, from a city', () => {
-  it('files every piece in its owner\'s block and leaves out whole the pieces of the blocks given to the detail', async () => {
+  it('files every piece in its owner\'s block, and the cells asked alone hold their own pieces and no other', async () => {
     const { planCity, DEFAULT_CITY } = await import('@world/cityGen/plan');
     const { layCity } = await import('@editor/cityGenerator');
     const { Network } = await import('@world/network');
-    const { farRoadInput } = await import('@render/networkFarRoads');
+    const { farRoadInput } = await import('@render/networkFarInput');
+    const { pageSlots } = await import('@render/networkFarRoads');
     const { segmentOwner, nodeOwner, ownerCell } = await import('@render/roads/pieceOwner');
     const net = new Network(layCity(planCity({ ...DEFAULT_CITY, seed: 2, size: 'small' })));
     net.rebuild();
     const heights = { onSegment: () => 0, at: () => 0 };
     const cell = 200;
-    const whole = farRoadInput(net, heights, () => 0, cell, null).input;
+    const whole = farRoadInput(net, heights, () => 0, cell, null, pageSlots(net)).input;
     const owners = new Set<string>();
     for (const id of net.ribbons.keys()) { const at = segmentOwner(net, id); if (at) owners.add(ownerCell(at, cell).join(',')); }
     for (const id of net.junctions.keys()) { const at = nodeOwner(net, id); if (at) owners.add(ownerCell(at, cell).join(',')); }
@@ -198,13 +200,12 @@ describe('the network far roads, from a city', () => {
     for (let k = 0; k < whole.kinds.length; k++) filed.add(`${whole.owners[k * 2]},${whole.owners[k * 2 + 1]}`);
     expect(filed.size).toBeGreaterThan(1);
     for (const key of filed) expect(owners.has(key)).toBe(true);
-    // The block holding the most pieces given to the detail: none of its pieces left, every other piece kept.
+    // The block holding the most pieces, asked alone (an edit's cell made again): its pieces and no other, as many as the whole level filed there.
     const counts = new Map<string, number>();
     for (let k = 0; k < whole.kinds.length; k++) { const key = `${whole.owners[k * 2]},${whole.owners[k * 2 + 1]}`; counts.set(key, (counts.get(key) ?? 0) + 1); }
     const [busiest, many] = [...counts].sort((p, q) => q[1] - p[1])[0]!;
-    const [i, j] = busiest.split(',').map(Number) as [number, number];
-    const cut = farRoadInput(net, heights, () => 0, cell, [i * cell, j * cell, (i + 1) * cell, (j + 1) * cell]).input;
-    expect(cut.kinds.length).toBe(whole.kinds.length - many);
-    for (let k = 0; k < cut.kinds.length; k++) expect(`${cut.owners[k * 2]},${cut.owners[k * 2 + 1]}`).not.toBe(busiest);
+    const only = farRoadInput(net, heights, () => 0, cell, new Set([busiest]), pageSlots(net)).input;
+    expect(only.kinds.length).toBe(many);
+    for (let k = 0; k < only.kinds.length; k++) expect(`${only.owners[k * 2]},${only.owners[k * 2 + 1]}`).toBe(busiest);
   });
 });

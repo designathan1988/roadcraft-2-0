@@ -1,52 +1,34 @@
-import { BufferAttribute, BufferGeometry, Color, Group, MeshStandardMaterial } from 'three';
-import type { Polyline } from '@core/polyline';
+import { BufferAttribute, BufferGeometry, Group, MeshStandardMaterial } from 'three';
+import type { RoadDoc } from '@world/doc';
 import type { NodeId, SegmentId } from '@world/ids';
 import type { Network } from '@world/network';
-import { ROAD_TYPES } from '@world/roadTypes';
-import { ROAD_GROUND_CLEARANCE } from '@world/structures';
 import { jobPort } from '../jobs/jobPool';
 import { GpuBatchedMesh } from './buildings/gpuBatchedMesh';
 import { pullTowardEye } from './depthConvention';
-import { FAR_CARRIAGEWAY, FAR_FAN, FAR_SECTION, FAR_STRIP, buildFarRoadCells, type FarRoadCell, type FarRoadInput } from './networkFarRoadsBuild';
+import { type FarLevel, type FarRoadHeights, type PieceSlots, farCellKey, farRoadInput } from './networkFarInput';
+import { FAR_CARRIAGEWAY, FAR_SECTION, type FarRoadCell, type FarRoadInput, buildFarRoadCells } from './networkFarRoadsBuild';
 import { roadPaint } from './roadPaint';
 import { lookOf } from './roadSurfacePass';
 import { applyRoadFarPaint } from './mesh/roadEdges';
-import type { Geom } from './roads/pieceGeom';
 import { nodeOwner, ownerCell, segmentOwner } from './roads/pieceOwner';
-import { deckOf, segmentFarShapes } from './roads/segmentPiece';
-import { junctionFarShapes } from './roads/junctionPiece';
-import { ASPHALT_REFERENCE, FOOTWAY_TINT, STREET_MEANS } from './roadTones';
 
 /**
  * EVERY ROAD OF THE MAP AT ITS FAR LEVEL, THE ROADS' ROOT LEVEL, FROM THE FIRST FRAME OF A MAP'S OPENING AND FOR GOOD (`renderer.ts`
  * buildWorld, `mesh/roadResidency.ts`): the detailed surfaces are built only for the cells the view wants (nearest first, under the
- * tier's budget), never for the whole map; every other cell is drawn by this level. It is made from the network itself: each road's and
- * junction's real outline (`Network.ribbons`, `Network.junctions`: the carriageway, and the casing its footways and kerbs fill) at its
- * class's colour over the street textures' means (as the blocks' far level paints them), at the solved heights where the solve took the
- * road and on the ground elsewhere. Each road and junction is the same piece as in the detail, coarse: its carriageway and its casing as
- * strips and fans on its own edges and mouths (`networkFarRoadsBuild.ts`), filed by its owner block (`roads/pieceOwner.ts`),
- * triangulated in a job worker: O(the pieces' vertices), proportional to the document and nothing else - once a map, and once more when
- * a scoped opening's solve completes (every road at its solved height). A cell is hidden while the detailed blocks of its square stand
- * (`hide`), shown again when the view lets them go (`show`).
+ * tier's budget), never for the whole map; every other cell is drawn by this level. It is made OFF THE PAGE from the whole network solved
+ * there (`networkBake.worker.ts`, `networkFarInput.ts` farLevelOf: each road's and junction's real outline, the carriageway and the casing
+ * its footways and kerbs fill, at its class's colour over the street textures' means, at the roads' solved heights on the map's natural
+ * ground), the page's own network holding the tiles near the view alone (`world/networkWindow.ts`). Each road and junction is the same
+ * piece as in the detail, coarse: its carriageway and its casing as strips and fans on its own edges and mouths (`networkFarRoadsBuild.ts`),
+ * filed by its owner block (`roads/pieceOwner.ts`): O(the pieces' vertices), proportional to the document and nothing else, once a map
+ * (`takeWhole`). A cell is hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets them go (`show`).
  * AN EDIT MAKES ITS CELLS AGAIN, NEVER THE MAP (`changed`, `refresh`): the network tells what it rebuilt (`Network.changesSince`); the
- * owner cells of those roads and junctions are stale until made again, from their pieces alone, in place in the batches. DO NOT walk the
- * whole network for an edit: a 10 km city's 35,000 pieces were read and triangulated again at every road the player drew.
+ * owner cells of those roads and junctions are stale until made again, from their pieces alone (the page's network holds them: an edit is
+ * in view), in place in the batches. A move of the roads held (`NetworkDelta.scopeOnly`) is no change of the map: nothing stale. DO NOT
+ * walk the whole network for an edit: a 10 km city's 35,000 pieces were read and triangulated again at every road the player drew.
  */
 
-/** What the outlines' heights are read from: the opening's solve (`RoadElevation`), the roads it left for later, the ground. */
-export interface FarRoadHeights {
-  onSegment(segment: SegmentId, x: number, y: number): number;
-  at(x: number, y: number): number;
-  pendingRoads?(): SegmentId[];
-}
-
-/** The class's tint over the reference the asphalt texture is authored against (`roadSurfaces.ts` CLASS_TINTS), times the texture's mean. */
-const ASPHALT_REFERENCE_COLOUR = new Color(ASPHALT_REFERENCE);
-const ASPHALT_BY_CLASS: readonly (readonly [number, number, number])[] = ROAD_TYPES.map((type) => {
-  const c = new Color(type.color);
-  return [STREET_MEANS.asphalt[0] * (c.r / ASPHALT_REFERENCE_COLOUR.r), STREET_MEANS.asphalt[1] * (c.g / ASPHALT_REFERENCE_COLOUR.g), STREET_MEANS.asphalt[2] * (c.b / ASPHALT_REFERENCE_COLOUR.b)];
-});
-const CASING: readonly [number, number, number] = [STREET_MEANS.footway[0] * FOOTWAY_TINT.pavers[0], STREET_MEANS.footway[1] * FOOTWAY_TINT.pavers[1], STREET_MEANS.footway[2] * FOOTWAY_TINT.pavers[2]];
+export type { FarRoadHeights } from './networkFarInput';
 
 /**
  * One material a layer (0 the casing, 1 the carriageway): the colours the vertices', pulled over the ground it lies on (the casing under the
@@ -62,111 +44,12 @@ export function farLayerMaterial(layer: 0 | 1): MeshStandardMaterial {
   return material;
 }
 
-/** A cell's key on the blocks' grid (`roads/pieceOwner.ts` ownerCell), as the residency and the batches name it. */
-const keyOf = (i: number, j: number): string => `${i},${j}`;
-
-/** @rebuild The pieces of the network at the far level, their heights read on the page (`heights`, `groundAt` for the roads the solve left):
- *  what the worker triangulates. The pieces whose owner block lies inside `exclude` (cell-aligned) are left out whole. `only`: the cells to make
- *  (an edit's, `NetworkFarRoads.refresh`): the pieces whose owner block is one of them and no other; none, the whole map (a map opened). */
-export function farRoadInput(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number,
-  exclude: readonly [number, number, number, number] | null, only: ReadonlySet<string> | null = null): { input: FarRoadInput; transfer: ArrayBuffer[] } {
-  const owners: number[] = [], layers: number[] = [], colors: number[] = [], kinds: number[] = [], sizes: number[] = [], points: number[] = [];
-  const across: number[] = [], slots: number[] = [];
-  const tableSlot = roadPaint.resolverOf(net.doc);
-  const pending = new Set(heights.pendingRoads?.() ?? []);
-  /** Whether a block's square lies inside the area left to the detailed surfaces. */
-  const excluded = (i: number, j: number): boolean => {
-    if (!exclude) return false;
-    const x0 = i * cell, y0 = j * cell, eps = 1e-6 * cell;
-    return x0 >= exclude[0] - eps && x0 + cell <= exclude[2] + eps && y0 >= exclude[1] - eps && y0 + cell <= exclude[3] + eps;
-  };
-  const hit = { s: 0, distance: 0 };
-  /** `line`: the road a strip of its carriageway lies on (its points' offsets across it read off it, as the detail's are, `roadField.ts`), none a
-   *  plate's; `slot` the paint's slot its vertices carry (`FarRoadInput.slots`). */
-  const add = (i: number, j: number, layer: number, colour: readonly [number, number, number], geom: Geom, height: (x: number, y: number) => number,
-    slot: number, line?: Polyline): void => {
-    const point = (x: number, y: number, s: number): void => {
-      points.push(x, y, height(x, y), s);
-      if (!line || layer !== FAR_CARRIAGEWAY) { across.push(0); return; }
-      line.closestInto(x, y, hit);
-      const f = line.sampleAt(hit.s);
-      across.push((x - f.p.x) * f.n.x + (y - f.p.y) * f.n.y);
-    };
-    if (geom.kind === 'strip') {
-      for (const c of [geom.a, geom.b]) for (let k = 0; k < c.s.length; k++) point(c.xy[k * 2]!, c.xy[k * 2 + 1]!, c.s[k]!);
-      kinds.push(FAR_STRIP); sizes.push(geom.a.s.length, geom.b.s.length);
-    } else if (geom.kind === 'fan') {
-      point(geom.cx, geom.cy, 0);
-      for (let k = 0; k < geom.ring.length; k += 2) point(geom.ring[k]!, geom.ring[k + 1]!, 0);
-      kinds.push(FAR_FAN); sizes.push(geom.ring.length / 2, 0);
-    } else return;
-    owners.push(i, j);
-    layers.push(layer);
-    colors.push(colour[0], colour[1], colour[2]);
-    slots.push(layer === FAR_CARRIAGEWAY ? slot : -1);
-  };
-  // A road the solve left lies where a solved one would on its ground: its clearance over it (`roadField.ts` onSegment), not in the ground's own plane.
-  const onGround = (x: number, y: number): number => groundAt(x, y) + ROAD_GROUND_CLEARANCE;
-  const roadAt = (x: number, y: number): number => { const h = heights.at(x, y); return Number.isFinite(h) ? h : onGround(x, y); };
-  const road = (id: SegmentId, i: number, j: number): void => {
-    const ribbon = net.ribbons.get(id);
-    if (!ribbon) return;
-    const height = pending.has(id) ? onGround : (x: number, y: number): number => heights.onSegment(id, x, y);
-    const asphalt = ASPHALT_BY_CLASS[ribbon.typeIndex] ?? STREET_MEANS.asphalt;
-    // Its lines along it in the paint's table, as its detail writes them (`roadSurfacePass.ts` lookOf).
-    const look = lookOf(net, id);
-    const slot = look?.paint === undefined ? -1 : tableSlot(look.paint);
-    for (const shape of segmentFarShapes(net, ribbon, deckOf(net, [id]))) add(i, j, shape.layer, shape.layer === 1 ? asphalt : CASING, shape.geom, height, slot, ribbon.full);
-  };
-  const junction = (id: NodeId, i: number, j: number): void => {
-    const node = net.doc.node(id);
-    if (!node) return;
-    // A junction every road of which the solve left: on the ground, as they are.
-    const height = node.incident.length > 0 && node.incident.every((s) => pending.has(s)) ? onGround : roadAt;
-    const types = node.incident.map((s) => net.ribbons.get(s)?.typeIndex ?? -1).filter((t) => t >= 0);
-    const asphalt = ASPHALT_BY_CLASS[types.length ? Math.max(...types) : 0] ?? STREET_MEANS.asphalt;
-    // Its plate's marks: its node's slot as `-2 - slot` (`roadSurfaceReads.ts` asphaltPlate).
-    const slot = -2 - tableSlot(roadPaint.nodeSlot(net.doc, id));
-    for (const shape of junctionFarShapes(net, id, deckOf(net, node.incident))) add(i, j, shape.layer, shape.layer === 1 ? asphalt : CASING, shape.geom, height, slot);
-  };
-  if (only === null) {
-    for (const id of net.ribbons.keys()) {
-      const at = segmentOwner(net, id);
-      if (!at) continue;
-      const [i, j] = ownerCell(at, cell);
-      if (!excluded(i, j)) road(id, i, j);
-    }
-    for (const id of net.junctions.keys()) {
-      const at = nodeOwner(net, id);
-      if (!at) continue;
-      const [i, j] = ownerCell(at, cell);
-      if (!excluded(i, j)) junction(id, i, j);
-    }
-  } else {
-    // The pieces owned by the cells asked: those filed over each cell's square whose owner point lies in it (a piece is drawn whole in its owner's block, whatever it reaches into).
-    const roads = new Set<SegmentId>(), junctions = new Set<NodeId>();
-    for (const key of only) {
-      const [i, j] = key.split(',').map(Number) as [number, number];
-      const rect: [number, number, number, number] = [i * cell, j * cell, (i + 1) * cell, (j + 1) * cell];
-      for (const id of net.segmentCells.idsMeeting(rect)) {
-        const at = segmentOwner(net, id);
-        if (at && keyOf(...ownerCell(at, cell)) === key) roads.add(id);
-      }
-      for (const id of net.junctionCells.idsMeeting(rect)) {
-        const at = nodeOwner(net, id);
-        if (at && keyOf(...ownerCell(at, cell)) === key) junctions.add(id);
-      }
-    }
-    for (const id of [...roads].sort((p, q) => p - q)) { const [i, j] = ownerCell(segmentOwner(net, id)!, cell); if (!excluded(i, j)) road(id, i, j); }
-    for (const id of [...junctions].sort((p, q) => p - q)) { const [i, j] = ownerCell(nodeOwner(net, id)!, cell); if (!excluded(i, j)) junction(id, i, j); }
-  }
-  const input: FarRoadInput = {
-    cell, exclude, owners: new Int32Array(owners), layers: new Uint8Array(layers), colors: new Float32Array(colors),
-    kinds: new Uint8Array(kinds), sizes: new Uint32Array(sizes), points: new Float64Array(points), across: new Float32Array(across), slots: new Float32Array(slots),
-  };
+/** The paint's slots a piece's vertices carry on the page: the table's own (`roadPaint.ts` resolverOf), a road's look written as its detail writes it (`roadSurfacePass.ts` lookOf). */
+export function pageSlots(net: Network): PieceSlots {
+  const table = roadPaint.resolverOf(net.doc);
   return {
-    input,
-    transfer: [input.owners, input.layers, input.colors, input.kinds, input.sizes, input.points, input.across, input.slots].map((a) => a.buffer as ArrayBuffer),
+    road: (id) => { const look = lookOf(net, id); return look?.paint === undefined ? -1 : table(look.paint); },
+    node: (id) => table(roadPaint.nodeSlot(net.doc, id)),
   };
 }
 
@@ -212,6 +95,28 @@ function cellGeometry(c: FarRoadCell): BufferGeometry {
   return g;
 }
 
+/** A level made off the page (`networkFarInput.ts` farLevelOf, each carriageway vertex carrying its piece's id) made the page's: every road's paint written in the table as its detail writes it (`roadPaint.set`), each vertex's section given its piece's table slot (a road's, a plate's `-2 - slot` of its node). */
+export function resolveFarPieces(level: FarLevel, doc: RoadDoc): void {
+  for (const { id: road, paint, half, lane } of level.paints) roadPaint.set(doc, road, paint, half, lane);
+  const table = roadPaint.resolverOf(doc);
+  const slotOf = new Map<number, number>();
+  const resolve = (piece: number): number => {
+    let slot = slotOf.get(piece);
+    if (slot === undefined) {
+      slot = piece === -1 ? -1 : piece >= 0 ? table(roadPaint.roadSlot(doc, piece as SegmentId)) : -2 - table(roadPaint.nodeSlot(doc, (-2 - piece) as NodeId));
+      slotOf.set(piece, slot);
+    }
+    return slot;
+  };
+  for (const c of level.cells) {
+    if (c.layer !== FAR_CARRIAGEWAY) continue;
+    for (let v = 0; v < c.pieces.length; v++) c.sections[v * FAR_SECTION + 2] = resolve(c.pieces[v]!);
+  }
+}
+
+/** Who makes the whole map's level off the page (`main.ts`: the network job, `networkBake.worker.ts`); null when it comes with nothing (no job worker, a failure: the level then made here from the page's network, which holds what it holds). */
+export type FarLevelSource = (doc: RoadDoc, cell: number) => Promise<FarLevel | null>;
+
 /**
  * The whole network's far roads (see the file's comment), KEPT FOR GOOD AS THE ROADS' ROOT LEVEL (`mesh/roadResidency.ts`): a cell is
  * shown where no block draws it in detail, hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets
@@ -237,14 +142,16 @@ export class NetworkFarRoads {
   private readonly meshesOf = new Map<string, CellInstance[]>();
   /** The cells hidden (`hide`): the detailed blocks of their squares stand. Kept across the levels made: a level landing hides them again. */
   private readonly hidden = new Set<string>();
-  /** The level standing: the request it answers (`asked`), its cells' side, the area it left to the detailed surfaces. Null: none landed. */
-  private made: { id: number; cell: number; exclude: readonly [number, number, number, number] | null } | null = null;
+  /** The level standing: the request it answers (`asked`), its cells' side. Null: none landed. */
+  private made: { id: number; cell: number } | null = null;
   /** The network's state the level standing was read from (`Network.state`); null, no level read yet. */
   private token: object | null = null;
   /** The cells whose roads the network rebuilt since the level was read (`changed`): drawn as they were until made again (`refresh`). */
   private readonly stale = new Set<string>();
   /** The network could not say what changed since the level was read (another map, a rebuild of the whole): every cell stale. */
   private staleAll = false;
+  /** Who makes the whole map's level off the page (`FarLevelSource`); null: made here. */
+  source: FarLevelSource | null = null;
 
   constructor() {
     this.group.name = 'road-far-network';
@@ -259,15 +166,43 @@ export class NetworkFarRoads {
     return this.triangleCount;
   }
 
-  /** The level made for the network as it stands (replacing any when it lands), the area `exclude` left to the detailed surfaces. */
-  request(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number, exclude: readonly [number, number, number, number] | null): void {
+  /**
+   * The whole map's level made off the page from the document (`source`), replacing any when it lands; with no source, or when it answers
+   * nothing, made here from the page's network (every road it holds: a test's, a map with no job worker).
+   */
+  requestWhole(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number): void {
     const id = ++this.asked;
     this.waiting = true;
-    const asking = { id, cell, exclude };
     const token = net.state;
-    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, exclude);
+    const source = this.source;
+    if (!source) { this.requestHere(id, net, heights, groundAt, cell, token); return; }
+    void source(net.doc, cell).then((level) => {
+      if (id !== this.asked) return;
+      if (level) this.takeWhole(level, net.doc, token);
+      else this.requestHere(id, net, heights, groundAt, cell, token);
+    }, (error: unknown) => {
+      console.warn('[roads] the far roads could not be made off the page; made here', error);
+      if (id === this.asked) this.requestHere(id, net, heights, groundAt, cell, token);
+    });
+  }
+
+  /** A whole level made off the page and handed in (`FarLevel`, a city's opening): its roads' paint written in the table, its pieces' ids resolved to their slots, the level put in place. */
+  takeWhole(level: FarLevel, doc: RoadDoc, token: object): void {
+    const id = ++this.asked;
+    resolveFarPieces(level, doc);
+    this.made = { id, cell: level.cell };
+    this.token = token;
+    this.stale.clear();
+    this.staleAll = false;
+    this.place(level.cells);
+    this.waiting = false;
+  }
+
+  /** The level of the roads the page's network holds, triangulated off the page. */
+  private requestHere(id: number, net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number, token: object): void {
+    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, null, pageSlots(net));
     this.ask(id, input, transfer, (cells) => {
-      this.made = asking;
+      this.made = { id, cell };
       this.token = token;
       this.stale.clear();
       this.staleAll = false;
@@ -275,37 +210,38 @@ export class NetworkFarRoads {
     });
   }
 
-  /** The network rebuilt (a world build landed, `renderer.ts`): the owner cells of the roads and junctions it changed are stale, made again by `refresh`. */
+  /** The network rebuilt (a world build landed, `renderer.ts`): the owner cells of the roads and junctions an edit changed are stale, made again by `refresh`; the roads held moving (`scopeOnly`) changes nothing of the map. */
   changed(net: Network): void {
     if (!this.made) return;
     const delta = net.changesSince(this.token);
     this.token = net.state;
     if (delta === null) { this.staleAll = true; return; }
+    if (delta.scopeOnly) return;
     const cell = this.made.cell;
     const roads = new Set<SegmentId>(delta.segments);
     // A junction's plate and corners follow its roads, a road's strips end on its junctions' mouths: both sides of every change.
     for (const node of delta.nodes) for (const id of net.doc.node(node)?.incident ?? []) roads.add(id);
     const nodes = new Set<NodeId>(delta.nodes);
     for (const id of roads) { const s = net.doc.segment(id); if (s) { nodes.add(s.a); nodes.add(s.b); } }
-    for (const id of roads) { const at = segmentOwner(net, id); if (at) this.stale.add(keyOf(...ownerCell(at, cell))); }
-    for (const id of nodes) { const at = nodeOwner(net, id); if (at) this.stale.add(keyOf(...ownerCell(at, cell))); }
+    for (const id of roads) { const at = segmentOwner(net, id); if (at) this.stale.add(farCellKey(...ownerCell(at, cell))); }
+    for (const id of nodes) { const at = nodeOwner(net, id); if (at) this.stale.add(farCellKey(...ownerCell(at, cell))); }
     // A piece gone (its road removed) is drawn where it was until its cell is made again: the cell it stood in, from the instances standing.
     for (const r of delta.rects) {
       for (let i = Math.floor(r[0] / cell); i <= Math.floor(r[2] / cell); i++) {
-        for (let j = Math.floor(r[1] / cell); j <= Math.floor(r[3] / cell); j++) { const key = keyOf(i, j); if (this.meshesOf.has(key)) this.stale.add(key); }
+        for (let j = Math.floor(r[1] / cell); j <= Math.floor(r[3] / cell); j++) { const key = farCellKey(i, j); if (this.meshesOf.has(key)) this.stale.add(key); }
       }
     }
   }
 
-  /** The level brought up to the roads drawn: the stale cells made again in place, or the whole level where the network could not say what changed. */
+  /** The level brought up to the roads drawn: the stale cells made again in place from the page's network, or the whole level again where the network could not say what changed. */
   refresh(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number): void {
-    if (!this.made || this.staleAll || this.made.cell !== cell) { this.request(net, heights, groundAt, cell, null); return; }
+    if (!this.made || this.staleAll || this.made.cell !== cell) { this.requestWhole(net, heights, groundAt, cell); return; }
     if (this.stale.size === 0) return;
     const keys = new Set(this.stale);
     const id = ++this.asked;
     this.waiting = true;
     const token = net.state;
-    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, null, keys);
+    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, keys, pageSlots(net));
     this.ask(id, input, transfer, (cells) => {
       this.token = token;
       for (const key of keys) this.stale.delete(key);
@@ -411,20 +347,14 @@ export class NetworkFarRoads {
     return [...this.cells.keys()];
   }
 
-  /** Whether the level standing draws the cell's roads as the blocks do: made of the roads drawn (not stale), with roads there, its pieces not left to the detailed surfaces (`RoadResidency.network`: the area left out is cell-aligned, a cell inside it or not). */
+  /** Whether the level standing draws the cell's roads as the blocks do: made of the roads drawn (not stale), with roads there. */
   covers(key: string): boolean {
-    const made = this.made;
-    if (!made || this.staleAll || this.stale.has(key) || !this.meshesOf.has(key)) return false;
-    const e = made.exclude;
-    if (!e) return true;
-    const [i, j] = key.split(',').map(Number) as [number, number];
-    const x0 = i * made.cell, y0 = j * made.cell;
-    return !(e[0] < x0 + made.cell && e[2] > x0 && e[1] < y0 + made.cell && e[3] > y0);
+    return this.made !== null && !this.staleAll && !this.stale.has(key) && this.meshesOf.has(key);
   }
 
-  /** Whether the level standing is not of the roads drawn in some cell (none, a cell stale, or cut by an area left to the detail): brought up by `refresh` when a cell must be drawn by it (`RoadResidency.wantsNetwork`). */
+  /** Whether the level standing is not of the roads drawn in some cell (none, a cell stale): brought up by `refresh` when a cell must be drawn by it (`RoadResidency.wantsNetwork`). */
   outdated(): boolean {
-    return !this.made || this.staleAll || this.stale.size > 0 || this.made.exclude !== null;
+    return !this.made || this.staleAll || this.stale.size > 0;
   }
 
   /** A cell hidden: the detailed blocks of its square stand (a cell the view took landed, `roadResidency.ts`). */

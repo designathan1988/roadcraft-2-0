@@ -126,7 +126,8 @@ function place(net: Network, state: RampState, nodeId: NodeId): void {
       if (list.length === 0) state.grid.delete(key);
     });
   }
-  if (!net.doc.node(nodeId)) { state.byNode.delete(nodeId); state.placed.delete(nodeId); return; }
+  // A node gone, or one the network does not hold whole (`Network.complete`: a road of its outside the roads held): no ramp of its.
+  if (!net.doc.node(nodeId) || !net.complete(nodeId)) { state.byNode.delete(nodeId); state.placed.delete(nodeId); return; }
   state.placed.add(nodeId);
   const ramps = rampsAt(net, nodeId);
   if (ramps.length) state.byNode.set(nodeId, ramps); else state.byNode.delete(nodeId);

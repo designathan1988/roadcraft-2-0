@@ -93,6 +93,9 @@ export class Network {
    */
   scope: ReadonlySet<SegmentId> | null = null;
 
+  /** The roads held, found again (`world/networkWindow.ts`: the tiles held, over the document as it stands): asked by a rebuild of the whole (`NetworkBuild.findChanges`, a map put in place of this one), whose ids are another map's. Null: the scope stands as set. */
+  scopeOf: (() => ReadonlySet<SegmentId>) | null = null;
+
   /** Whether a road is one this network holds. */
   holds(segment: SegmentId): boolean {
     return this.scope === null || this.scope.has(segment);
@@ -107,11 +110,14 @@ export class Network {
     return true;
   }
 
-  /** The roads held moved to `next` (the micro window's, `SimWorld.rescopeSteps`): the roads that left taken out, those that came built, as a rebuild (its delta in the changes). */
+  /** The roads held moved to `next` (the micro window's, `SimWorld.rescopeSteps`; the page's tiles, `networkWindow.ts`): the roads that left taken out, those that came built, as a rebuild (its delta in the changes). */
   rescope(next: ReadonlySet<SegmentId>): void {
     this.scope = next;
     this.rebuild();
   }
+
+  /** The roads of a rectangle held before an edit's tool reads them there (`editor/snap.ts` ribbonsNear): the page's window pulls their tiles in (`NetworkWindow.ensure`); null, nothing to pull (every road held). */
+  holdNear: ((rect: ChangeRect) => void) | null = null;
 
   /** Matches `RoadDoc.revision` at the time of the last rebuild. */
   revision = -1;
