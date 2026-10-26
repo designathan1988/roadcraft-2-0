@@ -1,0 +1,6 @@
+{
+  "viewport": [1920, 1080],
+  "steps": [
+    { "eval": "JSON.stringify({ probes: typeof window.__roadcraft, ready: document.readyState })" }
+  ]
+}

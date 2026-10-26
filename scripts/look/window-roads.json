@@ -1,0 +1,36 @@
+{
+  "storage": {
+    "roadcraft.quality": "ultra"
+  },
+  "viewport": [1920, 1080],
+  "steps": [
+    { "eval": "performance.clearMarks(); window.__cityAt = undefined; window.__roadcraft.generateCity({ seed: 7, size: 'large' }); 'started'" },
+    { "until": "(() => { const e = performance.getEntriesByName('city:applied')[0]; if (e && window.__cityAt === undefined) window.__cityAt = e.startTime; return window.__cityAt !== undefined; })()", "name": "city applied", "timeout": 1800000, "polling": 250 },
+    { "until": "(() => { const at = window.__cityAt ?? 0; return performance.getEntriesByName('opening:shown').some((e) => e.startTime > at) || !window.__roadcraft.scene().opening; })()", "name": "city shown", "timeout": 900000, "polling": 250 },
+    { "until": "(() => { const c = document.getElementById('loading-curtain'); return !!c && getComputedStyle(c).display === 'none'; })()", "name": "curtain gone", "timeout": 600000, "polling": 250 },
+    { "press": "Começar a construir", "optional": true },
+    { "press": "Continuar", "optional": true },
+    { "wait": 3000 },
+    { "eval": "window.__roadcraft.sim.setClock(720); window.__roadcraft.scene().setSkyMode('day'); 1" },
+    { "setView": [0, 0, 0.3, 45, 48] },
+    { "wait": 15000 },
+    { "shot": "map" },
+    { "eval": "JSON.stringify({ stepMs: window.__roadcraft.sim.stats?.stepMs ?? null, vehicles: window.__roadcraft.sim.stats?.vehicles ?? null, people: window.__roadcraft.sim.stats?.people ?? null, controllers: window.__roadcraft.sim.stats?.controllers ?? null, lotsMoving: window.__roadcraft.sim.stats?.lotsMoving ?? null, issues: (window.__roadcraft.sim.stats?.issues ?? []).length })" },
+    { "setView": [0, 0, 2.5, 45, 48] },
+    { "wait": 15000 },
+    { "shot": "district" },
+    { "eval": "JSON.stringify({ stepMs: window.__roadcraft.sim.stats?.stepMs ?? null, vehicles: window.__roadcraft.sim.stats?.vehicles ?? null, people: window.__roadcraft.sim.stats?.people ?? null, controllers: window.__roadcraft.sim.stats?.controllers ?? null, lotsMoving: window.__roadcraft.sim.stats?.lotsMoving ?? null, issues: (window.__roadcraft.sim.stats?.issues ?? []).length })" },
+    { "setView": [150, 0, 5, 20, 35] },
+    { "wait": 20000 },
+    { "shot": "street" },
+    { "eval": "JSON.stringify({ stepMs: window.__roadcraft.sim.stats?.stepMs ?? null, vehicles: window.__roadcraft.sim.stats?.vehicles ?? null, people: window.__roadcraft.sim.stats?.people ?? null, controllers: window.__roadcraft.sim.stats?.controllers ?? null, lotsMoving: window.__roadcraft.sim.stats?.lotsMoving ?? null, issues: (window.__roadcraft.sim.stats?.issues ?? []).length })" },
+    { "setView": [1400, 1400, 5, 20, 35] },
+    { "wait": 25000 },
+    { "shot": "street-moved" },
+    { "eval": "JSON.stringify({ stepMs: window.__roadcraft.sim.stats?.stepMs ?? null, vehicles: window.__roadcraft.sim.stats?.vehicles ?? null, people: window.__roadcraft.sim.stats?.people ?? null, controllers: window.__roadcraft.sim.stats?.controllers ?? null, lotsMoving: window.__roadcraft.sim.stats?.lotsMoving ?? null, issues: (window.__roadcraft.sim.stats?.issues ?? []).length })" },
+    { "setView": [1400, 1400, 2.5, 45, 48] },
+    { "wait": 10000 },
+    { "shot": "district-moved" },
+    { "memory": "exact" }
+  ]
+}
