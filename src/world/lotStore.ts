@@ -4,7 +4,7 @@ import { ChangeJournal, isStreaming, rectAround, rectsAround, type ChangeRect } 
 import { JournalCursor } from './derived';
 import { IdAllocator } from './ids';
 import { insideLot, lotRecord, type Lot } from './lotRecord';
-import { lotCentre } from './lotRings';
+import { lotBounds, lotCentre } from './lotRings';
 import { PointFiling } from './pointFiling';
 import { TableItems } from './buildings/items';
 import { type RecordRef, encodeRecords } from './buildings/recordTable';
@@ -143,6 +143,13 @@ export class LotStore {
     const items = this.items;
     return (items instanceof TableItems ? items.placeOf(id) : undefined) ?? placeOf(items.get(id)!);
   };
+
+  /** Each lot's box (`lotBounds`): a lot of the table read from its box columns, nothing decoded (`TableItems.eachBox`). */
+  eachBox(visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {
+    const items = this.itemsOf();
+    if (items instanceof TableItems) { items.eachBox(lotBounds, visit); return; }
+    for (const lot of items.values()) { const b = lotBounds(lot); visit(b.minX, b.minY, b.maxX, b.maxY); }
+  }
 
   /** The lots by id as a read-only map (the save walks their ids, `editor/chunkedSave.ts`): a working copy's the original's while it wrote nothing. */
   itemsOf(): ReadonlyMap<number, Lot> {
@@ -349,7 +356,7 @@ export class LotStore {
   /** Every lot as one table in the lots' order, its columns their centres, each record as `RoadDoc.fromJSON` would read it from the file (`lotRecord`: its building only while it stands, `standing`) - a city made off the page (`editor/smallCityMap.ts`); null: none. */
   tableOf(standing: (id: number) => boolean): ArrayBufferLike | null {
     const list = [...this.items.values()].map((lot) => lotRecord(lot, standing));
-    return list.length ? encodeRecords(list, placeOf).buffer : null;
+    return list.length ? encodeRecords(list, placeOf, lotBounds).buffer : null;
   }
 
   /** The same records as another store (they are never changed in place): its table shared, the records written copied, never a record of the table decoded. */

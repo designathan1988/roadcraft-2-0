@@ -41,6 +41,7 @@ import { cancelUploads, compilesAhead, programsReady, queueUpload } from './uplo
 import { MAP_HALF } from '@world/cityGen/wholeMap';
 import { FAR_STRIDES, type FarNode, farNodesFor, strideErrorsInto, strideFor } from './farGround';
 import { TILE, tileOfKey } from '@world/tiles';
+import { TableItems } from '@world/buildings/items';
 
 /** THE WORLD'S GROUND, plate by plate of the unbounded grid (`world/bounds.ts`): the plates near the view made in full, a ring of far patches round it, nothing beyond */
 
@@ -620,17 +621,26 @@ export function createFlatAtlas(anisotropy: number): TerrainSurface {
     const reach = (x: number, y: number, radius: number): boolean => Math.abs(x - r.cx) <= TERRAIN_HALF + radius && Math.abs(y - r.cy) <= TERRAIN_HALF + radius;
     return doc.terrainStamps.some((s) => reach(s.x, s.y, s.radius)) || doc.terrainPaint.some((d) => reach(d.x, d.y, d.radius));
   };
-  /** @rebuild Every plate's content read from the whole document (the page's: the active region): the first time, an unload, or when the diary cannot say where. */
+  /**
+   * @rebuild Every plate's content read from the whole document (the page's: the active region): the first time, an unload, or when the diary
+   * cannot say where. The kinds kept in tables read from their columns (`TableItems.eachPlace`, `eachBox`): DO NOT walk their records -
+   * every building, lot, pole and item of landscaping of a 10 km city decoded in one frame of its opening (2026-10-26).
+   */
   const readWholeContent = (doc: TerrainSource): boolean => {
     const d = doc as Partial<RoadDoc>;
     const next = new Set<number>();
     const mark = (x: number, y: number): void => { next.add(plateOf(x, y)); };
     const disc = (x: number, y: number, r: number): void => { for (const k of platesOver([x - r, y - r, x + r, y + r])) next.add(k); };
+    const places = (items: ReadonlyMap<number, { readonly x: number; readonly y: number }> | undefined): void => {
+      if (items instanceof TableItems) items.eachPlace(mark);
+      else for (const item of items?.values() ?? []) mark(item.x, item.y);
+    };
     for (const n of d.nodes?.values() ?? []) mark(n.x, n.y);
-    for (const b of d.buildings?.all() ?? []) mark(b.x, b.y);
-    for (const l of d.lots ?? []) for (const c of l.corners) mark(c.x, c.y);
-    for (const p of d.poles?.values() ?? []) mark(p.x, p.y);
-    for (const item of d.landscape?.values() ?? []) mark(item.x, item.y);
+    d.buildings?.eachPlace(mark);
+    // A lot by its box: the plates its corners stand on (a box's sides are its corners' extremes).
+    d.lotStore?.eachBox((minX, minY, maxX, maxY) => { for (const k of platesOver([minX, minY, maxX, maxY])) next.add(k); });
+    places(d.poles);
+    places(d.landscape);
     for (const tree of d.trees ?? []) mark(tree.x, tree.y);
     for (const barrier of d.barriers?.values() ?? []) for (const q of barrier.points) mark(q.x, q.y);
     // A stamp or a dab puts content on every plate its disc reaches (`copyOn`).

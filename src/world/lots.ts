@@ -34,7 +34,7 @@ const TWO_ROWS = m(44);
 const MIN_LOT = m(10);
 const RASTER = m(2);
 
-export { lotCentre } from './lotRings';
+export { lotBounds, lotCentre } from './lotRings';
 export { insideLot, type Lot } from './lotRecord';
 
 export function lotArea(l: Pick<Lot, 'corners'>): number {

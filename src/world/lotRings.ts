@@ -52,6 +52,13 @@ export function orientedBox(h: readonly Vec2[]): { c: Vec2; u: Vec2; v: Vec2; L:
   return best;
 }
 
+/** The box of a lot's corners, as the table's box columns hold it (`encodeRecords`), the plates and squares it reaches read from them. */
+export function lotBounds(l: { readonly corners: readonly Vec2[] }): { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of l.corners) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  return { minX, minY, maxX, maxY };
+}
+
 /** The boundary's area centroid (the corners' mean for a degenerate one). */
 export function lotCentre(l: { readonly corners: readonly Vec2[] }): Vec2 {
   const q = l.corners;

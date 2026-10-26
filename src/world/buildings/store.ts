@@ -141,6 +141,13 @@ export class BuildingStore {
     return b ? { x: b.x, y: b.y } : undefined;
   }
 
+  /** Each building's place: a row of the table from its place columns (`TableItems.eachPlace`), nothing decoded. */
+  eachPlace(visit: (x: number, y: number) => void): void {
+    if (this.below) { this.below.eachPlace(visit); return; }
+    if (this.items instanceof BuildingItems) { this.items.eachPlace(visit); return; }
+    for (const b of this.items.values()) visit(b.x, b.y);
+  }
+
   /** The buildings whose box (or anchor) may reach the rectangle, in the order of `all()` */
   near(minX: number, minY: number, maxX: number, maxY: number): Building[] {
     if (this.below) return this.below.near(minX, minY, maxX, maxY);

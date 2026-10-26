@@ -153,6 +153,41 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     for (const [, value] of this.entries()) yield value;
   }
 
+  /** Each record's place: the table's own read from its place columns (nothing decoded), a record written here from its x and y; a record with no place passed over. DO NOT walk `values` for the places: every record of the table decoded. */
+  eachPlace(visit: (x: number, y: number) => void): void {
+    const base = this.base;
+    if (base) {
+      const { ids, xs, ys } = base.table;
+      for (let row = 0; row < ids.length; row++) {
+        const key = ids[row]! as K;
+        if (this.gone.has(key) || this.replaced.has(key)) continue;
+        const x = xs[row]!, y = ys[row]!;
+        if (Number.isFinite(x) && Number.isFinite(y)) visit(x, y);
+      }
+    }
+    for (const value of this.replaced.values()) if (value.x !== undefined && value.y !== undefined) visit(value.x, value.y);
+    for (const value of this.added.values()) if (value.x !== undefined && value.y !== undefined) visit(value.x, value.y);
+  }
+
+  /** Each record's box on the ground: the table's own read from its box columns (nothing decoded; a row of a table written before them, or with none, decoded for `boxOf` alone), a record written here from `boxOf`. */
+  eachBox(boxOf: (value: V) => { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null,
+    visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {
+    const base = this.base;
+    const take = (value: V): void => { const b = boxOf(value); if (b) visit(b.minX, b.minY, b.maxX, b.maxY); };
+    if (base) {
+      const { ids, boxes } = base.table;
+      for (let row = 0; row < ids.length; row++) {
+        const key = ids[row]! as K;
+        if (this.gone.has(key) || this.replaced.has(key)) continue;
+        const minX = boxes ? boxes.minX[row]! : Number.NaN;
+        if (Number.isFinite(minX)) visit(minX, boxes!.minY[row]!, boxes!.maxX[row]!, boxes!.maxY[row]!);
+        else take(base.record(row));
+      }
+    }
+    for (const value of this.replaced.values()) take(value);
+    for (const value of this.added.values()) take(value);
+  }
+
   [Symbol.iterator](): MapIterator<[K, V]> {
     return this.entries();
   }

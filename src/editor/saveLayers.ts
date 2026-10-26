@@ -5,7 +5,7 @@ import type { ChangeKind, ChangeRect } from '@world/changes';
 import { CELL } from '@world/cells';
 import { TILE } from '@world/tiles';
 import type { Lot } from '@world/lotRecord';
-import { lotCentre } from '@world/lotRings';
+import { lotBounds, lotCentre } from '@world/lotRings';
 import type { UtilityPole, UtilitySpan } from '@world/utilities';
 import type { LandscapeItem } from '@world/landscape';
 import type { Barrier } from '@world/barriers';
@@ -89,7 +89,7 @@ export const KEYED: Readonly<Record<KeyedName, KeyedSpec>> = {
   }),
   lots: keyed<Lot>({
     side: DENSE_SQUARE, kinds: ['lots'], table: 'lots', items: (doc) => doc.lotStore.itemsOf(), placeOf: (doc, id) => doc.lotStore.placeOf(id),
-    saved: (lot) => lot, order: (doc, id) => doc.lotStore.orderOf(id) ?? 0, ref: (doc, id) => doc.lotStore.tableRef(id), columns: lotCentre,
+    saved: (lot) => lot, order: (doc, id) => doc.lotStore.orderOf(id) ?? 0, ref: (doc, id) => doc.lotStore.tableRef(id), columns: lotCentre, box: lotBounds,
   }),
 };
 
