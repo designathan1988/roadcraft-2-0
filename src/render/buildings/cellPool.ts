@@ -2,7 +2,7 @@ import { canQueueJobs, type JobTicket, submitJob, warmJobWorkers } from '../../j
 import type { GroundAt } from '@world/buildings/foundation';
 import type { Finish } from '@world/buildings/materials';
 import type { PavingSource } from '@world/paving';
-import type { RecordRef } from '@world/buildings/recordTable';
+import { RecordTable, type RecordRef, TableWriter, tableBytes } from '@world/buildings/recordTable';
 import { m } from '@world/units';
 import type { SharedGroundAt } from '../sharedGround';
 import { BATCH_CELL } from './layerCells';
@@ -394,12 +394,31 @@ export class CellPool {
     const ground = around ? groundAround(whole, around) : whole;
     const packed = asked.env.pavedAt && asked.rect ? asked.env.pavedAt.pack!(asked.rect) : null;
     if (asked.env.pavedAt && asked.rect && !packed) throw new Error('[buildings] the paving cannot be handed to a worker');
+    const base = this.base(asked);
+    // A worker in another process gets its buildings' rows in a table of their own (`ownRows`). DO NOT name the map's table there: a 10 km
+    // city's table of 249,122 buildings went whole to each of the 18 job threads, its first job each (`ProcessWorker` kept), the view's
+    // buildings waiting behind the copies (2026-10-26).
     const job: CellJob = {
-      ...this.base(asked), ground, ...(around ? { around } : {}),
+      ...base, ...(sharesMemory ? {} : { entries: this.ownRows(base.entries) }), ground, ...(around ? { around } : {}),
       ...(asked.env.naturalAt === asked.env.groundAt ? { naturalIsGround: true } : {}),
       ...(packed ? { paving: packed.data } : {}),
     };
     return { data: job, transfer: packed?.transfer ?? [] };
+  }
+
+  /** The record tables the jobs' rows are copied from (`ownRows`), read once each. */
+  private readonly sources = new WeakMap<ArrayBufferLike, RecordTable>();
+
+  /** A job's entries with their records' rows copied into a table of their own (`TableWriter.copyRows`: no record decoded), in a plain buffer: what a worker in another process reads, the job's buildings alone. */
+  private ownRows(entries: CellJob['entries']): CellJob['entries'] {
+    const writer = new TableWriter(false);
+    for (const e of entries) {
+      let table = this.sources.get(e.record.buffer);
+      if (!table) this.sources.set(e.record.buffer, table = new RecordTable(e.record.buffer));
+      writer.copyRows(table, [e.record.row]);
+    }
+    const buffer = tableBytes(writer.finish().buffer);
+    return entries.map((e, row) => ({ ...e, record: { buffer, row } }));
   }
 
   /** What every job carries, on the page or off it. */

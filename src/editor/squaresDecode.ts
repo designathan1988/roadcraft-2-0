@@ -1,4 +1,4 @@
-import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type TableRow, tableRecords } from '@world/buildings/recordTable';
+import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow, tableRecords } from '@world/buildings/recordTable';
 import type { DocTable } from '@world/docBinary';
 import type { GlobalPart, SavedGlobals, SerializedDoc } from '@world/doc';
 import { REGION_CODEC, type SquareSections } from './regionFrames';
@@ -84,7 +84,7 @@ function joined(name: KeyedName, squares: readonly { table: RecordTable; orders:
   squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
   rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
   const box = KEYED[name].box as RowBox<TableRow> | undefined;
-  const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null);
+  const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null, (KEYED[name].summary?.() ?? null) as RowSummary<TableRow> | null);
   const readers = new Map<number, TableReader>();
   const readerOf = (t: number): TableReader => { let reader = readers.get(t); if (!reader) readers.set(t, reader = squares[t]!.table.reader()); return reader; };
   for (const { t, row, id } of rows) {

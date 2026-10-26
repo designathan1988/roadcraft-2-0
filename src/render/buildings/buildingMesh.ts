@@ -119,6 +119,7 @@ import { type Cover, type PartyWalls, hiddenByCovers } from './partyWalls';
 import { POSE_FLOATS, letGoPosed, partPoseDepth, poseMatrixInto, posedCopy } from './partPose';
 import { partBandings } from './partFiling';
 import { type FlagDesign, legacyFlag } from '@world/buildings/flags';
+import { fliesFlag } from '@world/buildings/summary';
 
 /** Where the flags of the building being emitted go (`emitChunk` sets it). */
 let flagSink: FlagInstance[] | null = null;
@@ -4061,10 +4062,8 @@ function emitRoof(
 
 // ------------------------------------------------------------------ chunks
 
-/** Whether a building flies a flag: a spire or a lantern on its roof with a flag (`flagOf`). */
-export function fliesFlag(b: Building): boolean {
-  return b.volumes.some((v) => (v.roofDetails ?? []).some((d) => (d.kind === 'spire' || d.kind === 'lantern') && flagOf(d) !== null));
-}
+/** Whether a building flies a flag (`buildings/summary.ts`, the tables' summary columns read it). */
+export { fliesFlag };
 
 /** A signature building's ground floor (`BuildingChunk.signatureFloor`) without emitting it */
 export function signatureFloorOf(b: Building, naturalAt: GroundAt, pavedAt?: PavedAt): number | undefined {

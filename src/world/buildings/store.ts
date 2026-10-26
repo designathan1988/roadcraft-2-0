@@ -7,7 +7,8 @@ import { ForkMap } from '@core/forkMap';
 import { inheritStoredBounds, storedBounds } from './geometry';
 import { BuildingGrid } from './grid';
 import { BuildingItems } from './items';
-import type { RecordRef } from './recordTable';
+import type { RecordRef, RecordTable } from './recordTable';
+import { SUMMARY_WIDTH } from './summary';
 import type { TableRows } from './tableRows';
 import { type BuildingSections, itemsOfSections, sectionsOf } from './sections';
 import { SpilledItems } from './spilledItems';
@@ -139,6 +140,22 @@ export class BuildingStore {
     if (this.items instanceof BuildingItems) return this.items.placeOf(id);
     const b = this.items.get(id);
     return b ? { x: b.x, y: b.y } : undefined;
+  }
+
+  /**
+   * Each building for a reader that keeps its numbers (`render/buildings/townColumns.ts`): a row of the table with its summary columns as
+   * `row` (`buildings/summary.ts`: its id, place, box and summary read there, nothing decoded), any other as its record (`record`: one written
+   * on the page, or a row of a table written before the summary columns).
+   */
+  eachSummarised(row: (id: BuildingId, table: RecordTable, at: number) => void, record: (b: Building) => void): void {
+    if (this.below) { this.below.eachSummarised(row, record); return; }
+    const items = this.items;
+    if (!(items instanceof BuildingItems)) { for (const b of items.values()) record(b); return; }
+    items.eachRow((rows, at) => {
+      const table = rows.table;
+      if (table.summaryWidth === SUMMARY_WIDTH && table.boxes) row(table.ids[at]! as BuildingId, table, at);
+      else record(rows.record(at));
+    }, record);
   }
 
   /** Each building's place: a row of the table from its place columns (`TableItems.eachPlace`), nothing decoded. */

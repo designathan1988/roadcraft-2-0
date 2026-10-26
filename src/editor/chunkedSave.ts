@@ -1,5 +1,5 @@
 import type { Building } from '@world/buildings/types';
-import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type TableRow } from '@world/buildings/recordTable';
+import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow } from '@world/buildings/recordTable';
 import { type Change, type ChangeRect, DOC_CHANGE_KINDS } from '@world/changes';
 import { JournalCursor } from '@world/derived';
 import { GLOBAL_PARTS, type GlobalPart, type RoadDoc, type SerializedDoc } from '@world/doc';
@@ -347,7 +347,7 @@ export class TiledSaves {
         let records: ArrayBufferLike | unknown[];
         if (spec.table) {
           // A kind kept in a table: the square's rows copied from the map's table, nothing decoded; a record written on the page encoded as the file holds it.
-          const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null, spec.box as RowBox<TableRow> | undefined ?? null);
+          const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null, spec.box as RowBox<TableRow> | undefined ?? null, (spec.summary?.() ?? null) as RowSummary<TableRow> | null);
           for (const id of ids) {
             const ref = spec.ref!(doc, id);
             if (ref) writer.copyRows(tableOf(ref.buffer), [ref.row]);

@@ -1,16 +1,17 @@
-import { Digest } from '@core/digest';
 import { IdSlots, grown } from '@core/idSlots';
 import { buildingHeight, storedBounds } from '@world/buildings/geometry';
 import type { Building } from '@world/buildings/types';
-import { fliesFlag } from './buildingMesh';
+import {
+  MARK_FLIES, MARK_SIGNATURE, SUMMARY_GROUND_MAX_X, SUMMARY_GROUND_MAX_Y, SUMMARY_GROUND_MIN_X, SUMMARY_GROUND_MIN_Y, SUMMARY_HEIGHT, SUMMARY_MARKS,
+  SUMMARY_MASS_SIG, SUMMARY_SIG, fliesFlag, isSignature, recordDigests,
+} from '@world/buildings/summary';
 import { BATCH_CELL } from './layerCells';
-import { drawsSignature } from './signature';
 
 /** WHAT THE BUILDINGS LAYER KEEPS OF EACH BUILDING, AS NUMBERS IN COLUMNS BY ITS ID (`layer.ts`): its digests, its place and box, its cell and what it flies; never its record (report "Arquitetura para cidades grandes": the table is the source of truth, a record is decoded while it is read). A record is read once when it comes or changes (`file`), and again only where its cell is made near the camera. */
 
 /** Set once the record's numbers are in its columns (`file`); cleared when the diary names it (`stale`). */
 export const KNOWN = 1;
-/** It flies a flag (`buildingMesh.ts` `fliesFlag`): its summary is asked even far (the flags). */
+/** It flies a flag (`buildings/summary.ts` `fliesFlag`): its summary is asked even far (the flags). */
 export const FLIES = 2;
 /** A signature building (`signature.ts` `drawsSignature`): its body drawn with parts of its own. */
 export const SIGNATURE = 4;
@@ -21,35 +22,8 @@ export const KEPT = 16;
 /** Filed in the town (`TownIndex`), in the cell `filedI`, `filedJ`. */
 export const FILED = 32;
 
-/** Each member object's digest, once (`TownColumns.members`): a record's members are shared with other buildings (`intern.ts`, `SharedMembers`:
- *  a storey, a facade, a material once for the city) and never edited in place (records are replaced), so one hashed is hashed for every building that has it. */
-function memberDigest(member: object, known: WeakMap<object, number>): number {
-  let d = known.get(member);
-  if (d === undefined) {
-    d = new Digest().addPlain(member).value();
-    known.set(member, d);
-  }
-  return d;
-}
-
-/** The digest of a record with its wear and without it (`massing.ts` reads no wear): what its detail and its masses are made of.
- *  DO NOT walk the whole record twice, nor its shared members again for every building: filing a reopened city of 8,102 buildings
- *  spent 0.77 s of the page here (`npm run diagnose`, 2026-10-22). The shape once (members by their digest), the wear over it. */
-export function recordDigests(b: Building, members: WeakMap<object, number> = new WeakMap()): { readonly sig: number; readonly massSig: number } {
-  const shape = new Digest();
-  const record = b as unknown as Record<string, unknown>;
-  let keys = 0;
-  for (const key in record) {
-    const value = record[key];
-    if (key === 'decay' || value === undefined || typeof value === 'function') continue;
-    shape.addText(key);
-    if (typeof value === 'object' && value !== null) shape.add(memberDigest(value, members));
-    else shape.addPlain(value);
-    keys++;
-  }
-  const massSig = shape.add(keys).value();
-  return { sig: new Digest().add(massSig).addPlain(b.decay ?? null).value(), massSig };
-}
+/** The digests of a record (`buildings/summary.ts`): the same the tables' summary columns hold. */
+export { recordDigests };
 
 export class TownColumns {
   private readonly slots = new IdSlots(1024);
@@ -132,7 +106,31 @@ export class TownColumns {
     this.massSig[slot] = massSig;
     let flags = (this.flags[slot]! & (SHOWN | KEPT | FILED)) | KNOWN;
     if (fliesFlag(b)) flags |= FLIES;
-    if (drawsSignature(b)) flags |= SIGNATURE;
+    if (isSignature(b)) flags |= SIGNATURE;
+    this.flags[slot] = flags;
+    return slot;
+  }
+
+  /**
+   * A row of the town's table put in its columns from the table's own (its place, its box, its summary: `buildings/summary.ts`), its record
+   * never decoded: the same numbers `file` reads out of the record. `summary` holds column c of the row at `summary[c * rows + row]`.
+   */
+  fileRow(id: number, x: number, y: number, box: { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number },
+    summary: Float64Array, rows: number, row: number): number {
+    const slot = this.slots.take(id);
+    const at = (c: number): number => summary[c * rows + row]!;
+    this.ids[slot] = id;
+    this.x[slot] = x; this.y[slot] = y;
+    this.minX[slot] = box.minX; this.minY[slot] = box.minY; this.maxX[slot] = box.maxX; this.maxY[slot] = box.maxY;
+    this.height[slot] = at(SUMMARY_HEIGHT);
+    this.groundMinX[slot] = at(SUMMARY_GROUND_MIN_X); this.groundMinY[slot] = at(SUMMARY_GROUND_MIN_Y);
+    this.groundMaxX[slot] = at(SUMMARY_GROUND_MAX_X); this.groundMaxY[slot] = at(SUMMARY_GROUND_MAX_Y);
+    this.sig[slot] = at(SUMMARY_SIG);
+    this.massSig[slot] = at(SUMMARY_MASS_SIG);
+    const marks = at(SUMMARY_MARKS);
+    let flags = (this.flags[slot]! & (SHOWN | KEPT | FILED)) | KNOWN;
+    if (marks & MARK_FLIES) flags |= FLIES;
+    if (marks & MARK_SIGNATURE) flags |= SIGNATURE;
     this.flags[slot] = flags;
     return slot;
   }

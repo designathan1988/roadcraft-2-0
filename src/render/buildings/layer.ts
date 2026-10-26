@@ -821,15 +821,21 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
             group.remove(stored.group);
             stored.dispose();
           }
-          // DO NOT hold the whole town's records while it is filed (`[...doc.buildings.all()]` held every one decoded): each record read once, its numbers put in its columns, let go.
+          // From the table's own columns, no record decoded (`buildings/summary.ts`, `TownColumns.fileRow`); a record written on the page, or a
+          // row of a table without its summary, read once and filed (`file`). DO NOT decode the whole town to file it: the 10 km city's 249,122
+          // buildings were decoded here in one frame of its opening (2026-10-26).
           columns.forEach((_id, slot) => { columns.flags[slot]! &= ~KNOWN; });
           const solid: number[] = [];
-          for (const b of doc.buildings.all()) {
-            const slot = columns.file(b);
-            const shown = b.id !== hides && !ruined.has(b.id);
+          const placed = (id: BuildingId, slot: number): void => {
+            const shown = id !== hides && !ruined.has(id);
             columns.set(slot, SHOWN, shown);
-            if (shown && inCell(b.id)) solid.push(slot);
-          }
+            if (shown && inCell(id)) solid.push(slot);
+          };
+          doc.buildings.eachSummarised((id, table, at) => {
+            const boxes = table.boxes!;
+            placed(id, columns.fileRow(id, table.xs[at]!, table.ys[at]!,
+              { minX: boxes.minX[at]!, minY: boxes.minY[at]!, maxX: boxes.maxX[at]!, maxY: boxes.maxY[at]! }, table.summary!, table.rows, at));
+          }, (b) => placed(b.id, columns.file(b)));
           town.reset(solid);
           // The ids no longer in the document (not filed again by the walk): what was kept of them let go, their slots with it.
           const goneIds: number[] = [];

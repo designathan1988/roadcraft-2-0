@@ -1,6 +1,7 @@
 import type { Building, BuildingId } from '@world/buildings/types';
 import { storedBounds } from '@world/buildings/geometry';
-import type { RecordRef, RowBox, RowPlace } from '@world/buildings/recordTable';
+import type { RecordRef, RowBox, RowPlace, RowSummary } from '@world/buildings/recordTable';
+import { buildingSummaryColumns } from '@world/buildings/summary';
 import type { ChangeKind, ChangeRect } from '@world/changes';
 import { CELL } from '@world/cells';
 import { TILE } from '@world/tiles';
@@ -53,6 +54,8 @@ interface KeyedSpec<T extends Keyed = Keyed> {
   readonly columns?: RowPlace<T>;
   /** The box columns of a record written on the page, for its square's table (a building's box, `storedBounds`): the map files it by place from them when opened. */
   readonly box?: RowBox<T>;
+  /** The summary columns of a record (a building's, `buildings/summary.ts`): a fresh one for each table written, its members' digests kept across its rows. */
+  readonly summary?: () => RowSummary<T>;
 }
 const keyed = <T extends Keyed>(spec: KeyedSpec<T>): KeyedSpec => spec as unknown as KeyedSpec;
 const nodeOf = (doc: RoadDoc, id: number): RoadNode | undefined => (doc.nodes as ReadonlyMap<number, RoadNode>).get(id);
@@ -85,7 +88,7 @@ export const KEYED: Readonly<Record<KeyedName, KeyedSpec>> = {
   buildings: keyed<Building>({
     side: DENSE_SQUARE, kinds: ['buildings'], table: 'buildings', items: (doc) => doc.buildings.itemsOf(),
     placeOf: (doc, id) => doc.buildings.placeOf(id as BuildingId), saved: (b) => b, ref: (doc, id) => doc.buildings.tableRef(id as BuildingId),
-    box: (b) => storedBounds(b),
+    box: (b) => storedBounds(b), summary: buildingSummaryColumns,
   }),
   lots: keyed<Lot>({
     side: DENSE_SQUARE, kinds: ['lots'], table: 'lots', items: (doc) => doc.lotStore.itemsOf(), placeOf: (doc, id) => doc.lotStore.placeOf(id),

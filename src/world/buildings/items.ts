@@ -169,6 +169,21 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     for (const value of this.added.values()) if (value.x !== undefined && value.y !== undefined) visit(value.x, value.y);
   }
 
+  /** Each record: a row of the table as its row (`row`: the table and the row, its columns read there, nothing decoded), a record written here as itself (`written`). */
+  eachRow(row: (table: TableRows<K, V>, row: number) => void, written: (value: V) => void): void {
+    const base = this.base;
+    if (base) {
+      const ids = base.table.ids;
+      for (let r = 0; r < ids.length; r++) {
+        const key = ids[r]! as K;
+        if (this.gone.has(key) || this.replaced.has(key)) continue;
+        row(base, r);
+      }
+    }
+    for (const value of this.replaced.values()) written(value);
+    for (const value of this.added.values()) written(value);
+  }
+
   /** Each record's box on the ground: the table's own read from its box columns (nothing decoded; a row of a table written before them, or with none, decoded for `boxOf` alone), a record written here from `boxOf`. */
   eachBox(boxOf: (value: V) => { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null,
     visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {

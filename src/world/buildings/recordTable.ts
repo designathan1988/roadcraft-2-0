@@ -7,15 +7,19 @@ export interface TableRow { readonly id: number; readonly x?: number; readonly y
 export type RowPlace<T> = (row: T) => { readonly x: number; readonly y: number };
 /** The box a row covers on the ground, for its columns (`TableWriter` box: a building's `buildingBounds`): what files it by place without the record (`BuildingStore` grid). */
 export type RowBox<T> = (row: T) => { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number };
+/** What else is read of a row without its record, as `width` columns of numbers (`TableWriter` summary: a building's, `buildings/summary.ts`). */
+export interface RowSummary<T> { readonly width: number; of(row: T): readonly number[] }
 
 /** A TILE'S BUILDINGS AS ONE TYPED TABLE IN SHARED MEMORY (CLAUDE.md "Architecture": per-tile typed tables read by stateless jobs): columns for what is read without the record (id, place, rotation, and from format 2 the box on the ground), each record's members in a binary stream, every string, object shape and shared member (`intern.ts`) written once for the tile; a SharedArrayBuffer is posted as a handle, never copied (MDN "SharedArrayBuffer"), and each reader decodes only the rows it is asked for */
 
 const MAGIC = 0x52435442;
-/** Bumped when the layout below changes: 2 (2026-10-26) adds the box columns; a table of format 1 (no box, `RecordTable.boxes` null) is still read. */
-const FORMAT = 2;
+/** Bumped when the layout below changes: 2 (2026-10-26) adds the box columns, 3 (2026-10-26) the summary columns (`RowSummary`, their count in the tenth word of the header); a table of format 1 (no box, `RecordTable.boxes` null) or 2 (no summary) is still read. */
+const FORMAT = 3;
 const FIRST_BOXED = 2;
-/** Header words: magic, format, rows, strings, string units, shapes, shape keys, nodes, stream bytes. */
+const FIRST_SUMMARY = 3;
+/** Header words: magic, format, rows, strings, string units, shapes, shape keys, nodes, stream bytes; from format 3 the width of the summary. The sections start at the same place for every format (`align8` of 36 and of 40 bytes). */
 const HEAD = 9;
+const HEAD_SUMMARY = 10;
 
 const T_NULL = 0, T_FALSE = 1, T_TRUE = 2, T_U8 = 3, T_I32 = 4, T_F64 = 5, T_STR = 6, T_ARR = 7, T_OBJ = 8, T_NODE = 9;
 
@@ -62,6 +66,9 @@ interface Layout {
   readonly minYs: number;
   readonly maxXs: number;
   readonly maxYs: number;
+  /** The summary columns, one after the other (format 3; -1 in a table without them), and how many. */
+  readonly summary: number;
+  readonly width: number;
   readonly rootAt: number;
   readonly nodeAt: number;
   readonly strStart: number;
@@ -72,15 +79,16 @@ interface Layout {
   readonly bytes: number;
 }
 
-function layout(format: number, rows: number, strings: number, units: number, shapes: number, keys: number, nodes: number, stream: number): Layout {
-  let at = align8(HEAD * 4);
+function layout(format: number, rows: number, strings: number, units: number, shapes: number, keys: number, nodes: number, stream: number, width: number): Layout {
+  let at = align8((format >= FIRST_SUMMARY ? HEAD_SUMMARY : HEAD) * 4);
   const take = (bytes: number): number => { const start = at; at = align8(at + bytes); return start; };
   const ids = take(rows * 8), xs = take(rows * 8), ys = take(rows * 8), turns = take(rows * 8);
   const boxed = format >= FIRST_BOXED;
   const minXs = boxed ? take(rows * 8) : -1, minYs = boxed ? take(rows * 8) : -1, maxXs = boxed ? take(rows * 8) : -1, maxYs = boxed ? take(rows * 8) : -1;
+  const summary = format >= FIRST_SUMMARY && width > 0 ? take(rows * 8 * width) : -1;
   const rootAt = take(rows * 4), nodeAt = take(nodes * 4), strStart = take((strings + 1) * 4), shapeStart = take((shapes + 1) * 4), shapeKeys = take(keys * 4);
   const strUnits = take(units * 2), streamAt = take(stream);
-  return { format, rows, strings, units, shapes, keys, nodes, stream, ids, xs, ys, turns, minXs, minYs, maxXs, maxYs, rootAt, nodeAt, strStart, shapeStart, shapeKeys, strUnits, streamAt, bytes: at };
+  return { format, rows, strings, units, shapes, keys, nodes, stream, ids, xs, ys, turns, minXs, minYs, maxXs, maxYs, summary, width: summary >= 0 ? width : 0, rootAt, nodeAt, strStart, shapeStart, shapeKeys, strUnits, streamAt, bytes: at };
 }
 
 /** A growable byte stream the encoder writes the members into. */
@@ -122,8 +130,8 @@ function sharedObjects(rows: readonly object[]): Set<object> {
 }
 
 /** The rows written as one table: their values as JSON would keep them (undefined members left out, in arrays null), numbers exact. `place`: where a record without a place of its own stands (its columns); `box`: the box each covers (a building's), for its columns. */
-export function encodeRecords<T extends TableRow = Building>(rows: readonly T[], place: RowPlace<T> | null = null, box: RowBox<T> | null = null): RecordTable {
-  const writer = new TableWriter<T>(false, place, box);
+export function encodeRecords<T extends TableRow = Building>(rows: readonly T[], place: RowPlace<T> | null = null, box: RowBox<T> | null = null, summary: RowSummary<T> | null = null): RecordTable {
+  const writer = new TableWriter<T>(false, place, box, summary);
   writer.add(rows);
   return writer.finish();
 }
@@ -152,6 +160,8 @@ export class TableWriter<T extends TableRow = Building> {
   private readonly minYs: number[] = [];
   private readonly maxXs: number[] = [];
   private readonly maxYs: number[] = [];
+  /** Each row's summary, `summary.width` numbers a row. */
+  private readonly sums: number[] = [];
   private readonly rootAt: number[] = [];
   /** Where `read` stands in the stream. */
   private pos = 0;
@@ -159,12 +169,17 @@ export class TableWriter<T extends TableRow = Building> {
   private readonly keptNodes = new Map<object, number>();
 
   /** `keepShared`: a member written as a node in one batch is that node in the batches after (the members shared across batches, `intern.ts` SharedMembers); without it each batch writes its own. `place`: where a row stands, for its columns (a record with no x, y of its own). `box`: the box a row covers on the ground, for its columns (a building's `buildingBounds`); none: NaN there. */
-  constructor(private readonly keepShared = false, private readonly place: RowPlace<T> | null = null, private readonly box: RowBox<T> | null = null) {}
+  /** `summary`: what else the columns of a row hold (`RowSummary`, a building's `buildings/summary.ts`). */
+  constructor(private readonly keepShared = false, private readonly place: RowPlace<T> | null = null, private readonly box: RowBox<T> | null = null,
+    private readonly summary: RowSummary<T> | null = null) {}
 
-  /** A row's columns written: its id, place, rotation and box. */
-  private columns(id: number, x: number, y: number, rotation: number, box: { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null): void {
+  /** A row's columns written: its id, place, rotation, box and summary. */
+  private columns(id: number, x: number, y: number, rotation: number, box: { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null,
+    summary: readonly number[] | null): void {
     this.ids.push(id); this.xs.push(x); this.ys.push(y); this.turns.push(rotation);
     this.minXs.push(box?.minX ?? Number.NaN); this.minYs.push(box?.minY ?? Number.NaN); this.maxXs.push(box?.maxX ?? Number.NaN); this.maxYs.push(box?.maxY ?? Number.NaN);
+    const width = this.summary?.width ?? 0;
+    for (let c = 0; c < width; c++) this.sums.push(summary?.[c] ?? Number.NaN);
   }
 
   get rows(): number {
@@ -244,7 +259,7 @@ export class TableWriter<T extends TableRow = Building> {
     for (const row of rows) {
       this.rootAt.push(stream.length);
       const at = this.place ? this.place(row) : row;
-      this.columns(row.id, at.x ?? Number.NaN, at.y ?? Number.NaN, row.rotation ?? Number.NaN, this.box ? this.box(row) : null);
+      this.columns(row.id, at.x ?? Number.NaN, at.y ?? Number.NaN, row.rotation ?? Number.NaN, this.box ? this.box(row) : null, this.summary ? this.summary.of(row) : null);
       body(row);
     }
   }
@@ -321,12 +336,16 @@ export class TableWriter<T extends TableRow = Building> {
       }
     };
     const boxes = from.boxes;
+    const width = this.summary?.width ?? 0;
+    const sums = width > 0 && from.summaryWidth === width ? from.summary : null;
     for (const row of rows) {
       if (row < 0 || row >= from.rows) throw new Error(`[buildings] no row ${row} in the record table copied from`);
       this.rootAt.push(stream.length);
       // The box copied with the other columns; a source without box columns (format 1) has it worked out of the record once, decoded for that alone, where this table wants one.
       const box = boxes ? { minX: boxes.minX[row]!, minY: boxes.minY[row]!, maxX: boxes.maxX[row]!, maxY: boxes.maxY[row]! } : this.box ? this.box(source.record(row) as T) : null;
-      this.columns(from.ids[row]!, from.xs[row]!, from.ys[row]!, from.rotations[row]!, box);
+      // And the summary: copied, or worked out of the record once where the source has none (a table written before format 3).
+      const summary = width === 0 ? null : sums ? Array.from({ length: width }, (_, c) => sums[c * from.rows + row]!) : this.summary!.of(source.record(row) as T);
+      this.columns(from.ids[row]!, from.xs[row]!, from.ys[row]!, from.rotations[row]!, box, summary);
       pos = source.rootAt[row]!;
       copy();
     }
@@ -380,9 +399,10 @@ export class TableWriter<T extends TableRow = Building> {
     const { stringList, shapeList, nodeAt, stream, rootAt } = this;
     const units = stringList.reduce((n, s) => n + s.length, 0);
     const keys = shapeList.reduce((n, s) => n + s.length, 0);
-    const at = layout(FORMAT, this.rows, stringList.length, units, shapeList.length, keys, nodeAt.length, stream.length);
+    const width = this.summary?.width ?? 0;
+    const at = layout(FORMAT, this.rows, stringList.length, units, shapeList.length, keys, nodeAt.length, stream.length, width);
     const buffer = allocate(at.bytes);
-    new Uint32Array(buffer, 0, HEAD).set([MAGIC, FORMAT, at.rows, at.strings, at.units, at.shapes, at.keys, at.nodes, at.stream]);
+    new Uint32Array(buffer, 0, HEAD_SUMMARY).set([MAGIC, FORMAT, at.rows, at.strings, at.units, at.shapes, at.keys, at.nodes, at.stream, width]);
     new Float64Array(buffer, at.ids, at.rows).set(this.ids);
     new Float64Array(buffer, at.xs, at.rows).set(this.xs);
     new Float64Array(buffer, at.ys, at.rows).set(this.ys);
@@ -391,6 +411,11 @@ export class TableWriter<T extends TableRow = Building> {
     new Float64Array(buffer, at.minYs, at.rows).set(this.minYs);
     new Float64Array(buffer, at.maxXs, at.rows).set(this.maxXs);
     new Float64Array(buffer, at.maxYs, at.rows).set(this.maxYs);
+    // Column by column: column c's rows from `at.summary + c * rows * 8`.
+    if (at.summary >= 0) {
+      const out = new Float64Array(buffer, at.summary, at.rows * width);
+      for (let row = 0; row < at.rows; row++) for (let c = 0; c < width; c++) out[c * at.rows + row] = this.sums[row * width + c]!;
+    }
     new Uint32Array(buffer, at.rootAt, at.rows).set(rootAt);
     new Uint32Array(buffer, at.nodeAt, at.nodes).set(nodeAt);
     const strStart = new Uint32Array(buffer, at.strStart, at.strings + 1), strUnits = new Uint16Array(buffer, at.strUnits, at.units);
@@ -509,6 +534,10 @@ export class RecordTable {
   readonly rotations: Float64Array;
   /** The rows' boxes on the ground (format 2); null in a table written before them. */
   readonly boxes: BoxColumns | null;
+  /** The rows' summary (format 3, `RowSummary`): column c of row r at `summary[c * rows + r]`; null in a table without one. */
+  readonly summary: Float64Array | null;
+  /** How many summary columns the table has (0: none). */
+  readonly summaryWidth: number;
   /** The row of each id, made when first asked. */
   private rowOf: Map<number, number> | null = null;
   /** @internal */ readonly at: Layout;
@@ -516,8 +545,8 @@ export class RecordTable {
   constructor(readonly buffer: ArrayBufferLike) {
     const format = tableFormat(buffer);
     if (format === 0) throw new Error('[buildings] not a record table of this format');
-    const head = new Uint32Array(buffer, 0, HEAD);
-    this.at = layout(format, head[2]!, head[3]!, head[4]!, head[5]!, head[6]!, head[7]!, head[8]!);
+    const head = new Uint32Array(buffer, 0, format >= FIRST_SUMMARY ? HEAD_SUMMARY : HEAD);
+    this.at = layout(format, head[2]!, head[3]!, head[4]!, head[5]!, head[6]!, head[7]!, head[8]!, format >= FIRST_SUMMARY ? head[9]! : 0);
     this.rows = this.at.rows;
     this.ids = new Float64Array(buffer, this.at.ids, this.rows);
     this.xs = new Float64Array(buffer, this.at.xs, this.rows);
@@ -527,6 +556,8 @@ export class RecordTable {
       minX: new Float64Array(buffer, this.at.minXs, this.rows), minY: new Float64Array(buffer, this.at.minYs, this.rows),
       maxX: new Float64Array(buffer, this.at.maxXs, this.rows), maxY: new Float64Array(buffer, this.at.maxYs, this.rows),
     } : null;
+    this.summaryWidth = this.at.width;
+    this.summary = this.at.summary >= 0 ? new Float64Array(buffer, this.at.summary, this.rows * this.at.width) : null;
   }
 
   /** The row holding a building's id; -1 when it is not in the table. */
