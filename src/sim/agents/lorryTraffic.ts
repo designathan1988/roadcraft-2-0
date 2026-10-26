@@ -217,7 +217,8 @@ export class LorryTraffic {
   /** A yard with no lorry, a dock of it drawn; planned, it is sent the nearest passing lorry. */
   private call(w: SimWorld): void {
     this.readYards(w);
-    const yards = this.yards;
+    // With the meso traffic the lorries drive in the micro window: a yard of the window, DO NOT draw (and plan) one anywhere on the map.
+    const yards = this.yardsInWindow(w);
     if (!yards.length) return;
     const busy = new Set<number>();
     for (const l of this.lorries.values()) busy.add(l.building);
@@ -260,6 +261,22 @@ export class LorryTraffic {
     this.lorries.set(v.id, this.make(w, v, yard, dock, ways));
     this.sent++;
   }
+
+  /** The yards whose building stands in the micro window (its square), in the store's order; every yard without the meso. Found again when the window or the yards moved. */
+  private yardsInWindow(w: SimWorld): readonly { building: BuildingId; docks: number }[] {
+    const win = w.meso?.microWindow() ?? null;
+    if (!win) return this.yards;
+    if (this.windowYards && this.windowYards.of === this.yards && this.windowYards.win === win) return this.windowYards.list;
+    const list = this.yards.filter((y) => {
+      const b = w.buildings.facts(y.building);
+      if (!b) return false;
+      const x = (b.bounds.minX + b.bounds.maxX) / 2, y0 = (b.bounds.minY + b.bounds.maxY) / 2;
+      return Math.abs(x - win.x) <= win.r && Math.abs(y0 - win.y) <= win.r;
+    });
+    this.windowYards = { of: this.yards, win, list };
+    return list;
+  }
+  private windowYards: { readonly of: readonly unknown[]; readonly win: object; readonly list: readonly { building: BuildingId; docks: number }[] } | null = null;
 
   private make(w: SimWorld, v: Vehicle, yard: Yard, dock: number, ways: NonNullable<ReturnType<Yard['ways']>>): Lorry {
     const gate = ways.gate;

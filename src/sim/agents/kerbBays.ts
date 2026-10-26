@@ -180,7 +180,8 @@ function entranceBox(list: readonly Entrance[]): Box {
 }
 
 /** DO NOT lay out every street of the town when the roads move: every road drawn laid out the town's kerbs again. */
-export function followKerbs(w: KerbWorld, book: KerbBook, delta: BuildingDelta | null, reads: KerbReads): Set<SegmentId> {
+/** `held`: the roads the lane graph holds (`LaneletGraph.scope`, the micro window's); null, every road. A street read whole is laid out only when held: the others come as their roads come, by the lanes' changes. */
+export function followKerbs(w: KerbWorld, book: KerbBook, delta: BuildingDelta | null, reads: KerbReads, held: ReadonlySet<SegmentId> | null = null): Set<SegmentId> {
   const dirty = new Set<SegmentId>();
   // The roads: what the network and the lane graph changed since the streets were read (null: read them all).
   const net = book.net === w.net && book.netSeen !== null ? w.net.changesSince(book.netSeen) : null;
@@ -219,7 +220,7 @@ export function followKerbs(w: KerbWorld, book: KerbBook, delta: BuildingDelta |
     }
   }
   if (whole || delta === null) {
-    for (const id of book.reach.keys()) dirty.add(id);
+    for (const id of book.reach.keys()) if (held === null || held.has(id)) dirty.add(id);
   } else {
     for (const box of touched) {
       for (let i = Math.floor(box.x0 / KERB_CELL); i <= Math.floor(box.x1 / KERB_CELL); i++) {

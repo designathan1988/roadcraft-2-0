@@ -54,12 +54,20 @@ export class SidewalkGraph {
   /** The kerb nodes and zebras each road node made: what an edit there takes away. */
   private readonly ofNode = new Map<NodeId, { readonly kerbs: SidewalkNodeId[]; readonly crossings: CrossingId[] }>();
 
-  /** @rebuild Every road and node: a world's first topology, or a lane graph built whole. */
+  /** @rebuild Every road and node (of the roads the graph holds, `LaneletGraph.scope`): a world's first topology, or a lane graph built whole. */
   build(doc: RoadDoc, net: Network, graph: LaneletGraph): void {
     this.clear();
-    for (const nodeId of doc.nodes.keys()) this.kerbsAt(doc, net, nodeId);
-    for (const nodeId of doc.nodes.keys()) this.crossingsAt(doc, net, graph, nodeId);
-    for (const segId of doc.segments.keys()) this.footwaysOf(doc, net, segId);
+    const roads = [...graph.scope ?? doc.segments.keys()];
+    // A list, walked twice below (an iterator of the map's keys is spent by the first walk).
+    let nodes: readonly NodeId[] = [...doc.nodes.keys()];
+    if (graph.scope) {
+      const ends = new Set<NodeId>();
+      for (const id of graph.scope) { const seg = doc.segment(id); if (seg) { ends.add(seg.a); ends.add(seg.b); } }
+      nodes = [...ends].filter((id) => graph.complete(doc, id)).sort((x, y) => x - y);
+    }
+    for (const nodeId of nodes) this.kerbsAt(doc, net, nodeId);
+    for (const nodeId of nodes) this.crossingsAt(doc, net, graph, nodeId);
+    for (const segId of roads) if (doc.segment(segId)) this.footwaysOf(doc, net, segId);
   }
 
   /** DO NOT build the kerbs, zebras and footway lines of the whole map for an edit: every road drawn made the town's again. */
@@ -91,10 +99,11 @@ export class SidewalkGraph {
       this.walksBySegment.delete(segId);
     }
     const ascending = (x: number, y: number): number => x - y;
-    const order = [...nodes].sort(ascending);
+    // A node with a road the graph does not hold (the window's edge) has no kerbs nor zebras, a road not held no footway lines.
+    const order = [...nodes].filter((id) => graph.complete(doc, id)).sort(ascending);
     for (const nodeId of order) this.kerbsAt(doc, net, nodeId);
     for (const nodeId of order) this.crossingsAt(doc, net, graph, nodeId);
-    for (const segId of [...roads].sort(ascending)) this.footwaysOf(doc, net, segId);
+    for (const segId of [...roads].sort(ascending)) if (graph.scope === null || graph.scope.has(segId)) this.footwaysOf(doc, net, segId);
   }
 
   /** The kerb nodes of one road node: two per leg. */

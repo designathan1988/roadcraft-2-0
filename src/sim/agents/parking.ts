@@ -143,7 +143,7 @@ function baysNow(w: BayWorld): BayBook {
   book.lanesSeen = grid.changes.state;
   const roadsMoved = lanes === null || lanes.length > 0;
   const delta = book.lots.update(w);
-  for (const seg of followKerbs(w, book.kerb, delta, book.reads ??= kerbReads(w, book))) noteBays(book, `K${seg}`);
+  for (const seg of followKerbs(w, book.kerb, delta, book.reads ??= kerbReads(w, book), w.graph.scope)) noteBays(book, `K${seg}`);
   if (!roadsMoved && delta !== null && delta.ids.length === 0) return book;
 
   // A lot whose reach neither a building change nor a lane that changed touched keeps its bays without reading anything
@@ -163,7 +163,8 @@ function baysNow(w: BayWorld): BayBook {
   const walls = wallsOf(w);
   const workers = book.workers;
   const asked: Asked[] = [];
-  const look = rects === null ? book.lots.ids : lotsReached(w, book.lots, rects, delta!.ids);
+  // Read whole with the lane graph holding the window's roads alone (`LaneletGraph.scope`): the lots those roads reach, DO NOT work out every lot of the map for the window (its lots come as its roads come, by the lanes' changes).
+  const look = rects === null ? (w.graph.scope === null ? book.lots.ids : lotsReached(w, book.lots, heldRoadBoxes(w), delta?.ids ?? [])) : lotsReached(w, book.lots, rects, delta!.ids);
   for (const id of look) lookAtLot(w, book, w.buildings.get(id)!, rects, walls, workers ? asked : null);
   // The game's lots off the page; a world without workers worked them out above, on the page.
   if (workers && asked.length) {
@@ -259,6 +260,16 @@ export function baysOfSource(w: BayWorld, source: string): Bay[] {
   const id = Number(source.slice(1));
   const bays = source[0] === 'L' ? book.known.get(id as BuildingId)?.bays : book.kerb.bays.get(id as SegmentId);
   return (bays ?? []).map((bay) => ({ ...bay, car: null }));
+}
+
+/** The boxes of the roads the lane graph holds (their ribbons'): what the window's lots are found by at a whole read. */
+function heldRoadBoxes(w: BayWorld): ChangeRect[] {
+  const out: ChangeRect[] = [];
+  for (const seg of w.graph.segmentsHeld()) {
+    const bb = w.net.ribbons.get(seg)?.full.bbox;
+    if (bb) out.push([bb.minX, bb.minY, bb.maxX, bb.maxY]);
+  }
+  return out;
 }
 
 /** The lots whose reach (`LOT_READS`) meets one of the rectangles, and the lots named; found by place. */
