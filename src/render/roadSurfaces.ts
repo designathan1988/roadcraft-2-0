@@ -62,7 +62,7 @@ export interface SurfaceReuse {
   readonly retired?: Mesh[];
   /** Whether a block at (x, y), world units, is near the camera: made at full detail, its far level hidden */
   readonly near?: (x: number, y: number) => boolean;
-  /** Whether a tile of the roads is built here at all (the opening's view, `renderer.ts` openingWithin): a tile left out is built by a later build. None: every tile. */
+  /** Whether a tile of the roads is built here at all (its cell taken by the view, `mesh/roadResidency.ts`): a tile left out is drawn by the network's far level until the view takes its cell. None: every tile. */
   within?: (rect: TileRect) => boolean;
   /** Where `within`'s answer changed since the last build finished; null: it cannot say (every tile visited). */
   withinMoved?: (readonly [number, number, number, number])[] | null;
@@ -288,6 +288,7 @@ export function* roadSurfaceSteps(
     const before = reuse?.passes?.get(pass.id);
     const incremental = before !== undefined && dirtyNow !== null && before.salt === passSaltValue && before.born === dirtyNow.born
       && changed !== null && moved !== null;
+    // Its tiles visited, built or let go, are the cells the view takes and lets go (`reuse.within`, `withinMoved`: `mesh/roadResidency.ts`): DO NOT visit the map's tiles for a cell that came or went.
     const state: PassState = incremental ? before : { salt: passSaltValue, born: dirtyNow?.born ?? -1, tiles: new Map(), chunkTiles: new Map(), blocks: new Map(), pending: new Set() };
     if (dirtyNow) settleLater.push({ pass: pass.id, born: dirtyNow.born, keys: [...dirtyNow.keys] });
     const kept = incremental && previous ? previous : new Map<number, KeptTile>();
@@ -625,41 +626,7 @@ export function* roadSurfaceSteps(
               return blockArraysOf(read, material, tableSlots);
             };
           }
-          // Its far level made again when its cell comes back from the network's far level (`roadResidency.ts`): the full level's arrays (kept tiles, else cut here) simplified by the workers, a surface at a time as `start` does.
-          if (mesh && levels && coarsen && farSources) {
-            // A block with pieces drawn coarser far away: its far level made again from their far tiles (kept, else cut here), a surface at a time.
-            const material = group.options.material, stored = reuse?.stored;
-            const wanted = members.map(({ spec, list: tiles }) => ({ name: spec.options.name, code: spec.code ?? 0, keys: tiles.map((tile) => tile.stored) }));
-            const farArrays = async (): Promise<BlockArrays[] | null> => {
-              const got = stored ? await stored.fetch(wanted.flatMap((w) => w.keys)) : null;
-              const out: BlockArrays[] = [];
-              for (const [i, { name, code, keys }] of wanted.entries()) {
-                const read: Tile[] = [];
-                for (const k of keys) { const tile = got?.get(k)?.get(farTileName(name)) ?? got?.get(k)?.get(name); if (tile) read.push({ ...tile, code }); }
-                const arrays = blockArraysOf(read.length === keys.length ? read : [...farSources[i]!()], material, tableSlots);
-                if (!arrays) return null;
-                out.push(arrays);
-              }
-              return out;
-            };
-            levels.remake = async (): Promise<BlockArrays | null> => {
-              const pieces = await farArrays();
-              if (!pieces) return null;
-              const made = await Promise.all(pieces.map((piece, i) => coarsen(cloneBlock(piece), locks![i]!)));
-              return made.length === 1 ? made[0] ?? pieces[0]! : joinBlocks(made.map((m, i) => m ?? pieces[i]!));
-            };
-          } else if (mesh && levels && coarsen) {
-            const material = group.options.material;
-            levels.remake = async (): Promise<BlockArrays | null> => {
-              const full = ((await levels.bring?.()) as BlockArrays | null | undefined) ?? blockArraysOf(sources.flatMap((s) => s()), material, tableSlots);
-              if (!full) return null;
-              const whole = shares.length === 1 ? [] : splitBlock(full, shares);
-              const pieces = shares.length === 1 ? [full] : splitBlock(full, shares);
-              const made = await Promise.all(pieces.map((piece, i) => coarsen(piece, locks![i]!)));
-              if (made.every((m) => m === null)) return null;
-              return made.length === 1 ? made[0]! : joinBlocks(made.map((m, i) => m ?? whole[i]!));
-            };
-          }
+          // A cell the view lets go is retired whole and built again from the kept tiles when wanted (`roadResidency.ts`): no level is made again on its own.
           if (mesh && group.renderOrder !== undefined) mesh.renderOrder = group.renderOrder;
           // DO NOT wait for the camera to frame it: a block out of view was never uploaded and kept its copy on the CPU
           if (mesh && !(lock && !near)) void warmLooseAhead([mesh]);

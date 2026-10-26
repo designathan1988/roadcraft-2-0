@@ -71,7 +71,7 @@ export class FarBlockBatches {
   }
 
   /** Each far level's instance shown as the level is (in the scene, its parents shown), its geometry stored again where the mesh has a new
-   *  one (`restoreFarLevel`) and let go where the level's was disposed (`roadResidency.ts` dropCell, a block retired). Every frame. */
+   *  one and let go where the level's was disposed (a block retired with its cell, `roadSurfaces.ts`). Every frame. */
   sync(): void {
     const root = this.rootOf(this.group);
     for (const entry of this.entries.values()) {

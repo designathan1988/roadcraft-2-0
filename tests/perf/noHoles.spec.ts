@@ -14,14 +14,14 @@ import { HEIGHT, WIDTH, drawnPieces, openCityMap, setView, type City, type View 
 /**
  * NO HOLE IN THE TOWN OR IN ITS STREETS AT ANY VIEW: the city of 25,000 buildings (`scripts/look/step-25k.json`) opened on the null GPU as
  * the menu opens it, on every tier. Right after the curtain the camera jumps to the map and to each corner and edge at mid distance, a
- * few frames each; then the road fill is let build the map's roads in detail for a while, and the camera tours the photographs' views, each till it stands, the
- * masses out of the view let go for the tier's budget on the way. At every stop:
+ * few frames each; then the view's road cells are let build (the cells the view wants, never the map's: `mesh/roadResidency.ts`), and the
+ * camera tours the photographs' views, each till it stands, the masses out of the view let go for the tier's budget on the way. At every stop:
  * - every 256 m cell of buildings is drawn by something (its detail, its masses, its tile's or plate's, the base's: `buildingCensus`,
  *   `render/buildings/massBase.ts`), the base's meshes in the scene and shown;
  * - every road block's cell (614.4 m) in the view's frustum that has roads has road surface drawn (a block's full or far level, or the
  *   network's far level), and the blocks' full levels hold no more than the tier's `roadsNearMB` (`render/mesh/roadResidency.ts`);
- * - once the fill has built the whole map in detail and each view stands, the blocks' far levels hold no more than the tier's
- *   `roadsFarMB` (the cells past it drawn by the network's far level), and the roads' surfaces together no more than `roadBudgetMB`.
+ * - once each view stands, the view wants no cell it has not got, the blocks' far levels hold no more than the tier's `roadsFarMB` (the
+ *   cells past it drawn by the network's far level), and the roads' surfaces together no more than `roadBudgetMB`.
  */
 
 const OPEN: View = [0, 0, 1.8, 45, 79];
@@ -29,8 +29,8 @@ const TIERS = (process.env['CENSUS_TIERS'] ?? 'low,medium,high,ultra').split(','
 /** Frames a tour's view may take to stand, and frames in a row alike for it to stand. */
 const MOST = 200;
 const STILL = 8;
-/** Frames the road fill may take to build the whole map in detail before the tour (on the null GPU its tiles are cut on the page: some 6,000 frames). */
-const FILL_FRAMES = 20000;
+/** Frames the view's road cells may take to be built before the tour (on the null GPU their tiles are cut on the page, a frame each). */
+const CELL_FRAMES = 6000;
 const MIB = 1048576;
 /** The city's reach from its middle, m (`buildLargeCityMap` radius). */
 const REACH = m(2800);
@@ -111,10 +111,12 @@ function roadCensus(city: City, wanted: ReadonlySet<string>): { missing: string[
 interface Stop {
   readonly name: string; readonly holes: readonly string[]; readonly by: Record<string, number>; readonly baseMB: number; readonly massesMB: number; readonly evictions: number;
   readonly roadsMissing: readonly string[]; readonly roadsNearMB: number; readonly roadsFarMB: number; readonly roadsNetworkMB: number; readonly roadsMB: number;
-  readonly fillLeft: number;
+  /** The road cells the view wants not built yet, and the cells built or being built (`mesh/roadResidency.ts`). */
+  readonly roadsWanted: number;
+  readonly roadsTaken: number;
 }
 
-async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number; fillFrames: number }> {
+async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number; cellFrames: number; roadCells: number }> {
   primeCookedSurfaces(process.cwd());
   const { data, buildings } = prepareCity(buildLargeCityMap(7, REACH));
   const { city, frames: opened } = await openCityMap(data, buildings, { large: true, view: OPEN, quality: tier });
@@ -127,10 +129,11 @@ async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number
     stops.push({
       name, holes: holes.slice(0, 12), by, baseMB: gpuLedger.bytes('base masses') / MIB,
       massesMB: masses.reduce((sum, cls) => sum + gpuLedger.bytes(cls), 0) / MIB, evictions: city.scene.buildingLevels()['evictions'] ?? 0,
-      roadsMissing: missing, roadsNearMB: nearMB, roadsFarMB: farMB, roadsNetworkMB: networkMB, roadsMB, fillLeft: city.scene.openingState().fillCellsLeft,
+      roadsMissing: missing, roadsNearMB: nearMB, roadsFarMB: farMB, roadsNetworkMB: networkMB, roadsMB,
+      roadsWanted: city.scene.openingState().roadsWanted, roadsTaken: city.scene.openingState().roadsTaken,
     });
   };
-  let fillFrames = 0;
+  let cellFrames = 0;
   try {
     stop('opening');
     // Right after the curtain: the map, then each corner and edge at mid distance, three frames each.
@@ -141,10 +144,10 @@ async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number
       await frames(city, 3);
       stop(`early ${name}`);
     }
-    // The road fill builds the whole map in detail (what made the roads' near level grow past any budget, step-25k).
+    // The district view's road cells built: the ones the view wants, the roads past the opening solved first (`completeSolve`).
     setView(city.scene, [0, 0, 2.5, 45, 48]);
-    for (; fillFrames < FILL_FRAMES && (city.scene.openingState().fillCellsLeft > 0 || city.scene.worldBusy); fillFrames++) await frame(city);
-    stop('filled');
+    for (; cellFrames < CELL_FRAMES && (city.scene.openingState().solvePending || city.scene.openingState().roadsWanted > 0 || city.scene.worldBusy); cellFrames++) await frame(city);
+    stop('district built');
     // The tour: each view till it stands, the governor's read every frame; a census on arrival and once it stands.
     const views: [string, View][] = [
       ['map', [0, 0, 0.12, 45, 48]], ['district', [0, 0, 2.5, 45, 48]], ['street', [150, 0, 5, 20, 35]],
@@ -165,7 +168,7 @@ async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number
       }
       stop(`${name} settled`);
     }
-    return { stops, frames: opened, fillFrames };
+    return { stops, frames: opened, cellFrames, roadCells: roads.size };
   } finally {
     city.scene.dispose();
   }
@@ -199,22 +202,29 @@ describe('the city of 25,000 buildings has no hole in its town or its streets at
     for (const [tier, { stops }] of tours) for (const stop of stops) expect(stop.roadsMissing, `${tier} ${stop.name}: road cells in view with no road drawn`).toEqual([]);
   });
 
-  it('holds the roads\' full levels under the tier\'s budget at every stop, the fill building on', () => {
+  it('holds the roads\' full levels under the tier\'s budget at every stop, the view\'s cells building on', () => {
     for (const [tier, { stops }] of tours) {
       const budget = GEOMETRY_BUDGETS[tier].roadsNearMB;
       for (const stop of stops) expect(stop.roadsNearMB, `${tier} ${stop.name}: the roads' full levels, MB`).toBeLessThanOrEqual(budget);
     }
   });
 
-  it('holds the roads\' far levels and the roads\' whole under the tier\'s budgets once the map is filled and each view stands', () => {
+  it('holds the roads\' far levels and the roads\' whole under the tier\'s budgets once each view stands, wanting no cell it has not got', () => {
     for (const [tier, { stops }] of tours) {
       const budget = GEOMETRY_BUDGETS[tier];
       for (const stop of stops.filter((s) => s.name.endsWith('settled'))) {
-        expect(stop.fillLeft, `${tier} ${stop.name}: the fill's cells left`).toBe(0);
+        expect(stop.roadsWanted, `${tier} ${stop.name}: the road cells the view wants not built`).toBe(0);
         expect(stop.roadsFarMB, `${tier} ${stop.name}: the roads' far levels, MB`).toBeLessThanOrEqual(budget.roadsFarMB);
         expect(stop.roadsNetworkMB, `${tier} ${stop.name}: the network's far level, MB`).toBeLessThanOrEqual(NETWORK_FAR_MB);
         expect(stop.roadsMB, `${tier} ${stop.name}: the roads' surfaces, MB`).toBeLessThanOrEqual(roadBudgetMB(budget));
       }
+    }
+  });
+
+  it('builds the view\'s road cells and never the map\'s: the cells taken stay under the map\'s road cells at every stop', () => {
+    for (const [tier, { stops, roadCells }] of tours) {
+      expect(roadCells).toBeGreaterThan(40);
+      for (const stop of stops) expect(stop.roadsTaken, `${tier} ${stop.name}: cells taken of ${roadCells}`).toBeLessThan(roadCells);
     }
   });
 });

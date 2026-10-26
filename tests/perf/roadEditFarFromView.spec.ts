@@ -9,11 +9,11 @@ import { installNullPage, primeCookedSurfaces } from '../support/nullGpu';
 import { HEIGHT, WIDTH, drawnPieces, openCityMap, type City, type View } from '../support/sceneHarness';
 
 /**
- * A ROAD EDITED DURING THE OPENING'S FILL IS BUILT AT ONCE (`renderer.ts` takeEditedCells): the large city opened on the null GPU as
- * the menu opens it (its view built in detail, every other road at the network's far level, the rest filled a few cells a step after
- * the curtain), and while the fill is still under way the road farthest from the view - the last the fill would come to - changed to
- * another class. The edit's own build makes that road's cell in detail and lets the far level's old outline of it go, the fill still
- * far from done.
+ * A ROAD EDITED FAR FROM THE VIEW IS DRAWN BY THE NETWORK'S FAR LEVEL, MADE AGAIN FOR IT, AND BUILT IN DETAIL FOR NO ONE
+ * (`mesh/roadResidency.ts`: the cells built are the view's; `networkFarRoads.ts` outdate): the large city opened on the null GPU as the
+ * menu opens it (its view built in detail, every other road at the network's far level), and once the roads are solved the road farthest
+ * from the view changed to another class. Its cell stays with the network's far level - no detailed block is built there, the cells
+ * taken stay the view's - and the level is made again for the roads drawn.
  */
 
 const OPEN: View = [0, 0, 1.8, 45, 79];
@@ -36,18 +36,18 @@ function boxes(city: City, named: (name: string) => boolean): [number, number, n
 const covers = (list: readonly (readonly [number, number, number, number])[], x: number, y: number): boolean =>
   list.some(([x0, y0, x1, y1]) => x >= x0 && x <= x1 && y >= y0 && y <= y1);
 
-describe('a road edited during the opening\'s fill', () => {
+describe('a road edited far from the view', () => {
   let page: { restore(): void };
-  let result: { fillLeftAtEdit: number; fillLeftAfter: number; frames: number; farBefore: boolean; farAfter: boolean; detailAfter: boolean };
+  let result: { farBefore: boolean; farAfter: boolean; detailAfter: boolean; takenBefore: number; takenAfter: number; farCellInView: boolean };
   beforeAll(async () => {
     page = installNullPage(WIDTH, HEIGHT, process.cwd());
     primeCookedSurfaces(process.cwd());
     const { data, buildings } = prepareCity(buildLargeCityMap(7));
     const { city } = await openCityMap(data, buildings, { large: true, view: OPEN });
     try {
-      // The fill under way: its first cells taken.
-      for (let i = 0; i < 400 && city.scene.openingState().fillCellsLeft === 0; i++) await frame(city);
-      // The road farthest from the view, in a cell of the far level the fill has not come to.
+      // The roads past the opening solved, the view's cells built.
+      for (let i = 0; i < 600 && (city.scene.openingState().solvePending || city.scene.openingState().roadsWanted > 0 || city.scene.worldBusy); i++) await frame(city);
+      // The road farthest from the view, in a cell of the far level the view does not want.
       let far: { id: SegmentId; x: number; y: number; d: number } | null = null;
       for (const [id, ribbon] of city.net.ribbons) {
         const p = ribbon.full.sampleAt(ribbon.full.length / 2).p;
@@ -60,29 +60,28 @@ describe('a road edited during the opening\'s fill', () => {
       const farOf = (): [number, number, number, number][] => boxes(city, (name) => name === 'road-far-network')
         .filter(([x0, y0, x1, y1]) => (x0 + x1) / 2 >= centre.x - FAR_CELL / 2 && (x0 + x1) / 2 <= centre.x + FAR_CELL / 2 && (y0 + y1) / 2 >= centre.y - FAR_CELL / 2 && (y0 + y1) / 2 <= centre.y + FAR_CELL / 2);
       const farBefore = farOf().length > 0;
-      const fillLeftAtEdit = city.scene.openingState().fillCellsLeft;
+      const farCellInView = covers(boxes(city, (name) => name.startsWith('asphalt')), far!.x, far!.y);
+      const takenBefore = city.scene.openingState().roadsTaken;
       const segment = city.doc.segments.get(far!.id)!;
       city.doc.setSegmentType(far!.id, (segment.type + 1) % ROAD_TYPES.length);
-      // Frames till the cell's far level goes (the edit's build landed: one build, a step of it a frame), or they run out.
-      let frames = 0;
-      for (; frames < 1500 && farOf().length > 0; frames++) await frame(city);
-      for (let k = 0; k < 3; k++) await frame(city);
+      // The edit's build, and the network's far level made again for it, land within these frames.
+      for (let k = 0; k < 300; k++) await frame(city);
       result = {
-        fillLeftAtEdit, fillLeftAfter: city.scene.openingState().fillCellsLeft, frames, farBefore, farAfter: farOf().length > 0,
-        detailAfter: covers(boxes(city, (name) => name.startsWith('asphalt')), far!.x, far!.y),
+        farBefore, farAfter: farOf().length > 0, detailAfter: covers(boxes(city, (name) => name.startsWith('asphalt')), far!.x, far!.y),
+        takenBefore, takenAfter: city.scene.openingState().roadsTaken, farCellInView,
       };
-      if (process.env['FILL_EDIT_OUT']) writeFileSync(process.env['FILL_EDIT_OUT'], JSON.stringify(result));
+      if (process.env['FAR_EDIT_OUT']) writeFileSync(process.env['FAR_EDIT_OUT'], JSON.stringify(result));
     } finally {
       city.scene.dispose();
     }
   }, 1_500_000);
   afterAll(() => page.restore());
 
-  it('builds the edited road\'s cell in detail and lets its old far outline go before the fill comes to it', () => {
+  it('leaves the edited road\'s cell to the network\'s far level, built in detail for no one', () => {
+    expect(result.farCellInView, 'the farthest road was not among the view\'s cells').toBe(false);
     expect(result.farBefore, 'the cell stood in the far level before the edit').toBe(true);
-    expect(result.fillLeftAtEdit).toBeGreaterThan(1);
-    expect(result.detailAfter, `the edited road drawn in detail (${result.frames} frames)`).toBe(true);
-    expect(result.farAfter, 'the far level\'s old outline of the cell gone').toBe(false);
-    expect(result.fillLeftAfter, 'the fill still under way').toBeGreaterThan(0);
+    expect(result.farAfter, 'the cell stands in the far level after the edit').toBe(true);
+    expect(result.detailAfter, 'the edited road drawn in detail').toBe(false);
+    expect(result.takenAfter, 'the cells taken: the view\'s, no cell taken for the edit').toBeLessThanOrEqual(result.takenBefore);
   });
 });

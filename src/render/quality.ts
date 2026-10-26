@@ -92,8 +92,10 @@ export interface QualitySettings {
  *
  * THE ROADS' WHOLE (`roadBudgetMB`): their near and far levels' budgets, and the network's far level kept for good for the whole map.
  * That last one grows with the map, not with the view: 10 MB for the city of 25,000 buildings (`tests/perf/noHoles.spec.ts`, 21 bytes a
- * vertex), some 80 MB for one of 200,000 by its area; the blocks' far levels it stands for took 264 MB for the 25,000 (2.1 GB for the
- * 200,000), every block of the map kept.
+ * vertex), some 80 MB for one of 200,000 by its area. The blocks are built only for the cells the view wants, nearest first, within
+ * `roadsFarMB` (`mesh/roadResidency.ts`); every other cell is drawn by the network's level. DO NOT build every block of the map and let
+ * the far ones go after: that took 264 MB of far levels for the 25,000 (2.1 GB for the 200,000), and the page of a 10 km city died of it
+ * (2026-10-26).
  */
 export interface GeometryBudget {
   readonly totalMB: number;
@@ -101,7 +103,7 @@ export interface GeometryBudget {
   readonly viewCellsShare: number;
   /** The roads' blocks at their full level (`mesh/roadResidency.ts`): only in the view and under this. */
   readonly roadsNearMB: number;
-  /** The roads' blocks at their far level (`mesh/roadResidency.ts`): the cells nearest the view in it, past it the network's far level. */
+  /** The roads' blocks at their far level (`mesh/roadResidency.ts`): the cells the view wants, nearest first, built within it; past it the network's far level. */
   readonly roadsFarMB: number;
 }
 export const GEOMETRY_BUDGETS: Readonly<Record<QualityLevel, GeometryBudget>> = {

@@ -18,16 +18,16 @@ import { junctionFarShapes } from './roads/junctionPiece';
 import { ASPHALT_REFERENCE, FOOTWAY_TINT, STREET_MEANS } from './roadTones';
 
 /**
- * EVERY ROAD OF A LARGE CITY AT ITS FAR LEVEL FROM THE FIRST FRAME OF ITS OPENING (`renderer.ts` openingBuild): a large city's opening
- * builds the detailed surfaces of the roads round its view only, the rest filled block by block after the curtain (tens of seconds in
- * which the map showed no street past the opening's view: step-25k 08-map, 2026-10-21). This level is made from the network itself:
- * each road's and junction's real outline (`Network.ribbons`, `Network.junctions`: the carriageway, and the casing its footways and
- * kerbs fill) at its class's colour over the street textures' means (as the blocks' far level paints them), at the solved heights where
- * the opening's solve took the road and on the ground elsewhere. Each road and junction is the same piece as in the detail, coarse: its
- * carriageway and its casing as strips and fans on its own edges and mouths (`networkFarRoadsBuild.ts`), filed by its owner block
- * (`roads/pieceOwner.ts`), triangulated in a job worker: O(the pieces' vertices). The blocks the opening built in detail are left out of
- * it, piece by piece by owner; once the fill's blocks are in it is made again whole and kept, hidden, as the roads' top level
- * (`mesh/roadResidency.ts`): shown in a cell whose blocks' far levels the far budget let go.
+ * EVERY ROAD OF THE MAP AT ITS FAR LEVEL, THE ROADS' ROOT LEVEL, FROM THE FIRST FRAME OF A MAP'S OPENING AND FOR GOOD (`renderer.ts`
+ * buildWorld, `mesh/roadResidency.ts`): the detailed surfaces are built only for the cells the view wants (nearest first, under the
+ * tier's budget), never for the whole map; every other cell is drawn by this level. It is made from the network itself: each road's and
+ * junction's real outline (`Network.ribbons`, `Network.junctions`: the carriageway, and the casing its footways and kerbs fill) at its
+ * class's colour over the street textures' means (as the blocks' far level paints them), at the solved heights where the solve took the
+ * road and on the ground elsewhere. Each road and junction is the same piece as in the detail, coarse: its carriageway and its casing as
+ * strips and fans on its own edges and mouths (`networkFarRoadsBuild.ts`), filed by its owner block (`roads/pieceOwner.ts`),
+ * triangulated in a job worker: O(the pieces' vertices), proportional to the document and nothing else. A cell is hidden while the
+ * detailed blocks of its square stand (`hide`), shown again when the view lets them go (`show`). Made again when the roads drawn change
+ * (`outdate`) and when the opening's solve completes (every road at its solved height).
  */
 
 /** What the outlines' heights are read from: the opening's solve (`RoadElevation`), the roads it left for later, the ground. */
@@ -142,10 +142,10 @@ export function farRoadInput(net: Network, heights: FarRoadHeights, groundAt: (x
 const COLOUR_STEPS = 65535;
 
 /**
- * The whole network's far roads (see the file's comment), KEPT FOR GOOD AS THE ROADS' TOP LEVEL (`mesh/roadResidency.ts`): a cell is shown
- * where no block draws it in detail - the opening's cells till the fill's blocks land (`hide`), and later the cells whose blocks' far
- * levels the far budget let go (`show`), hidden again once they are back. Its vertices are kept small (a position, a normal of three
- * bytes, a colour of three shorts: 21 bytes where floats took 36).
+ * The whole network's far roads (see the file's comment), KEPT FOR GOOD AS THE ROADS' ROOT LEVEL (`mesh/roadResidency.ts`): a cell is
+ * shown where no block draws it in detail, hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets
+ * them go (`show`). Its vertices are kept small (a position, a normal of three bytes, a colour of three shorts: 21 bytes where floats
+ * took 36).
  * ONE BATCH A LAYER (`GpuBatchedMesh`: a cell an instance, shown or hidden by `setVisibleAt`, culled by the frustum one by one, drawn in
  * one multi-draw): DO NOT make a mesh a cell and layer - a city of 70,000 buildings drew 378 of them at its map view (189 cells), 27% of
  * the view's 1,395 draw calls (step-70k, 2026-10-22).
@@ -158,14 +158,12 @@ export class NetworkFarRoads {
   /** A request not answered yet: the opening waits for it (`pending`). */
   private waiting = false;
   private triangleCount = 0;
-  /** Each cell's triangles, by its key (`x,y` on the cells' grid): what the probes count. */
+  /** Each cell's triangles, by its key (`x,y` on the cells' grid): the cells of the map with roads, what the view chooses from (`roadResidency.ts`) and the probes count. */
   readonly cells = new Map<string, number>();
   /** Each cell's instances in the layers' batches, by its key. */
   private readonly meshesOf = new Map<string, { readonly batch: GpuBatchedMesh; readonly id: number }[]>();
-  /** Whether a cell is hidden unless shown (`settle`: the blocks draw every cell) or shown unless hidden (the opening's, till the fill lands). */
-  private settledLevel = false;
-  /** The cells against the rule (`settledLevel`): shown ones once settled, hidden ones before. */
-  private readonly against = new Set<string>();
+  /** The cells hidden (`hide`): the detailed blocks of their squares stand. Kept across the levels made: a level landing hides them again. */
+  private readonly hidden = new Set<string>();
   /** The level standing: the request it answers (`asked`), its cells' side, the area it left to the detailed surfaces. Null: none landed. */
   private made: { id: number; cell: number; exclude: readonly [number, number, number, number] | null } | null = null;
   /** The last request made before the roads drawn changed (`outdate`): a level answering it or one before stands for none of them. */
@@ -182,11 +180,6 @@ export class NetworkFarRoads {
 
   get triangles(): number {
     return this.triangleCount;
-  }
-
-  /** Whether the blocks draw every cell, the level shown only where it is asked to (`show`). */
-  get settled(): boolean {
-    return this.settledLevel;
   }
 
   /** The level made for the network as it stands (replacing any when it lands), the area `exclude` left to the detailed surfaces. */
@@ -217,7 +210,7 @@ export class NetworkFarRoads {
   }
 
   private shown(key: string): boolean {
-    return this.settledLevel === this.against.has(key);
+    return !this.hidden.has(key);
   }
 
   private place(cells: readonly FarRoadCell[]): void {
@@ -277,7 +270,7 @@ export class NetworkFarRoads {
     return !(e[0] < x0 + made.cell && e[2] > x0 && e[1] < y0 + made.cell && e[3] > y0);
   }
 
-  /** Whether the level standing is not of the roads drawn (none, made before they changed, or cut by the opening's view): made again when a cell must be let go (`RoadResidency.wantsNetwork`). */
+  /** Whether the level standing is not of the roads drawn (none, made before they changed, or cut by an area left to the detail): made again when a cell must be drawn by it (`RoadResidency.wantsNetwork`). */
   outdated(): boolean {
     return !this.made || this.made.id <= this.staleThrough || this.made.exclude !== null;
   }
@@ -287,24 +280,16 @@ export class NetworkFarRoads {
     this.staleThrough = this.asked;
   }
 
-  /** A cell hidden: the detailed blocks of its square stand (the opening's fill landed, or a cell made again, `roadResidency.ts`). */
+  /** A cell hidden: the detailed blocks of its square stand (a cell the view took landed, `roadResidency.ts`). */
   hide(key: string): void {
-    if (this.settledLevel) this.against.delete(key); else this.against.add(key);
+    this.hidden.add(key);
     for (const { batch, id } of this.meshesOf.get(key) ?? []) batch.setVisibleAt(id, false);
   }
 
-  /** A cell shown: its blocks' far levels let go (`roadResidency.ts` dropCell). */
+  /** A cell shown: the view let its blocks go, or drew it at this level (`roadResidency.ts`). */
   show(key: string): void {
-    if (this.settledLevel) this.against.add(key); else this.against.delete(key);
+    this.hidden.delete(key);
     for (const { batch, id } of this.meshesOf.get(key) ?? []) batch.setVisibleAt(id, true);
-  }
-
-  /** The blocks draw every cell now (the fill landed): the level hidden but where `shown` (the cells let go) asks. */
-  settle(shown: Iterable<string>): void {
-    this.settledLevel = true;
-    this.against.clear();
-    for (const key of shown) this.against.add(key);
-    for (const [key, instances] of this.meshesOf) for (const { batch, id } of instances) batch.setVisibleAt(id, this.shown(key));
   }
 
   private clearMeshes(): void {
@@ -319,8 +304,7 @@ export class NetworkFarRoads {
 
   /** The level let go: another map opened. */
   clear(): void {
-    this.against.clear();
-    this.settledLevel = false;
+    this.hidden.clear();
     this.made = null;
     this.staleThrough = this.asked + 1;
     this.asked++;

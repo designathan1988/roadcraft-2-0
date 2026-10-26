@@ -113,7 +113,7 @@ import { ROAD_WEAR } from './mesh/roadEdges';
 import { PLATE_SIZE, plateCentre, platesOver, plateRegion } from '@world/bounds';
 import { createSignLayer } from './signLayer';
 import { type PlantCells, createCoverCells, createTreeCells } from './plantCells';
-import { type RoadResidency, forgetRoadCells, isNear, updateRoadLevels } from './mesh/roadResidency';
+import { type RoadLook, type RoadResidency, forgetRoadCells, isNear, roadCellOf, updateRoadLevels } from './mesh/roadResidency';
 import { JournalCursor } from '@world/derived';
 import { RoadStandIn } from './roadStandIn';
 import { sendTableRanges } from './roadPaint';
@@ -253,7 +253,8 @@ export interface SceneHandle {
   /** The camera the frame is drawn from (the probes' census of what is in its view). */
   viewCamera(): Camera;
   /** What the opening still waits for (`draw`'s reveal): asked by the probes, never each frame. */
-  openingState(): { readonly roadsIn: boolean; readonly coarsePending: boolean; readonly viewPending: boolean; readonly treesStarted: boolean; readonly treesPending: boolean; readonly programs: string; readonly worked: number; readonly worldBusy: boolean; readonly fillPending: boolean; readonly fillCellsLeft: number };
+  /** What the reveal waits for, and the roads' cells as the view has them: `solvePending`, the roads past a scoped opening's view still being solved; `roadsWanted`, the cells the view wants not built yet; `roadsTaken`, the cells built or being built (`mesh/roadResidency.ts`). */
+  openingState(): { readonly roadsIn: boolean; readonly coarsePending: boolean; readonly viewPending: boolean; readonly treesStarted: boolean; readonly treesPending: boolean; readonly programs: string; readonly worked: number; readonly worldBusy: boolean; readonly solvePending: boolean; readonly roadsWanted: number; readonly roadsTaken: number };
   /** Which renderer draws the frame (`gpu/backendChoice.ts`): WebGL, or three's WebGPU renderer with `?gpu=webgpu` (`MIGRACAO-WEBGPU.md`). */
   readonly backend: 'three-webgl' | 'three-webgpu';
   /** The same view drawn by the WebGL and the WebGPU renderer and the pictures compared (`gpu/webgpuView.ts`, `scripts/look.mjs` "compare"). */
@@ -400,8 +401,10 @@ const OPENING_SOLVE_MARGIN = m(320);
 const FAR_ROAD_CELL = ROAD_BLOCK;
 /** Frames between two reads of the scene's geometry against the tier's budget (`governGeometry`): a walk of the scene's objects, ~1-3 ms. */
 const GOVERN_FRAMES = 60;
-/** The far level's cells the opening's fill takes at a step past those under the view (`fillStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
-const FILL_CELLS = 2;
+/** The road cells the view wants taken at a step past those under the eye (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
+const STEP_CELLS = 2;
+/** How far round the eye the road cells in the view are wanted in detail (`mesh/roadResidency.ts` wantReach): past it, and past the tier's far budget within it, the network's far level draws them. */
+const ROAD_WANT_REACH = m(2_500);
 /** The roads the opening's solve left, solved a share a frame once the town is shown (`completeSolve`): ~15-20 ms of a frame on level ground (the 16,708 roads of a city of the largest radius: 1.5 roads solved a road taken, ~0.04 ms each, Node, 2026-10-21). */
 const SOLVE_SHARE = 300;
 /** Level ground (a new map's `RELIEF_FLAT`, no stamp): every station's ground is the same, nothing is read under a road (`FLAT_GROUND`). A stroke or a height stamp makes it real ground again. */
@@ -1075,8 +1078,14 @@ export function createSceneRenderer(
       return out;
     });
   };
-  /** The cells the network's far level draws: the ones the far budget let go and the ones the map's view hands it (`roadResidency.ts` parked). */
-  const farShown = (): string[] => [...(roadResidency.dropped ?? []), ...(roadResidency.parked ?? [])];
+  /** The key of the road cell (`networkFarRoads.ts`, a road block's square: `FAR_ROAD_CELL`) a point is in. */
+  const farCellOf = (x: number, y: number): string => roadCellOf(x, y, FAR_ROAD_CELL);
+  /** A road cell's square, world units. */
+  const farCellRect = (key: string): Rect => {
+    const [i, j] = key.split(',').map(Number) as [number, number];
+    const x = i * FAR_ROAD_CELL, y = j * FAR_ROAD_CELL;
+    return [x, y, x + FAR_ROAD_CELL, y + FAR_ROAD_CELL];
+  };
   // The road blocks' far levels drawn in batches, one a material (`mesh/farBlockBatches.ts`).
   const farBlocks = new FarBlockBatches();
   world.add(farBlocks.group);
@@ -1096,8 +1105,8 @@ export function createSceneRenderer(
       .value(),
     // A block of road is made at full detail only near the camera (`mesh/roadLod.ts`).
     near: (x, y) => isNear(x, y, roadFocus.x, roadFocus.y, roadFocus.reach),
-    // The near roads stop at the opening's view (`openingBuild`): the rest of a large city's roads is filled after the curtain.
-    within: (rect) => openingWithin === null || openingWithin === undefined || openingWithin(rect),
+    // THE TILES BUILT ARE THE CELLS THE VIEW TOOK (`mesh/roadResidency.ts` taken), never the map's: a tile of any other cell is drawn by the network's far level.
+    within: (rect) => roadResidency.taken!.has(farCellOf((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)),
     chunks: new Map(),
     // The inputs held round the view (`InputResidency`): derived where a build visits, let go far from the eye; DO NOT derive the whole map's rings (82 MB of the large city's heap, 2026-10-21).
     inputs: new SurfaceInputs(null, ROAD_INPUT_RESIDENCY),
@@ -1169,25 +1178,18 @@ export function createSceneRenderer(
   let openingPrograms: 'no' | 'asked' | 'built' = 'no';
   /** The town has been shown once this opening: the light variants the curtain did not wait for are asked now (`shaderCatalogue.ts` `afterReveal`). */
   let revealedPrograms = false;
-  /** The opening's first world: only the roads and the ground round the view, the rest filled after the curtain (`buildWorld(net, true)`) - a large city's whole road network took tens of seconds no pixel of the opening shows. */
+  /** The opening's first world of a large city: only the roads and the ground round the view (`buildWorld`), its solve scoped to them, the rest of the roads solved a share a frame after the curtain (`completeSolve`) - a large city's whole road network took tens of seconds no pixel of the opening shows. */
   let openingBuild = false;
-  /** The tiles the opening's build makes; null: every tile. */
-  let openingWithin: SurfaceReuse['within'] | null = null;
-  /** Whether the next map opened is a large one, its first world built round the view and the rest filled after the curtain (`main.ts` `openCity`). */
+  /** Whether the next map opened is a large one, its first world built round the view (`main.ts` `openCity`). */
   let scopeNextOpening = false;
-  /** Whether the town now shown had a scoped opening, its fill still to come. */
-  let openingFillPending = false;
-  /** THE OPENING'S FILL, A FEW ROAD BLOCKS AT A TIME, THE NEAREST TO THE VIEW FIRST (`fillStep`): the cells of the network's far level
-   *  (`networkFar`, `FAR_ROAD_CELL` squares on the road blocks' grid) still to be built in detail; null, no fill under way. DO NOT build
-   *  the whole map's blocks in one build and put them in at its end: the view the camera went to kept the far level for a minute or more
-   *  (step-25k 89-ne-district, 2026-10-21). */
-  let fillLeft: Set<string> | null = null;
-  /** The cells taken by the fill so far: built in detail (`surfaceReuse.within`). */
-  const fillTaken = new Set<string>();
-  /** The cells taken whose blocks have not landed yet: let go of the far level by the first build that lands after they were taken. */
-  const fillAwaiting = new Set<string>();
-  /** The player's road edits read by the fill (`takeEditedCells`), from the fill's start on. */
-  const fillEditRead = new JournalCursor(['roads']);
+  /** Whether the town now shown had a scoped opening, the roads past its view still to be solved (`completeSolve`): the view's cells are built once they are. */
+  let openingSolvePending = false;
+  /** THE ROADS' CELLS THE VIEW WANTS, AS THE LAST LOOK CHOSE THEM (`mesh/roadResidency.ts` updateRoadLevels, every few frames of `draw`):
+   *  the cells to build, nearest first, taken a few at a step (`cellStep`); the cells let go, retired by the step's build. DO NOT build the
+   *  whole map's cells and let the far ones go after: the page held every block of a 10 km city and died of it (2026-10-26). Null: no look yet. */
+  let roadLook: RoadLook | null = null;
+  /** The cells a step let go whose blocks the build under way retires: let go of `releasing` when it lands (`worldSteps`). */
+  const cellsRetiring = new Set<string>();
   /** The player's road edits read since the network's far level was last asked (`requestNetworkFar`): one landing outdates it. */
   const networkFarRead = new JournalCursor(['roads']);
   /** The network's far level for the whole map asked (`networkFarRoads.ts`), the edits read so far in it. */
@@ -1195,8 +1197,8 @@ export function createSceneRenderer(
     networkFarRead.read(net.doc.changes);
     networkFar.request(net, heights, terrain.renderedHeightAt, FAR_ROAD_CELL, null);
   };
-  /** The squares the fill's running step builds (`buildWorld` full); null, the whole network's extent. */
-  let fillRects: Rect[] | null = null;
+  /** The squares of the cells a step takes (`cellStep`, `buildWorld` full): their ground shaped, their tiles built. */
+  let stepRects: Rect[] | null = null;
   /** A map was opened since the last world build (`beginLoad`): the solve standing is another map's, nothing of the new one follows from it. */
   let mapOpened = false;
   /** The roads of the map being opened have landed (`worldSteps`): until then `roads` are the last map's, or none. */
@@ -1329,8 +1331,8 @@ export function createSceneRenderer(
   const CASCADE_KEEP_MOST = m(2500);
   /** The view's frustum the buildings' detail is chosen in (`levelOfDetail`), and its matrix. */
   const detailFrustum = new Frustum();
-  /** The roads' blocks at their full level: in the view's frustum (the buildings' detail's, set each frame) and under the tier's budget (`applyGeometryBudget`). */
-  const roadResidency: RoadResidency = { view: detailFrustum, budget: Infinity, farBudget: Infinity, network: networkFar };
+  /** The roads' cells chosen by the view (`mesh/roadResidency.ts`): built where it wants them, in the view's frustum (the buildings' detail's, set each frame) within `ROAD_WANT_REACH`, their levels under the tier's budgets (`applyGeometryBudget`). */
+  const roadResidency: RoadResidency = { view: detailFrustum, budget: Infinity, farBudget: Infinity, network: networkFar, wantReach: ROAD_WANT_REACH, taken: new Set(), awaiting: new Set(), releasing: new Set(), parked: new Set() };
   const detailProjection = new Matrix4();
   const crowdProjection = new Matrix4();
   const crowdBounds = new Sphere(new Vector3(), 8);
@@ -2226,18 +2228,6 @@ export function createSceneRenderer(
     }
     return out;
   };
-  /** The box every node of the network stands in, a block wider each way (a road's width past its last node). */
-  const networkExtent = (net: Network): Rect => {
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of net.doc.nodes.values()) {
-      if (n.x < minX) minX = n.x;
-      if (n.y < minY) minY = n.y;
-      if (n.x > maxX) maxX = n.x;
-      if (n.y > maxY) maxY = n.y;
-    }
-    if (!Number.isFinite(minX)) return [0, 0, 0, 0];
-    return [minX - SHAPE_BLOCK, minY - SHAPE_BLOCK, maxX + SHAPE_BLOCK, maxY + SHAPE_BLOCK];
-  };
   /** The diary entry the world being built follows from (`world/changes.ts`). */
   let worldCause = 0;
   /** Writes what the world derived in the document's diary, after `parent`; its serial (0: nothing written). */
@@ -2299,117 +2289,88 @@ export function createSceneRenderer(
     solveLeft = null;
     return true;
   };
-  /** The key of the far level's cell (`networkFarRoads.ts`, a road block's square) a point is in. */
-  const farCellOf = (x: number, y: number): string => `${Math.floor(x / FAR_ROAD_CELL)},${Math.floor(y / FAR_ROAD_CELL)}`;
-  /** A far level cell's square, world units. */
-  const farCellRect = (key: string): Rect => {
-    const [i, j] = key.split(',').map(Number) as [number, number];
-    const x = i * FAR_ROAD_CELL, y = j * FAR_ROAD_CELL;
-    return [x, y, x + FAR_ROAD_CELL, y + FAR_ROAD_CELL];
-  };
-  /** The fill's next step: the cells left nearest the view now (those under it first, the camera read again at every step), built in detail by a world build of their squares alone. */
-  const fillStep = (net: Network): void => {
-    const left = fillLeft!;
+  /**
+   * THE VIEW'S NEXT CELLS (`roadLook`, the last look of `mesh/roadResidency.ts`): the cells it wants built, every one under the eye and a few
+   * more (`STEP_CELLS`, nearest first), taken and built; the cells it let go retired - in one build of their squares alone (`buildWorld` full).
+   * DO NOT take the map's cells in any order: the cells built are the view's and no other, however large the map.
+   */
+  const cellStep = (net: Network): void => {
+    const look = roadLook;
+    if (!look) return;
+    const taken = roadResidency.taken!, awaiting = roadResidency.awaiting!;
     const { x, y } = rig.viewport.centre;
     const gap = (key: string): number => {
       const r = farCellRect(key);
       return Math.hypot(Math.max(r[0] - x, 0, x - r[2]), Math.max(r[1] - y, 0, y - r[3]));
     };
-    const ranked = [...left].map((key) => ({ key, gap: gap(key) })).sort((p, q) => p.gap - q.gap);
     // The cells the view stands over in one step, however many; past them a few, the step's fixed cost shared.
-    const near = ranked.filter((c) => c.gap === 0).length;
-    const taken = ranked.slice(0, Math.max(near, FILL_CELLS)).map((c) => c.key);
-    fillRects = taken.map(farCellRect);
-    for (const key of taken) {
-      left.delete(key);
-      fillTaken.add(key);
-      fillAwaiting.add(key);
-    }
-    // Every build visits the tiles that came into the scope (`roadSurfaces.ts` withinMoved), whichever lands first.
-    surfaceReuse.withinMoved?.push(...fillRects);
+    const under = look.build.filter((key) => gap(key) === 0).length;
+    const build = look.build.slice(0, Math.max(under, STEP_CELLS));
+    const release = look.release.filter((key) => taken.has(key));
+    if (!build.length && !release.length) return;
+    for (const key of build) { taken.add(key); awaiting.add(key); }
+    for (const key of release) { taken.delete(key); cellsRetiring.add(key); }
+    // Every build visits the tiles of the cells that came into the taken set or left it (`roadSurfaces.ts` withinMoved), whichever lands first.
+    surfaceReuse.withinMoved?.push(...build.map(farCellRect), ...release.map(farCellRect));
+    // The look stands until the next, what it asked taken.
+    roadLook = { ...look, build: look.build.slice(build.length), release: [] };
+    stepRects = build.map(farCellRect);
     try {
       buildWorld(net, true);
     } finally {
-      fillRects = null;
+      stepRects = null;
     }
   };
-  /**
-   * AN EDIT DURING THE FILL GOES FIRST: the far level's cells a road edit reached that the fill has not taken yet are taken now, built in
-   * detail by the edit's own build (their squares put in the scope that moved, `withinMoved`, which every build visits) and their far
-   * level let go when it lands (`fillAwaiting`). DO NOT leave them to their turn: the edited road was drawn in detail where it lay, the
-   * rest of its cell stood in the network's far level made before the edit, the old outline of the road shown beside the new one, until
-   * the fill came round to it (minutes in a city of 25,000 buildings).
-   */
-  const takeEditedCells = (net: Network): void => {
-    const left = fillLeft;
-    if (left === null || left.size === 0) return;
-    // Null: the first read, or a diary that cannot say where (the whole map: left to the fill's own order).
-    const edits = fillEditRead.read(net.doc.changes);
-    if (!edits) return;
-    const pad = SURFACE_READ_REACH;
-    const rects: Rect[] = [];
-    for (const entry of edits) {
-      if (isStreaming(entry)) continue;
-      for (const r of entry.rects ?? []) {
-        const [i0, j0] = farCellOf(r[0] - pad, r[1] - pad).split(',').map(Number) as [number, number];
-        const [i1, j1] = farCellOf(r[2] + pad, r[3] + pad).split(',').map(Number) as [number, number];
-        for (let i = i0; i <= i1; i++) {
-          for (let j = j0; j <= j1; j++) {
-            const key = `${i},${j}`;
-            if (!left.delete(key)) continue;
-            fillTaken.add(key);
-            fillAwaiting.add(key);
-            rects.push(farCellRect(key));
-          }
-        }
-      }
-    }
-    if (rects.length) surfaceReuse.withinMoved?.push(...rects);
-  };
-  /** @rebuild The roads' heights solved again and the world's rebuild started (`worldSteps`). `full`: the whole map, after a scoped opening (`openingFill`). */
+  /** @rebuild The roads' heights solved again and the world's rebuild started (`worldSteps`). `full`: the cells a step took (`cellStep`, `stepRects`), the solve standing. */
   const buildWorld = (net: Network, full = false): void => {
     const started = performance.now();
     const opening = openingBuild && !full;
-    // A player's edit while the fill is under way: the cells it reached built by this build, before any other (`takeEditedCells`).
-    if (!full) takeEditedCells(net);
-    // The opening's first world builds only the tiles and the ground round the view; the rest is filled after the curtain.
+    // A map just opened (`mapOpened`): the last solve is another city's. DO NOT start from it or compare the two: every block of the map differed, and the whole-map digest held the opening's world 1.7 s on a worker (2026-10-21).
+    const newMap = mapOpened && !full;
     const centre = rig.viewport.centre;
     const openingHalf = m(700);
-    // The blocks the opening builds in detail: every road block (`FAR_ROAD_CELL`) meeting the view's square, a piece drawn whole in its owner's
-    // (`roads/pieceOwner.ts`); the network's far level leaves out the same blocks' pieces (`networkFar.request` below). A block is told by its
-    // middle, the area being whole blocks.
+    // THE CELLS A MAP OPENS WITH, THE ONLY ONES ITS FIRST WORLD BUILDS (`roadResidency.taken`, `surfaceReuse.within`): a large city's (`openingBuild`),
+    // every road block (`FAR_ROAD_CELL`) meeting the view's square, a piece drawn whole in its owner's (`roads/pieceOwner.ts`); any other map's, the
+    // blocks within the view's want reach of its centre (a small city whole, as its view frames it). Every other cell of the map is drawn by the
+    // network's far level from the first frame (`networkFar.request` below) and built when the view wants it (`cellStep`). A block is told by its
+    // middle, the area being whole blocks. DO NOT take the whole map's blocks for any map: the cells built are the view's.
     const openingLo = (v: number): number => Math.floor(v / FAR_ROAD_CELL) * FAR_ROAD_CELL;
     const openingHi = (v: number): number => (Math.floor(v / FAR_ROAD_CELL) + 1) * FAR_ROAD_CELL;
     const openingArea: [number, number, number, number] = [openingLo(centre.x - openingHalf), openingLo(centre.y - openingHalf), openingHi(centre.x + openingHalf), openingHi(centre.y + openingHalf)];
-    openingWithin = opening ? (rect) => {
-      const x = (rect[0] + rect[2]) / 2, y = (rect[1] + rect[3]) / 2;
-      return x > openingArea[0] && x < openingArea[2] && y > openingArea[1] && y < openingArea[3];
-    } : null;
+    if (newMap) {
+      const half = opening ? openingHalf : ROAD_WANT_REACH;
+      const area: Rect = opening ? openingArea : [openingLo(centre.x - half), openingLo(centre.y - half), openingHi(centre.x + half), openingHi(centre.y + half)];
+      const taken = roadResidency.taken!, awaiting = roadResidency.awaiting!;
+      for (let x = area[0]; x < area[2]; x += FAR_ROAD_CELL) {
+        for (let y = area[1]; y < area[3]; y += FAR_ROAD_CELL) {
+          const key = farCellOf(x + FAR_ROAD_CELL / 2, y + FAR_ROAD_CELL / 2);
+          taken.add(key);
+          awaiting.add(key);
+        }
+      }
+    }
     const openingRegion = opening ? terrainRegion([centre.x - openingHalf, centre.y - openingHalf, centre.x + openingHalf, centre.y + openingHalf]) : null;
     // The opening's solve: the roads round its view and a margin (`OPENING_SOLVE_MARGIN`), the rest solved once the town is shown (`completeSolve`). DO NOT solve a large city's whole network before its first frame: no pixel of the opening reads a road past the margin.
     const reach = openingHalf + OPENING_SOLVE_MARGIN;
     const solveScope: SolveScope | null = opening ? { region: [centre.x - reach, centre.y - reach, centre.x + reach, centre.y + reach] } : null;
     if (opening) solveLeft = { x: centre.x, y: centre.y, order: null, at: 0 };
-    // The fill after the reveal (`full`): the solve stands and only the road tiles the opening's scope left out are built, in place - DO NOT rebuild every tile of the city and hold the old and the new surfaces at once (the 3.4 GB peak of the metropolis).
-    // Over the whole network's extent: DO NOT take one plate's (`TERRAIN_HALF`) - a metropolis spans several, and every street past the middle plate was left unbuilt (the player, 2026-10-20: "não gera vias").
-    const fillBlocks = full ? (fillRects ? fillRects.flatMap((r) => blocksOver(r)) : blocksOver(networkExtent(net))) : null;
+    // A step's build (`full`): the solve stands and only the tiles of the cells it took are built, in place - DO NOT rebuild every tile of the city and hold the old and the new surfaces at once (the 3.4 GB peak of the metropolis).
+    const stepBlocks = full ? stepRects!.flatMap((r) => blocksOver(r)) : null;
     // Only the roads changed (the land did not): the ground is cut and filled again only where the solve of the roads differs.
-    // A map just opened (`mapOpened`): the last solve is another city's. DO NOT start from it or compare the two: every block of the map differed, and the whole-map digest held the opening's world 1.7 s on a worker (2026-10-21).
-    const newMap = mapOpened && !full;
     const landStill = full || (!newMap && terrainRevision === net.doc.terrainRevision && elevation !== null);
     // Where the land moved (a stroke's region), when it can be said: the solve and the surfaces follow it there only. Kept until the solve
     // runs: cleared before a wait for the roads' stations, the next frame found no region and solved the whole map (TER-01, VIA-01).
     const land = full || newMap ? null : landDirty;
-    const landBlocks = full ? fillBlocks : (!landStill && land !== null && land !== 'all' ? blocksOver(land) : null);
+    const landBlocks = full ? stepBlocks : (!landStill && land !== null && land !== 'all' ? blocksOver(land) : null);
     const groundMoved = full ? null : (landBlocks && land !== null && land !== 'all' ? [land] : null);
     const from = landStill || groundMoved ? elevation : null;
     // A new map on level ground (`RELIEF_FLAT`, no stamp): every station's ground is the same, and reading it costs most of a large city's solve. A stroke or a height stamp makes it real ground again.
     const levelLand = isLevelLand(net);
     const groundAt = levelLand ? FLAT_GROUND : builtGroundAt;
     // DO NOT read the ground under a tile's hundreds of new roads in this frame: a job reads it off the shared plates, the solve waits for it.
-    // A step of the opening's fill on the network solved whole (`completeSolve`): the solve stands, not made again for each step.
-    const fillSolved = full && fillRects !== null && elevation !== null && !elevation.pending && net.state === solvedState;
-    const solvedAhead = fillSolved || (offeredElevation !== null && offeredElevation.revision === net.revision && offeredElevation.terrain === net.doc.terrainRevision);
+    // A step of the view's cells on the network solved whole (`completeSolve`): the solve stands, not made again for each step.
+    const stepSolved = full && elevation !== null && !elevation.pending && net.state === solvedState;
+    const solvedAhead = stepSolved || (offeredElevation !== null && offeredElevation.revision === net.revision && offeredElevation.terrain === net.doc.terrainRevision);
     performance.mark('world:stations-start');
     const stationAsk = roadsRead.of(groundMoved ? null : [net.state, from, ...(solveScope?.region ?? [])], () => roadsToRead(net, groundAt, from, groundMoved, solveScope));
     performance.mark('world:stations-read');
@@ -2426,23 +2387,20 @@ export function createSceneRenderer(
     const offered = offeredElevation;
     offeredElevation = null;
     performance.mark('world:solve');
-    elevation = fillSolved && elevation ? elevation : offered && offered.revision === net.revision && offered.terrain === terrainRevision
+    elevation = stepSolved && elevation ? elevation : offered && offered.revision === net.revision && offered.terrain === terrainRevision
       ? offered.elevation
       // On land that has not moved, from the last solve
       : buildRoadElevation(net, groundAt, from, roadStations.current, groundMoved, solveScope);
     performance.mark('world:solved');
-    // A scoped opening: every road of the map drawn at once at its far level, from the network, the pieces of the blocks the opening builds in detail left out (`openingWithin`: the same blocks).
-    if (opening) {
-      networkFarRead.read(net.doc.changes);
-      networkFar.request(net, elevation, terrain.renderedHeightAt, FAR_ROAD_CELL, openingArea);
-    }
+    // A map opened: every road of it drawn at once at its far level, from the network, the roads a scoped solve left on the ground until it completes (`completeSolve` asks the level again). The cells this build takes hide theirs when it lands (`worldSteps`).
+    if (newMap) requestNetworkFar(net, elevation);
     solvedState = net.state;
     roadStations.used();
     measureHitch('hitch:road-edit/elevation', started);
     // Now the ground comes to meet the roads
     // The blocks the two solves differ in, digested off the page (`compareSolves`) and read by the job, which waits for them. A fill compares none: its blocks are the surfaces' visit list, not a ground change (`worldSteps` shapes none on level land).
     const compare = full || newMap ? null : (previousElevation && (landStill || landBlocks) ? compareSolves(previousElevation, elevation, landBlocks) : null);
-    pendingBlocks = full ? [{ blocks: fillBlocks!, ready: true, ms: 0, fill: true }] : (compare && !pendingBlocks.includes(null) ? [...pendingBlocks, compare] : [null]);
+    pendingBlocks = full ? [{ blocks: stepBlocks!, ready: true, ms: 0, fill: true }] : (compare && !pendingBlocks.includes(null) ? [...pendingBlocks, compare] : [null]);
     const elevationMs = performance.now() - started;
     const cause = net.doc.changes.version;
     // DO NOT build it in one go: the roads of a generated city were built in the frame of the change, on the page
@@ -2455,8 +2413,9 @@ export function createSceneRenderer(
   function* worldSteps(net: Network, compares: readonly (BlockCompare | null)[], solved: { readonly cause: number; readonly elevationMs: number },
     started: number, sliced: boolean, region: TerrainRegion | null, levelLand: boolean): Generator<'wait' | void, void, void> {
     const solve = elevation!;
-    // The fill's cells taken before this build started: their far level goes when it lands (a build replaced halfway leaves them to the next).
-    const fillLanding = [...fillAwaiting];
+    // The cells taken before this build started: the network's far level goes in them when it lands; the cells let go before it: their blocks are retired by it (a build replaced halfway leaves both to the next).
+    const landing = [...roadResidency.awaiting!];
+    const retiring = [...cellsRetiring];
     // The revision this build is of: what its landing says the roads drawn stand for (`RoadStandIn.landed`).
     const builtOf = networkRevision;
     // The blocks the solves differ in, once the worker has digested them (`compareSolves`).
@@ -2529,15 +2488,9 @@ export function createSceneRenderer(
     // The roads drawn changed by an edit since the network's far level was asked: it stands for none of them (`NetworkFarRoads.covers`), not shown for a cell let go till made again.
     const roadEdits = networkFarRead.read(net.doc.changes);
     if (roadEdits === null || roadEdits.some((entry) => !isStreaming(entry))) networkFar.outdate();
-    // The fill's cells this build made in detail: their far level hidden, the blocks and their own far levels stand for their roads now.
-    for (const key of fillLanding) { networkFar.hide(key); fillAwaiting.delete(key); }
-    // The whole fill landed: the tiles are no longer scoped, and the network's far level stays as the roads' top level (`mesh/roadResidency.ts`), hidden but where the far budget let blocks go; made again for the whole map (the opening's view no longer cut out of it, every road at its solved height).
-    if (fillLeft !== null && fillLeft.size === 0 && fillAwaiting.size === 0) {
-      fillLeft = null;
-      openingWithin = null;
-      networkFar.settle(farShown());
-      requestNetworkFar(net, solve);
-    } else if (fillLeft === null && !openingBuild && openingWithin === null && !networkFar.settled) networkFar.settle(farShown());
+    // The cells this build made in detail: the network's far level hidden there, their blocks stand for their roads now; the cells it retired the blocks of: let go for good (`mesh/roadResidency.ts` releasing), the level drawing them.
+    for (const key of landing) { networkFar.hide(key); roadResidency.awaiting!.delete(key); }
+    for (const key of retiring) { roadResidency.releasing!.delete(key); cellsRetiring.delete(key); }
     performance.mark('world:roads');
     roads.adopt();
     world.add(roads.group);
@@ -3211,7 +3164,8 @@ export function createSceneRenderer(
     },
     openingState() {
       return { roadsIn: roads !== null && mapRoadsIn, coarsePending: buildings.coarsePending, viewPending: buildings.viewPending, treesStarted: natureTreesStarted,
-        treesPending: natureTreesPending, programs: openingPrograms, worked: reveal.worked, worldBusy: worldJob !== null, fillPending: openingFillPending, fillCellsLeft: fillLeft?.size ?? 0 };
+        treesPending: natureTreesPending, programs: openingPrograms, worked: reveal.worked, worldBusy: worldJob !== null, solvePending: openingSolvePending,
+        roadsWanted: roadLook?.wanted ?? 0, roadsTaken: roadResidency.taken!.size };
     },
     beginLoad() {
       reveal.begin();
@@ -3220,10 +3174,9 @@ export function createSceneRenderer(
       openingPrograms = 'no';
       revealedPrograms = false;
       openingBuild = scopeNextOpening;
-      openingFillPending = openingBuild;
-      fillLeft = null;
-      fillTaken.clear();
-      fillAwaiting.clear();
+      openingSolvePending = openingBuild;
+      roadLook = null;
+      cellsRetiring.clear();
       networkFar.clear();
       forgetRoadCells(roadResidency);
       scopeNextOpening = false;
@@ -3231,7 +3184,7 @@ export function createSceneRenderer(
       mapRoadsIn = false;
       onAssetsReady();
     },
-    /** The next map opened is large: its first world covers the view alone, the rest filled after the curtain (`openingBuild`). */
+    /** The next map opened is large: its first world covers the view's square alone and its solve is scoped to it (`openingBuild`). */
     scopeOpening(large: boolean) {
       scopeNextOpening = large;
     },
@@ -3931,12 +3884,10 @@ export function createSceneRenderer(
           roadResidency.networkFrom = !rig.perspective && rig.viewport.zoom < 1 ? 0 : undefined;
           const blocks: Mesh[] = [];
           for (const { mesh } of surfaceReuse.chunks.values()) blocks.push(mesh);
-          updateRoadLevels(blocks, roadFocus.x, roadFocus.y, roadFocus.reach, roadResidency);
-          // Over the far budget with cells the network's far level does not stand for (none made, or made before the roads changed): made again for the roads drawn, off the page.
-          if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && fillLeft === null && !networkFar.pending && networkFar.outdated()) {
-            networkFar.settle(farShown());
-            requestNetworkFar(net, elevation);
-          }
+          // THE LOOK: the cells the view wants built and the ones it lets go (`cellStep` takes them), the levels of the blocks standing brought up to the eye. The map's road cells are the network's far level's (null before it landed: the opening's cells are taken already).
+          roadLook = updateRoadLevels(blocks, roadFocus.x, roadFocus.y, roadFocus.reach, roadResidency, networkFar.cells.size ? networkFar.cells : null, FAR_ROAD_CELL);
+          // Cells drawn by the network's far level that it does not stand for (none made, or made before the roads changed): made again for the roads drawn, off the page.
+          if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && !openingSolvePending && !networkFar.pending && networkFar.outdated()) requestNetworkFar(net, elevation);
         }
         if (optimizer.reliefDue()) terrain.bakeRelief(renderer, close ? reliefFocus : null);
       }
@@ -4064,21 +4015,15 @@ export function createSceneRenderer(
       if (reveal.opened && qualityCompile && performance.now() - qualityCompileSince < QUALITY_COMPILE_GIVE_UP_MS) { /* drawn again once built: `setQuality` asks for the frame */ }
       else if (reveal.opened) {
         if (!revealedPrograms) { revealedPrograms = true; programs.afterReveal(); }
-        // The rest of a large city's roads and ground, now that its view is shown: built in slices while the game runs (`openingBuild`).
-        // The roads' heights past the opening's view first, a share a frame (`completeSolve`): the fill builds on the whole solve.
-        if (openingFillPending && worldJob === null && completeSolve(net)) {
-          openingFillPending = false;
+        // The roads' heights past a scoped opening's view, a share a frame now that its view is shown (`completeSolve`): the view's cells build on the whole solve.
+        if (openingSolvePending && worldJob === null && completeSolve(net)) {
+          openingSolvePending = false;
           openingBuild = false;
-          // The opening's tiles stay built; the far level's cells are taken a few at a time (`fillStep`).
-          const scope = openingWithin;
-          fillTaken.clear();
-          fillAwaiting.clear();
-          fillLeft = new Set(networkFar.cellKeys());
-          fillEditRead.reset();
-          fillEditRead.read(net.doc.changes);
-          openingWithin = (rect) => (scope?.(rect) ?? false) || fillTaken.has(farCellOf((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2));
+          // Every road solved: the network's far level made again at the solved heights (the roads the scoped solve left stood on the ground).
+          if (elevation) { networkFar.outdate(); requestNetworkFar(net, elevation); }
         }
-        if (fillLeft !== null && fillLeft.size > 0 && worldJob === null && !openingFillPending) fillStep(net);
+        // The cells the view wants built and the ones it let go, a few at a step (`cellStep`), between the edits' builds.
+        if (roadLook !== null && worldJob === null && !openingBuild && !openingSolvePending && (roadLook.build.length > 0 || roadLook.release.length > 0)) cellStep(net);
         // The tier's geometry budget kept (`governGeometry`), a read of the scene now and then.
         if (++governFrames >= GOVERN_FRAMES) { governFrames = 0; governGeometry(); }
         // Round the frame's whole drawing: the shadow, the scene, every pass.

@@ -218,26 +218,8 @@ export function attachFarLevel(mesh: Mesh, coarse: BlockArrays, options: Pick<Su
   return level;
 }
 
-/** Where a far level keeps how its arrays are made again from its tiles on the page (`attachFarLevel`, `restoreFarLevel`). */
+/** Where a far level keeps how its arrays are made again from its tiles on the page (`attachFarLevel`: a lost context, `gpuOnly.ts`). */
 const FAR_AGAIN = 'farAgain';
-
-/**
- * A far level let go (`roadResidency.ts` dropCell) made again: its geometry replaced by one of `arrays` (made off the page, `BlockLevels.remake`),
- * or, none given, of its tiles cut again here. A new geometry, not the old one refilled: the arrays made again need not be as many as the
- * first (another simplification's count), and three draws an attribute by the count it was made with (`BufferAttribute.count`).
- */
-export function restoreFarLevel(level: Mesh, arrays: BlockArrays | null): void {
-  const again = level.userData[FAR_AGAIN] as (() => GeometryArrays) | undefined;
-  const made = arrays ?? (again?.() as BlockArrays | undefined);
-  if (!made) return;
-  const old = level.geometry;
-  const geometry = coarseGeometry(made);
-  if (old.boundingBox) geometry.boundingBox = old.boundingBox.clone();
-  if (old.boundingSphere) geometry.boundingSphere = old.boundingSphere.clone();
-  old.dispose();
-  level.geometry = geometry;
-  if (again) gpuOnly(level, again);
-}
 
 /** A mesh's arrays at their sizes, all zero (every triangle of no area): what a far level the tiles no longer simplify to is given back, never the arrays it was made with. */
 function emptyLike(mesh: Mesh): Record<string, ArrayLike<number>> {
