@@ -30,6 +30,8 @@ const LOADERS: Readonly<Record<JobService, () => Promise<{ serve: Serve }>>> = {
   roadBake: () => import('./roadBake.worker'),
   // A tile's roads at the far level, the map's far level made tile by tile (`render/networkFarTile.ts`).
   roadFarTile: () => import('./render/networkFarTile.worker'),
+  // A city's tiles grown many at once, and joined (`editor/cityTiles.ts`).
+  cityGrowth: () => import('./cityGrowth.worker'),
   terrainLight: () => import('./render/terrainLight.worker'),
   // A dab's work on a plate: its levels, its woods, its shore (`render/landStroke.ts`).
   landStroke: () => import('./render/landStroke.worker'),

@@ -69,12 +69,20 @@ function buildCityTable(city: CityPlan, phase?: (name: string) => void): Prepare
   return { data, buildings: page.finish(), ...tables };
 }
 
-/** A planned city laid out and grown on one document. `spill`: told after each building grown and once at the end (`last`), with the store's items spilled to a table (`BuildingStore.spillToTable`, its members shared by `shared`); null: every record kept as an object. */
-function growCity(city: CityPlan, shared: SharedMembers | null, spill: ((items: SpilledItems, last: boolean) => void) | null, phase?: (name: string) => void): RoadDoc {
+/**
+ * THE CITY LAID OUT, NOTHING GROWN YET (`editor/cityTiles.ts`): its streets, footways, lots, squares, power lines, furniture, names and zones
+ * on one document, as `growCity` lays them; its buildings are grown after, tile by tile on the job workers in parallel (`cityTiles.ts`
+ * growTile), never one by one on this thread.
+ */
+export function layoutCityOf(kind: 'small' | 'large', seed: number, radius?: number, phase?: (name: string) => void): RoadDoc {
+  const city = kind === 'large' ? largeCityPlan(seed, radius) : smallCityPlan(seed);
   const doc = layCity(city);
-  // The city is written out and this document thrown away: its buildings are interned where they are read (`prepareCity` settles every one again before its table, the page reads the table). DO NOT share them here as well: the grown buildings were interned twice, 1.6 s of the large city's 9.5 s generation spent in `intern` (profile, 2026-10-21).
-  doc.buildings.internShared = false;
-  const items = spill ? doc.buildings.spillToTable(shared ?? undefined) : null;
+  layOut(doc, city, phase);
+  return doc;
+}
+
+/** The laid streets made a city's land: footways widened, the network built, lots planned, the green, the zones (`growCity`, `layoutCityOf`). */
+function layOut(doc: RoadDoc, city: CityPlan, phase?: (name: string) => void): Network {
   widenCityFootways(doc);
   const net = new Network(doc);
   net.rebuild();
@@ -89,14 +97,24 @@ function growCity(city: CityPlan, shared: SharedMembers | null, spill: ((items: 
   net.rebuild();
   zoneCity(doc, net, city);
   phase?.('zones');
+  return net;
+}
+
+/** A planned city laid out and grown on one document. `spill`: told after each building grown and once at the end (`last`), with the store's items spilled to a table (`BuildingStore.spillToTable`, its members shared by `shared`); null: every record kept as an object. */
+function growCity(city: CityPlan, shared: SharedMembers | null, spill: ((items: SpilledItems, last: boolean) => void) | null, phase?: (name: string) => void): RoadDoc {
+  const doc = layCity(city);
+  // The city is written out and this document thrown away: its buildings are interned where they are read (`prepareCity` settles every one again before its table, the page reads the table). DO NOT share them here as well: the grown buildings were interned twice, 1.6 s of the large city's 9.5 s generation spent in `intern` (profile, 2026-10-21).
+  doc.buildings.internShared = false;
+  const items = spill ? doc.buildings.spillToTable(shared ?? undefined) : null;
+  const net = layOut(doc, city, phase);
   growLots(doc, net, items && spill ? () => spill(items, false) : null);
   if (items && spill) spill(items, true);
   phase?.('grown');
   return doc;
 }
 
-/** Every open lot of the city grown, on the flat ground of a new map and the paving its streets lay on it; `grew`: told after each building. */
-function growLots(doc: RoadDoc, net: Network, grew: (() => void) | null): void {
+/** Every open lot of the document grown, on the flat ground of a new map and the paving its streets lay on it; `grew`: told after each building, with its id (a city's growth, or a tile's, `cityTiles.ts`). */
+export function growLots(doc: RoadDoc, net: Network, grew: ((id: BuildingId) => void) | null): void {
   // The flat ground of a new map, and the paving its streets lay on it (as the renderer reads it, `renderer.ts` `pavedHeightAt`). `FLAT_GROUND` lets the solve skip the ground reads of every station (level ground: every sample the same).
   const ground = FLAT_GROUND;
   const elevation = buildRoadElevation(net, FLAT_GROUND);
@@ -109,7 +127,7 @@ function growLots(doc: RoadDoc, net: Network, grew: (() => void) | null): void {
       // Stamped as the page stamps a building grown (`main.ts` `growthAnswered`), at the city's first minute.
       const fresh = doc.buildings.get(id as BuildingId)!;
       doc.buildings.put({ ...fresh, builtAt: 0, decay: 0, lotPlan: LOT_PLAN_VERSION });
-      grew?.();
+      grew?.(id as BuildingId);
     } else if (doc.openLots.count(refused) === 0) break;
   }
 }

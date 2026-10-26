@@ -2,7 +2,7 @@ import { ALL_EFFECTS_ON, DEFAULT_BUILDING_CHOICES, type BuildingChoices, type Ef
 import { DEFAULT_OPTIMIZATIONS, type Optimizations } from '@render/optimizations';
 import { measureHitch } from '@core/hitch';
 import { watchDesktopShown } from './desktopShown';
-import { canQueueJobs, jobChannel, jobLanes, jobPoolStats, setJobWorkerMaker, setJobWorkerSetup, submitJob } from './jobs/jobPool';
+import { canQueueJobs, jobChannel, jobLanes, jobPoolStats, setJobWorkerMaker, setJobWorkerSetup } from './jobs/jobPool';
 import type { CityGenAsk, CityGenReply } from './cityGen.worker';
 import { CITY_TABLES, type CityTable, type OpenedCity, type OpenedTables, noCityTables, openedBuildings, openedTables, prepareCity, preparedCity } from './editor/preparedCity';
 import { COOKED_CITY_SEEDS, readCookedCity } from './editor/cookedCities';
@@ -106,6 +106,7 @@ import { drawProfile, setDrawProfile } from '@ui/roads/drawProfile';
 import { cutWallsChosen } from '@ui/roads/cutWalls';
 import { ROAD_PARKING_PRESETS, type RoadParkingPreset, roadParking, roadParkingPreset, setRoadParkingPreset } from '@editor/roadParking';
 import { History, docGenerated, followNetwork, openedGenerated, restoreInto, restoreSnapshot, serialize } from '@editor/history';
+import { growCityInTiles } from '@editor/cityInTiles';
 import { SampleRing, STUTTER_MS } from '@core/sampleRing';
 import { problems } from '@core/assert';
 import { SessionSummary, fieldReport, problemBridge, shaderErrorHook, watchContext, wireFieldReport } from './fieldReport';
@@ -2132,24 +2133,19 @@ function openedOf(reply: CityGenReply): OpenedCity {
 }
 
 /** The city's worker asked for a city (`priority`: the queue's, 0 first), its answer kept under `key` for the next opening of this seed. */
-function cityJob(ask: CityGenAsk, key: string | null, priority: number): Promise<CityGenReply> {
-  return new Promise((done, fail) => {
-    submitJob({
-      service: 'cityGen', key: priority === 0 ? 'cityGen' : `cityGen:ahead:${key}`, priority,
-      // Its message is the ask alone: fit for the desktop's job processes (`jobPool.ts` hostFor). DO NOT keep it to the page's two short workers: the boot's city grew there 12 s behind the building cells, and the next city made ahead took the worker the cells queue on (2026-10-21).
-      crosses: true,
-      write: () => ({ data: ask, transfer: [] }),
-      done: (answer) => {
-        const reply = answer as CityGenReply;
-        if (!reply.data) { fail(new Error(reply.error ?? 'the city was not made')); return; }
-        // Kept as it came (the store copies it now), for the next opening of this seed: committed to the disk (one write of some 12 MB, rare). DO NOT keep it relaxed: a game closed soon after lost it, and the city was grown again at the next opening.
-        // The table is in shared memory where the page is isolated (`recordTable.ts` allocate), which no store keeps: a plain copy of it (`tableBytes`). DO NOT keep only a plain buffer as it came: the desktop's never was one, and no city was ever kept (2026-10-21).
-        if (key && reply.buildings) void keepDerivedDurably(key, { data: reply.data, buildings: tableBytes(reply.buildings), ...besideTables(reply, tableBytes) } satisfies KeptCity);
-        done(reply);
-      },
-      failed: (message) => fail(new Error(message)),
-    });
+async function cityJob(ask: CityGenAsk, key: string | null, priority: number): Promise<CityGenReply> {
+  // Laid out by one worker, its tiles grown by many at once, joined by one (`editor/cityInTiles.ts`): each step said on the console as it ends.
+  const started = performance.now();
+  const reply = await growCityInTiles(ask, priority, priority === 0 ? null : key, (step, detail) => {
+    console.info(`[city] ${step} after ${((performance.now() - started) / 1000).toFixed(1)} s${detail ? ` (${detail})` : ''}`);
+    // The step on the page's own timeline too, as the opening's are (`city:asked`, `city:applied`).
+    performance.mark(`city:${step}`, { detail });
   });
+  if (!reply.data) throw new Error(reply.error ?? 'the city was not made');
+  // Kept as it came (the store copies it now), for the next opening of this seed: committed to the disk (one write of some 12 MB, rare). DO NOT keep it relaxed: a game closed soon after lost it, and the city was grown again at the next opening.
+  // The table is in shared memory where the page is isolated (`recordTable.ts` allocate), which no store keeps: a plain copy of it (`tableBytes`). DO NOT keep only a plain buffer as it came: the desktop's never was one, and no city was ever kept (2026-10-21).
+  if (key && reply.buildings) void keepDerivedDurably(key, { data: reply.data, buildings: tableBytes(reply.buildings), ...besideTables(reply, tableBytes) } satisfies KeptCity);
+  return reply;
 }
 
 /**
