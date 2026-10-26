@@ -246,6 +246,20 @@ class NullImage {
   decode(): Promise<void> { return Promise.resolve(); }
 }
 
+/** A null canvas whose listeners are kept, so its context events reach three and the game. */
+export class ListeningCanvas extends NullCanvas {
+  private readonly events = new EventTarget();
+  override addEventListener(type?: string, listener?: EventListenerOrEventListenerObject | null): void {
+    if (type && listener) this.events.addEventListener(type, listener);
+  }
+  override removeEventListener(type?: string, listener?: EventListenerOrEventListenerObject | null): void {
+    if (type && listener) this.events.removeEventListener(type, listener);
+  }
+  override dispatchEvent(event?: Event): boolean {
+    return event ? this.events.dispatchEvent(event) : true;
+  }
+}
+
 /** The page's globals the scene reads, as light as they come; `restore` puts back what was there.
  *  `root`: the project, where a fetch of the page's own address (`/cooked/...`, `/public/models/...`, `/models/...`) reads its file. */
 export function installNullPage(width: number, height: number, root: string): { restore(): void } {

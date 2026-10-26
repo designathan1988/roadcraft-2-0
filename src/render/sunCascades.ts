@@ -25,6 +25,7 @@ import {
   type Light,
   type PerspectiveCamera,
   type WebGLRenderer,
+  type WebGLShadowMap,
 } from 'three';
 import { m } from '@world/units';
 import type { ChangeBox } from './changeBoxes';
@@ -606,8 +607,12 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
     }
   };
 
-  if (renderer) {
-    const shadowMap = renderer.shadowMap;
+  /** The shadow map the cascades' passes are put over (`hookShadowMap`). */
+  let hooked: WebGLShadowMap | null = null;
+  /** The cascades' passes put over three's shadow map, once a shadow map: its `render` wrapped (stores, strips, movers over them). */
+  const hookShadowMap = (shadowMap: WebGLShadowMap, renderer: WebGLRenderer): void => {
+    if (hooked === shadowMap) return;
+    hooked = shadowMap;
     const base = shadowMap.render.bind(shadowMap) as (lights: Light[], scene: Scene, camera: Camera) => void;
     shadowMap.render = (shadowLights: Light[], scene: Scene, camera: Camera): void => {
       // A render of another scene (its own lights): nothing of the cascades' here.
@@ -655,7 +660,19 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
       // The blits leave the framebuffers unbound: the frame's own target bound again before the scene is drawn into it.
       renderer.setRenderTarget(target, face, level);
     };
-  }
+  };
+  if (renderer) hookShadowMap(renderer.shadowMap, renderer);
+  /** A lost context come back: three's shadow map is a new object (r186 `initGLContext`), every map's and store's texels gone. The hook put on
+   *  the new one - DO NOT keep it on the old: three drew the cascades plainly after a restore, no store, no strips, and the far cascades lost
+   *  the town's shadow (audit 2026-10-25) - each cascade drawn whole at its next pass, no store marked valid, each store made again (a store is
+   *  only a copy's end, never drawn into: three makes a target's storage again only where it is drawn into). */
+  const contextBack = (): void => {
+    if (!renderer) return;
+    hookShadowMap(renderer.shadowMap, renderer);
+    for (let i = 0; i < lights.length; i++) { storeValid[i] = false; refitted[i] = true; everDrawn[i] = false; }
+    for (const store of stores) if (store) renderer.initRenderTarget(store);
+  };
+  renderer?.domElement.addEventListener('webglcontextrestored', contextBack);
   /** Whether the casters were chosen for a cascade since they were last given back (`restore`). */
   let castersChosen = false;
   /** What a cascade's pass hid put back; `settled`: the passes are over, the casters chosen by cascade given back too, once (DO NOT walk every caster between two cascades: the next one sets them all). */
@@ -1011,6 +1028,7 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
     maps: () => [...lights.map((light) => light.shadow.map as WebGLRenderTarget | null), ...stores],
     restore,
     dispose() {
+      renderer?.domElement.removeEventListener('webglcontextrestored', contextBack);
       restore();
       for (const store of stores) store?.dispose();
       for (const light of lights) light.dispose();

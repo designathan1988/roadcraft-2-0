@@ -8,13 +8,14 @@ import { BAKE_SAMPLES, bakeMaterialsOf } from '../impostorBake';
 import { FRAMES, FRAME_PX } from '../impostorShaders';
 import type { PicturePart } from '../pictureParts';
 import {
-  COLOUR_MAP_STILL, FRAGMENT_PARS, PICTURE_PX, SET_MODELS, STILL_READ_GLSL, colourNormal, layoutOf, pictureOf, pictureQuad, stillOf, takePictureFrames,
-  vertexMain, vertexPars, waitForPictures,
+  COLOUR_MAP_STILL, FRAGMENT_PARS, PICTURE_PX, SET_MODELS, STILL_READ_GLSL, colourNormal, stillOf, takePictureFrames, vertexMain, vertexPars, waitForPictures,
 } from '../plantImpostors';
+import { layoutOf, pictureOf, pictureQuad } from '../pictureLayout';
 import type { PartKind } from './chunk';
 import { THIN_PROPS } from './facadeProps';
 import { posePart } from './partPose';
 import { THIN_TONE_GLSL } from './thinParts';
+import { onContextRestored } from '../contextRestored';
 
 export { PICTURE_PX } from '../plantImpostors';
 
@@ -257,10 +258,13 @@ ${THIN_TONE_GLSL}\n${STILL_READ_GLSL}\n${DEPTH_GLSL}\n${FRAME_VARYINGS}\n${SUN_G
   const quads = pictures.map((picture, k) => pictureQuad(picture, k, blocks, 2 * picture.radius));
 
   let baked = false;
-  /** The pictures taken, once, between draws: every frame of every model multisampled as the game draws (`BAKE_SAMPLES`), copied onto the atlas. */
+  let unlisten: (() => void) | null = null;
+  /** The pictures taken between draws: every frame of every model multisampled as the game draws (`BAKE_SAMPLES`), copied onto the atlas;
+   *  again after a lost context (`contextRestored.ts`). */
   const bake = (renderer: WebGLRenderer): void => {
     unwait();
     baked = true;
+    unlisten ??= onContextRestored(renderer, () => { unwait = waitForPictures(bake); });
     const camera = new OrthographicCamera(-1, 1, 1, -1, 0.01, 10);
     const scene = new Scene();
     const radii = pictures.map((picture) => ({ value: picture.radius }));
@@ -288,13 +292,14 @@ ${THIN_TONE_GLSL}\n${STILL_READ_GLSL}\n${DEPTH_GLSL}\n${FRAME_VARYINGS}\n${SUN_G
     renderer.shadowMap.autoUpdate = was.shadows;
     for (const m of colours) m.dispose();
   };
-  const unwait = waitForPictures(bake);
+  let unwait = waitForPictures(bake);
   const ready = (): boolean => baked;
   return {
     pictures: models.map(({ kind }, k) => [kind, { quad: quads[k]!, material: drawn, across: 2 * pictures[k]!.radius, ready }] as const),
     textures: atlas.textures,
     dispose() {
       unwait();
+      unlisten?.();
       for (const q of quads) q.dispose();
       drawn.dispose();
       atlas.dispose();

@@ -221,6 +221,7 @@ export interface MassCells {
   drawn(key: string, current?: (levelKey: string) => boolean): boolean;
   /** The cells the frame's budget holds back (`layer.ts` capTriangles): `far` never drawn near, `coarse` never at full detail, until let go there. DO NOT decide them by the eye again next frame: they blinked, capped and brought back by turns. */
   hold(far: ReadonlySet<string>, coarse: ReadonlySet<string>): void;
+  /** Every cell and level let go; each cell's levels as the eye chose them kept for the cell when it is made again (`startOf`). */
   dispose(): void;
 }
 
@@ -352,6 +353,17 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
     if (!cell.mesh) return;
     cell.mesh.visible = !cell.covered && (!cell.near || !detailed.has(key));
     stand(cell.mesh, !cell.covered && !cell.near);
+  };
+  /** Each cell's levels as the eye last chose them, kept by `dispose` for the cells made again after it (a lost context, `layer.ts` refill). DO NOT
+   *  start those near and fine as a cell made before the eye is known: the hysteresis (`HYSTERESIS`) then held in detail every cell within its
+   *  margin, and the town came back from a restore with twice the cells in detail it had (11 for 5: the glass towers' panes where their facade
+   *  level had stood, audit 2026-10-26). */
+  const chosenBefore = new Map<string, { readonly near: boolean; readonly fine: boolean }>();
+  /** A cell made now: near and fine until the eye says otherwise, or as the eye chose it before `dispose`; far under a tile or plate drawn. */
+  const startOf = (key: string, covered: boolean): { readonly near: boolean; readonly fine: boolean } => {
+    const was = chosenBefore.get(key);
+    chosenBefore.delete(key);
+    return { near: !covered && (was?.near ?? true), fine: !covered && (was?.fine ?? true) };
   };
   const setNear = (key: string, cell: Cell, near: boolean, fine = near): void => {
     cell.near = near;
@@ -563,11 +575,12 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
         return;
       }
       const [i, j] = cellIndex(key);
-      // Near until the eye says otherwise (`choose`), as a cell made before the eye is known; far under a tile or plate drawn.
+      // Near until the eye says otherwise (`choose`), as a cell made before the eye is known (`startOf`); far under a tile or plate drawn.
       const covered = coveredAt(i, j);
-      const cell: Cell = { mesh: null, massless: false, landed: false, i, j, ...square(i, j), top, bottom, near: !covered, fine: !covered, pair: false, covered };
+      const start = startOf(key, covered);
+      const cell: Cell = { mesh: null, massless: false, landed: false, i, j, ...square(i, j), top, bottom, near: start.near, fine: start.fine, pair: false, covered };
       cells.set(key, cell);
-      setNear(key, cell, !covered);
+      setNear(key, cell, start.near, start.fine);
     },
     land(key, mass) {
       changed();
@@ -578,8 +591,9 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       // DO NOT upload what came for a tile no longer refined: neither drawn nor wanted, asked again once it is.
       const tile = tiles.get(tileOf(i, j));
       const refused = mass !== null && tile !== undefined && !tile.exposed;
+      const start = known ?? startOf(key, covered);
       const cell: Cell = { mesh: null, massless: mass === null, landed: !refused, i, j, ...square(i, j), top: known?.top ?? 0, bottom: known?.bottom ?? 0,
-        near: known?.near ?? !covered, fine: known?.fine ?? !covered, pair: known?.pair ?? false, covered };
+        near: start.near, fine: start.fine, pair: known?.pair ?? false, covered };
       if (known) lowered(known.top);
       if (refused) released(key);
       else if (mass) {
@@ -1062,7 +1076,11 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       return (!!tile?.coarse && !!tile.mesh && current(tileOf(i, j))) || (!!plate?.coarse && !!plate.mesh && current(plateOf(i, j)));
     },
     dispose() {
-      for (const cell of cells.values()) drop(cell);
+      chosenBefore.clear();
+      for (const [key, cell] of cells) {
+        drop(cell);
+        chosenBefore.set(key, { near: cell.near, fine: cell.fine });
+      }
       cells.clear();
       for (const base of bases.values()) dropBase(base);
       bases.clear();

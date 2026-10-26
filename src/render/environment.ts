@@ -13,6 +13,7 @@ import {
   SphereGeometry,
   Vector3,
   type Camera,
+  type Texture,
   type WebGLRenderer,
   type WebGLRenderTarget,
 } from 'three';
@@ -68,6 +69,8 @@ export interface SceneEnvironment {
   setWeather(overcast: number, flash: number): void;
   /** How much of the light on level ground comes straight from the sun, 0..1 */
   directShare(): number;
+  /** The sky's reflection (the environment map): what the effects panel takes out of the scene and puts back (`renderer.ts`). */
+  environmentMap(): Texture;
   dispose(): void;
 }
 
@@ -153,18 +156,36 @@ export function createEnvironment(
   scene.add(sky);
 
   // The sky doubles as the environment map, so water
-  const pmrem = new PMREMGenerator(renderer);
-  const probeScene = new Scene();
-  const probe = new Mesh(new SphereGeometry(1, 32, 16), skyMaterial.clone());
-  probe.frustumCulled = false;
-  probeScene.add(probe);
-  const envTarget = pmrem.fromScene(probeScene, 0, 0.1, 100);
+  /** The probe's sky: the day sky as made, its colours copied now (three's `ShaderMaterial.clone` copies the uniforms' values). DO NOT clone
+   *  the sky when the map is drawn again: after a restore at dawn it drew the dawn's darker, warmer sky, and the glass towers lost their
+   *  reflection (audit 2026-10-26). */
+  const daySky = skyMaterial.clone();
+  /** The sky drawn into a prefiltered map (three's PMREMGenerator). */
+  const bakeSky = (): WebGLRenderTarget => {
+    const pmrem = new PMREMGenerator(renderer);
+    const probeScene = new Scene();
+    const probe = new Mesh(new SphereGeometry(1, 32, 16), daySky);
+    probe.frustumCulled = false;
+    probeScene.add(probe);
+    const target = pmrem.fromScene(probeScene, 0, 0.1, 100);
+    probe.geometry.dispose();
+    pmrem.dispose();
+    return target;
+  };
+  let envTarget = bakeSky();
   scene.environment = envTarget.texture;
   // Enough for paint, glass and wet or polished surfaces to show the sky.
   scene.environmentIntensity = 0.6;
-  probe.geometry.dispose();
-  (probe.material as ShaderMaterial).dispose();
-  pmrem.dispose();
+  // A lost context takes the map's texels with it, and three never draws a render target again by itself: drawn anew once it is back.
+  // DO NOT keep the old one: three's book of GL objects is new after a restore (r186 `initGLContext`), the old target bound nothing and
+  // every surface lost the sky's light - the town a quarter darker (audit 2026-10-25).
+  const skyLost = (): void => {
+    const was = envTarget;
+    envTarget = bakeSky();
+    if (scene.environment === was.texture) scene.environment = envTarget.texture;
+    was.dispose();
+  };
+  renderer.domElement.addEventListener('webglcontextrestored', skyLost);
 
   // No fog: the map is seen clear to its edges (the player, 2026-10-06).
   scene.fog = null;
@@ -299,12 +320,15 @@ export function createEnvironment(
     setQuality(next) {
       cascades.setEnabled(next.shadows, next.shadowMapSize);
     },
+    environmentMap: () => envTarget.texture,
     dispose() {
+      renderer.domElement.removeEventListener('webglcontextrestored', skyLost);
       scene.onAfterRender = () => {};
       for (const light of cascades.lights) scene.remove(light, light.target);
       scene.remove(sky, hemisphere, ambient, fill);
       sky.geometry.dispose();
       skyMaterial.dispose();
+      daySky.dispose();
       envTarget.dispose();
       scene.environment = null;
       hemisphere.dispose();

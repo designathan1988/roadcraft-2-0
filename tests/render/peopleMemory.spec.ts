@@ -38,8 +38,12 @@ describe("the people's memory", () => {
     const holder = new Holder().add(mesh);
     const before = countMemory(holder).geometryCpuBytes;
     const positions = Array.from(geometry.getAttribute('position').array as Float32Array);
+    // A coarser level drawn from the same vertices (`load`: a geometry a level, the attributes shared), on a layer of its own.
+    const coarser = new InstancedMesh(geometry.clone(), new MeshBasicMaterial(), 1);
+    for (const name of Object.keys(geometry.attributes)) coarser.geometry.setAttribute(name, geometry.getAttribute(name));
+    coarser.layers.set(3);
     let asked = 0;
-    keepPartOnGpu(mesh, own, async () => { asked++; return { position: Float32Array.from(positions), normal: new Float32Array(count * 3), uv: new Float32Array(count * 2), skinIndex: new Uint16Array(count * 4), index: new Uint16Array(geometry.index!.count), lod1: new Uint32Array([0, 1, 2]) }; });
+    keepPartOnGpu(mesh, own, async () => { asked++; return { position: Float32Array.from(positions), normal: new Float32Array(count * 3), uv: new Float32Array(count * 2), skinIndex: new Uint16Array(count * 4), index: new Uint16Array(geometry.index!.count), lod1: new Uint32Array([0, 1, 2]) }; }, [mesh, coarser]);
     // three uploads each (`WebGLAttributes.updateBuffer` calls the attribute's upload callback).
     for (const attribute of Object.values(own)) attribute.onUploadCallback();
     rows.onUploadCallback();
@@ -51,8 +55,13 @@ describe("the people's memory", () => {
     // A context restored: the arrays read back, sent again.
     const version = (geometry.getAttribute('position') as Attribute).version;
     (mesh.userData['refillArrays'] as () => void)();
+    // Not drawn meanwhile (three makes the buffers anew from the arrays at the first draw): every level held off every layer.
+    expect(mesh.layers.mask).toBe(0);
+    expect(coarser.layers.mask).toBe(0);
     await Promise.resolve(); await Promise.resolve();
     expect(asked).toBe(1);
+    expect(mesh.layers.mask).toBe(1);
+    expect(coarser.layers.mask).toBe(1 << 3);
     expect(Array.from(geometry.getAttribute('position').array as Float32Array)).toEqual(positions);
     expect((geometry.getAttribute('position') as Attribute).version).toBeGreaterThan(version);
     expect(coarse.array).not.toBeNull();

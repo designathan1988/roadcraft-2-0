@@ -157,7 +157,7 @@ import { type BuildingPreviewInput, type CutawaySpec, createBuildingLayer } from
 import { buildBuildingMeshes } from './buildings/buildingMesh';
 import { refillArrays } from './mesh/gpuOnly';
 import { gpuBatchContext } from './buildings/gpuBatchedMesh';
-import { wantAllTexels } from './surfaceTextures';
+import { wantAllTexels, whenTexelsRefilled } from './surfaceTextures';
 import { BLUEPRINTS, instantiate } from '@world/buildings/blueprints';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { GEOMETRY_BUDGETS, type GeometryBudget, QUALITY, type QualityLevel, type QualitySettings } from './quality';
@@ -1479,7 +1479,12 @@ export function createSceneRenderer(
   /** Frames left before the walls are laid again after a frame they hid nothing in (a view from above looks over them): the ms of laying them
    *  spared where they pay nothing. Conservative either way: a frame not laid hides nothing. */
   let occlusionIdle = 0;
-  {
+  /** The occluded buildings shown for the cascades' passes, over the cascades' own hook of three's shadow map (`sunCascades.ts`); put on again
+   *  over the new shadow map three makes when a lost context comes back (its restore listener, after the cascades' own). */
+  let occlusionHooked: WebGLRenderer['shadowMap'] | null = null;
+  const hookOcclusionShadows = (): void => {
+    if (occlusionHooked === renderer.shadowMap) return;
+    occlusionHooked = renderer.shadowMap;
     const cascadesRender = renderer.shadowMap.render.bind(renderer.shadowMap);
     renderer.shadowMap.render = (lights, shadowScene, camera) => {
       if (!occludedNow) { cascadesRender(lights, shadowScene, camera); return; }
@@ -1490,16 +1495,22 @@ export function createSceneRenderer(
         buildings.revealOccluded(false);
       }
     };
-  }
+  };
+  hookOcclusionShadows();
   // The town's meshes keep their arrays only until they are on the GPU (`mesh/gpuOnly.ts`)
+  // DO NOT wait for a move to draw after a context restored: the scene draws on demand, and a paused game stayed blank (audit 2026-10-25).
   renderer.domElement.addEventListener('webglcontextrestored', () => {
+    hookOcclusionShadows();
     refillArrays(scene);
     for (const { mesh } of surfaceReuse.chunks?.values() ?? []) refillArrays(mesh);
     farBlocks.refill();
     buildings.refill();
     signs.refill();
     wantAllTexels();
+    askDraw();
   });
+  // The baked surfaces' texels read back (a context restored, a finer anisotropy asked): drawn again with them.
+  whenTexelsRefilled(askDraw);
   /** The buildings' garden plants held round the view (`gardens.ts` createGardenCells). */
   let gardens: GardenCells | null = null;
   const coverKit = createGroundCoverKit();
@@ -2669,9 +2680,8 @@ export function createSceneRenderer(
     }
   };
 
-  /** The effects panel's switches (`setEffects`), and the sky's reflection kept while it is switched off. */
+  /** The effects panel's switches (`setEffects`). */
   let effectSwitches: EffectSwitches = ALL_EFFECTS_ON;
-  let keptEnvironment: Scene['environment'] = null;
   const frameHider = createFrameHider();
   let buildingChoices: BuildingChoices = DEFAULT_BUILDING_CHOICES;
   const buildingSwitcher = createBuildingSwitcher(buildings);
@@ -4178,13 +4188,8 @@ export function createSceneRenderer(
       if (before.shadows !== next.shadows || before.shadowUpdate !== next.shadowUpdate) shadowMoved = true;
       if (before.surfaceDetail !== next.surfaceDetail) materials.setDetail(quality.surfaceDetail && next.surfaceDetail);
       if (before.environmentMap !== next.environmentMap) {
-        if (!next.environmentMap) {
-          keptEnvironment = scene.environment;
-          scene.environment = null;
-        } else {
-          scene.environment = keptEnvironment;
-          keptEnvironment = null;
-        }
+        // The sky's reflection as it is now (`SceneEnvironment.environmentMap`: drawn anew after a context restored), not one kept from before.
+        scene.environment = next.environmentMap ? environment.environmentMap() : null;
         programs = true;
       }
       for (const [name, key] of [['sky-fill', 'skyFill'], ['ambient-floor', 'ambient'], ['fill', 'fillLight']] as const) {

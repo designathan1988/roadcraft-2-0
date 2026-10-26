@@ -263,10 +263,25 @@ export function partArrays(geometry: BufferGeometry, levels: readonly (BufferAtt
 
 /** A body kept on the GPU only (`mesh/gpuOnly.ts`): its static arrays let go once uploaded; a context restored reads them again (`again`, the body read back from its cook). */
 /** DO NOT keep a cooked body's vertices on the page once three has its own copy: nothing reads them after the upload (bounds set, skinning, levels and maiming on the GPU or the skeleton). */
-export function keepPartOnGpu(holder: Object3D, own: Readonly<Record<string, BufferAttribute>>, again: () => Promise<GeometryArrays | null>): void {
+/** `drawn`: every mesh drawn from these arrays (a body's levels share its vertices), held off every layer while they are read back. DO NOT draw
+ *  one before they are back: three makes its buffers anew from them at its first draw after a restore (r186 WebGLAttributes createBuffer), and
+ *  an array of none threw there and lost the whole frame - 25 frames in the second after every restore (audit 2026-10-26). */
+export function keepPartOnGpu(holder: Object3D, own: Readonly<Record<string, BufferAttribute>>, again: () => Promise<GeometryArrays | null>, drawn: readonly Object3D[] = [holder]): void {
   gpuOnlyAttributes(holder, own, () => ({}));
+  /** Each mesh held, and the layers it had (`uploads.ts` gateUntilBuilt holds a mesh so). */
+  const held = new Map<Object3D, number>();
   holder.userData['refillArrays'] = (): void => {
-    void again().then((arrays) => { if (arrays) fillArrays(holder, arrays); }, (error: unknown) => console.error('A body could not be read again after the context was restored', error));
+    for (const mesh of drawn) {
+      if (held.has(mesh)) continue;
+      held.set(mesh, mesh.layers.mask);
+      mesh.layers.disableAll();
+    }
+    void again().then((arrays) => {
+      if (!arrays) return;
+      fillArrays(holder, arrays);
+      for (const [mesh, mask] of held) if (mesh.layers.mask === 0) mesh.layers.mask = mask;
+      held.clear();
+    }, (error: unknown) => console.error('A body could not be read again after the context was restored', error));
   };
 }
 
@@ -598,7 +613,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       // asked: the arrays were gone by then, every clip failed and the job workers were held by them (a bomb's fracture waited behind).
       batch.rigNodes = bakeRig(batch.scene);
       // The body is read back from its cook whenever it is wanted again: its arrays go once on the GPU.
-      keepPartOnGpu(batch.levels[0]!.mesh, statics, () => arraysAgain(model.id));
+      keepPartOnGpu(batch.levels[0]!.mesh, statics, () => arraysAgain(model.id), batch.levels.filter((level) => !level.impostor).map((level) => level.mesh));
       // Its shaders built before it is drawn (`uploads.ts`) - the programs it is really drawn with: a body far off has no face
       const warm = new Group();
       const shadows = new Group();

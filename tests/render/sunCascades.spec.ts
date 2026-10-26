@@ -177,6 +177,7 @@ describe('sun cascades', () => {
     const copies: string[] = [];
     let clears = 0;
     const renderer = {
+      domElement: new EventTarget(),
       capabilities: { reversedDepthBuffer: false },
       clear: () => { clears++; },
       initRenderTarget: () => {},
@@ -248,11 +249,33 @@ describe('sun cascades', () => {
     frame();
     expect(drawn.filter((d) => !d.movers).length).toBe(SUN_CASCADES);
     expect(car.visible).toBe(true);
+    // Still frames until every cascade stands on its store (none drawn whole); then the context is lost and back: the stores hold
+    // nothing, every cascade drawn whole, none put back from them.
+    for (let i = 0; i < 4; i++) {
+      drawn.length = 0;
+      cascades.pass({ changed: false, effects: false, still: true });
+      frame();
+      if (drawn.filter((d) => !d.movers).length === 0) break;
+    }
+    expect(drawn.filter((d) => !d.movers).length).toBe(0);
+    drawn.length = 0; copies.length = 0;
+    // As three r186 does at a restore (`initGLContext`): a new shadow map object, its own `render`; the cascades' passes put over it.
+    const plain = renderer.shadowMap.render;
+    renderer.shadowMap = { needsUpdate: false, render: plain };
+    renderer.domElement.dispatchEvent(new Event('webglcontextrestored'));
+    expect(renderer.shadowMap.render).not.toBe(plain);
+    cascades.pass({ changed: false, effects: false, still: true });
+    frame();
+    expect(drawn.filter((d) => !d.movers).length).toBe(SUN_CASCADES);
+    expect(copies.filter((c) => c.startsWith('>')).length).toBe(0);
+    // Kept again by the hook on the new shadow map: each map copied to its store.
+    expect(copies.filter((c) => c.endsWith('>')).length).toBe(SUN_CASCADES);
   });
 
   it('draws over the store only the parts of a mover that cast, hold instances and reach the texel, not the mover whole', () => {
     const over: Object3D[][] = [];
     const renderer = {
+      domElement: new EventTarget(),
       capabilities: { reversedDepthBuffer: false },
       clear: () => {}, initRenderTarget: () => {}, copyTextureToTexture: () => {},
       getRenderTarget: () => null, getActiveCubeFace: () => 0, getActiveMipmapLevel: () => 0, setRenderTarget: () => {},
@@ -302,6 +325,7 @@ describe('sun cascades', () => {
   it('gives its maps and stores back with the shadows off, and makes them again when they are on (RND-21)', () => {
     const made: string[] = [];
     const renderer = {
+      domElement: new EventTarget(),
       capabilities: { reversedDepthBuffer: false },
       clear: () => {}, initRenderTarget: () => { made.push('store'); }, copyTextureToTexture: () => {},
       getRenderTarget: () => null, getActiveCubeFace: () => 0, getActiveMipmapLevel: () => 0, setRenderTarget: () => {},
@@ -402,6 +426,7 @@ describe('the sun the layers cull their shadows by', () => {
       blitFramebuffer: (...args: number[]) => { blits.push(args); },
     };
     const renderer = {
+      domElement: new EventTarget(),
       capabilities: { reversedDepthBuffer: false },
       getContext: () => gl,
       properties: { get: () => ({ __webglFramebuffer: {} }) },
@@ -512,6 +537,7 @@ describe('the sun the layers cull their shadows by', () => {
     const clears: (number[] | null)[] = [];
     let bound: unknown = null;
     const renderer = {
+      domElement: new EventTarget(),
       capabilities: { reversedDepthBuffer: false },
       getContext: () => ({ READ_FRAMEBUFFER: 1, DRAW_FRAMEBUFFER: 2, DEPTH_BUFFER_BIT: 256, NEAREST: 9728, blitFramebuffer: () => {} }),
       properties: { get: () => ({ __webglFramebuffer: {} }) },

@@ -20,11 +20,17 @@ class SurfaceTextureSet {
   readonly wanted = new Set<string>();
   /** The build's files, fetched anew (`surfaceBakeClient.ts`); null keeps the texels. */
   source: ((names: readonly string[]) => void) | null = null;
+  /** Told once texels read again are handed to their textures (`whenTexelsRefilled`). */
+  refilled: (() => void) | null = null;
 
-  /** DO NOT keep a texture's texels once uploaded: some 250 MB of the page's heap were copies of what the GPU holds. */
+  /** DO NOT keep a texture's texels once uploaded: some 250 MB of the page's heap were copies of what the GPU holds.
+   *  Its source marked not ready (three r186 `Source.dataReady`: the storage made, no texels sent): a send before they are read again - every
+   *  texture is sent anew after a context restored, before `wantAllTexels` has them back - made one `texSubImage3D` of none a level
+   *  ("no bound PIXEL_UNPACK_BUFFER", 30 at once in a loaded run, audit 2026-10-25). */
   readonly letTexelsGo = (texture: Texture): void => {
     if (!this.source) return;
     for (const level of (texture as CompressedTexture).mipmaps) (level as { data: unknown }).data = null;
+    texture.source.dataReady = false;
   };
 
   /** These textures' texels wanted again (to be uploaded anew); once until they come. */
@@ -49,12 +55,22 @@ export function primeSurfaceTextures(loaded: ReadonlyMap<string, CompressedTextu
 
 /** Texels read again: each let-go texture given its own and uploaded anew (it lets them go again after). */
 export function refillSurfaceTexels(loaded: ReadonlyMap<string, CompressedTexture>): void {
+  let any = false;
   for (const [name, fresh] of loaded) {
     const texture = surfaces.byName.get(name);
     if (!texture || !surfaces.wanted.delete(name) || hasTexels(texture)) continue;
     texture.mipmaps = fresh.mipmaps;
+    texture.source.dataReady = true;
     texture.needsUpdate = true;
+    any = true;
   }
+  if (any) surfaces.refilled?.();
+}
+
+/** `listener` told whenever let-go texels came back to their textures: the scene draws on demand, and a paused game drew none with them
+ *  (after a context restored, its surfaces stayed as their storage was made - empty - until something else asked a frame). */
+export function whenTexelsRefilled(listener: () => void): void {
+  surfaces.refilled = listener;
 }
 
 /** Every baked texture let go, its texels needed again (the WebGL context restored). */
