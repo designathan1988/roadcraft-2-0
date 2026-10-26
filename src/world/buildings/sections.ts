@@ -1,4 +1,4 @@
-import { TableItems } from './items';
+import { type FieldWrites, TableItems } from './items';
 import { type RecordRef, RecordTable, type RowPlace, type TableRow, encodeRecords, tableRecords } from './recordTable';
 import { TableRows } from './tableRows';
 import type { Building, BuildingId } from './types';
@@ -10,6 +10,8 @@ export interface TableSections {
   readonly gone: Float64Array;
   readonly replaced: ArrayBufferLike | null;
   readonly added: ArrayBufferLike | null;
+  /** A numeric field written over the table's rows, their records the table's (a building's wear, `TableItems.writeField`); absent: none. */
+  readonly field?: FieldWrites | null;
 }
 /** The buildings' sections (`BuildingStore.sections`). */
 export type BuildingSections = TableSections;
@@ -26,7 +28,8 @@ const tableOf = <V extends TableRow>(records: Iterable<V>, place: RowPlace<V> | 
 export function sectionsOf<K extends number, V extends TableRow>(items: ReadonlyMap<K, V>, place: RowPlace<V> | null = null): TableSections {
   if (items instanceof TableItems) {
     const { gone, replaced, added } = (items as TableItems<K, V>).writes();
-    return { base: items.table?.buffer ?? null, gone: Float64Array.from(gone), replaced: tableOf(replaced.values(), place), added: tableOf(added.values(), place) };
+    const field = (items as TableItems<K, V>).fieldWrites();
+    return { base: items.table?.buffer ?? null, gone: Float64Array.from(gone), replaced: tableOf(replaced.values(), place), added: tableOf(added.values(), place), ...(field ? { field } : {}) };
   }
   return { base: null, gone: new Float64Array(0), replaced: null, added: tableOf(items.values(), place) };
 }
@@ -40,7 +43,7 @@ export function itemsOfSections<K extends number = BuildingId, V extends TableRo
     if (onRead) for (const b of list) onRead(b);
     return list;
   };
-  return TableItems.over<K, V>(base, s.gone as unknown as Iterable<K>, written(s.replaced), written(s.added));
+  return TableItems.over<K, V>(base, s.gone as unknown as Iterable<K>, written(s.replaced), written(s.added), s.field ?? null);
 }
 
 /** How many records the sections hold. */
@@ -51,7 +54,7 @@ export function sectionsSize(s: TableSections): number {
 
 /** The bytes the sections hold. */
 export function sectionsBytes(s: TableSections): number {
-  return (s.base?.byteLength ?? 0) + s.gone.byteLength + (s.replaced?.byteLength ?? 0) + (s.added?.byteLength ?? 0);
+  return (s.base?.byteLength ?? 0) + s.gone.byteLength + (s.replaced?.byteLength ?? 0) + (s.added?.byteLength ?? 0) + (s.field?.pairs.byteLength ?? 0);
 }
 
 /** Where each record of the sections is read, in the store's order (`eachSectionRecord`'s order): a row of the table, of the records replaced or of those added - nothing decoded (the worker's columns, `sim/agents/trafficBuildings.ts`). */
@@ -62,13 +65,17 @@ export function* eachSectionRef(s: TableSections): Generator<RecordRef, void, vo
     for (let row = 0; row < table.rows; row++) replaced.set(table.ids[row]!, row);
   }
   const gone = new Set<number>(s.gone);
+  const fields = new Map<number, number>();
+  if (s.field) for (let k = 0; k + 1 < s.field.pairs.length; k += 2) fields.set(s.field.pairs[k]!, s.field.pairs[k + 1]!);
   if (s.base) {
     const table = new RecordTable(s.base);
     for (let row = 0; row < table.rows; row++) {
       const id = table.ids[row]!;
       if (gone.has(id)) continue;
       const over = replaced.get(id);
-      yield over === undefined ? { buffer: s.base, row } : { buffer: s.replaced!, row: over };
+      if (over !== undefined) { yield { buffer: s.replaced!, row: over }; continue; }
+      const value = fields.get(id);
+      yield value === undefined ? { buffer: s.base, row } : { buffer: s.base, row, field: { name: s.field!.name, value } };
     }
   }
   if (s.added) {

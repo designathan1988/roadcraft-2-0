@@ -76,6 +76,8 @@ const FORMAT = 1;
 const S_PART = 1, S_RUN = 2, S_TABLES = 3;
 const K_BASE = 0, K_GONE = 1, K_REPLACED = 2, K_ADDED = 3, KINDS_A_TABLE = 4;
 const firstKind = (name: DocTable): number => S_TABLES + DOC_TABLES.indexOf(name) * KINDS_A_TABLE;
+/** A table's field written over its rows (`TableSections.field`: its name the section's, its (id, value) pairs the body), after every table's four: the buildings' 23, the landscaping's 24, and on (2026-10-26). */
+const S_FIELDS = S_TABLES + DOC_TABLES.length * KINDS_A_TABLE;
 /** Header words: magic, format, sections; then per section: kind, name length, offset, length. */
 const HEAD = 3, ENTRY = 4;
 const align8 = (n: number): number => Math.ceil(n / 8) * 8;
@@ -99,6 +101,7 @@ export function packImage(image: DocImage): ArrayBuffer {
     if (s.gone.length) sections.push({ kind: first + K_GONE, name: none, bytes: new Uint8Array(s.gone.buffer, s.gone.byteOffset, s.gone.byteLength) });
     add(first + K_REPLACED, s.replaced);
     add(first + K_ADDED, s.added);
+    if (s.field) sections.push({ kind: S_FIELDS + DOC_TABLES.indexOf(name), name: encoder.encode(s.field.name), bytes: new Uint8Array(s.field.pairs.buffer, s.field.pairs.byteOffset, s.field.pairs.byteLength) });
   }
   let at = align8((HEAD + sections.length * ENTRY) * 4);
   const places = sections.map((s) => {
@@ -126,7 +129,7 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
   const count = words[2]!;
   const dir = new Uint32Array(buffer, 0, HEAD + count * ENTRY);
   const parts: DocPart[] = [];
-  interface Read { base: ArrayBufferLike | null; gone: Float64Array; replaced: ArrayBufferLike | null; added: ArrayBufferLike | null }
+  interface Read { base: ArrayBufferLike | null; gone: Float64Array; replaced: ArrayBufferLike | null; added: ArrayBufferLike | null; field?: { name: string; pairs: Float64Array } }
   const tables = {} as Record<DocTable, Read>;
   for (const name of DOC_TABLES) tables[name] = { base: null, gone: new Float64Array(0), replaced: null, added: null };
   for (let i = 0; i < count; i++) {
@@ -136,6 +139,12 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
     const body = new Uint8Array(buffer, bodyAt, length);
     if (kind === S_PART || kind === S_RUN) {
       parts.push({ name: decoder.decode(new Uint8Array(buffer, nameAt, nameLength).slice()), run: kind === S_RUN, bytes: body.slice() });
+      continue;
+    }
+    if (kind >= S_FIELDS) {
+      const owner = DOC_TABLES[kind - S_FIELDS];
+      if (!owner) throw new Error(`[save] a map in binary sections holds an unknown section ${kind}`);
+      tables[owner].field = { name: decoder.decode(new Uint8Array(buffer, nameAt, nameLength).slice()), pairs: new Float64Array(body.slice().buffer) };
       continue;
     }
     const name = DOC_TABLES[Math.floor((kind - S_TABLES) / KINDS_A_TABLE)];

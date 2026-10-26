@@ -722,6 +722,13 @@ export class TableReader<T extends TableRow = Building> {
 export interface RecordRef {
   readonly buffer: ArrayBufferLike;
   readonly row: number;
+  /** A numeric field written over the row's record, read in its place (a building's wear: `TableItems.writeField`); absent: the row as the table holds it. */
+  readonly field?: { readonly name: string; readonly value: number };
+}
+
+/** A row's record with the field its ref writes over it (`RecordRef.field`): a copy of its own, the members shared. */
+export function withField<T extends TableRow>(record: T, field: RecordRef['field']): T {
+  return field ? { ...record, [field.name]: field.value } : record;
 }
 
 /** Each record's place in a table: its tile's (`tableRecords`) or its own, written once when first asked (a record is replaced, never edited). */
@@ -731,6 +738,12 @@ const refs = new WeakMap<object, RecordRef>();
 export function readRow<T extends TableRow = Building>(reader: TableReader<T>, row: number): T {
   const b = reader.record(row);
   refs.set(b, { buffer: reader.table.buffer, row });
+  return b;
+}
+
+/** A record read on the page from a ref (`TableItems` a row with a field written over it): `refOf` hands the job that ref, never the record encoded again. */
+export function readFrom<T extends TableRow>(b: T, ref: RecordRef): T {
+  refs.set(b, ref);
   return b;
 }
 
@@ -764,6 +777,6 @@ export function* eachRecord(refs: readonly RecordRef[]): Generator<Building, voi
   for (const ref of refs) {
     let reader = readers.get(ref.buffer);
     if (!reader) readers.set(ref.buffer, reader = new RecordTable(ref.buffer).reader());
-    yield reader.record(ref.row);
+    yield withField(reader.record(ref.row), ref.field);
   }
 }

@@ -90,6 +90,11 @@ export class TableRows<K extends number = BuildingId, T extends TableRow = Build
     return b;
   }
 
+  /** One field of a row's record, the rest passed over, nothing decoded (`TableReader.field`): undefined where the record has none. */
+  field(row: number, name: string): unknown {
+    return this.reader.field(row, name);
+  }
+
   /** How many rows' records are decoded and held somewhere now (the LRU of `get` among them): what the table saves is what is not. */
   held(): number {
     let n = 0;

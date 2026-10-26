@@ -1,5 +1,5 @@
-import type { Building } from '@world/buildings/types';
-import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow } from '@world/buildings/recordTable';
+import type { BuildingId } from '@world/buildings/types';
+import { RecordTable, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow } from '@world/buildings/recordTable';
 import { type Change, type ChangeRect, DOC_CHANGE_KINDS } from '@world/changes';
 import { JournalCursor } from '@world/derived';
 import { GLOBAL_PARTS, type GlobalPart, type RoadDoc, type SerializedDoc } from '@world/doc';
@@ -310,11 +310,9 @@ export class TiledSaves {
     const takenKeyed = new Map<KeyedName, { readonly dirty: Set<string>; readonly wear: Set<string> }>();
     const takenLists = new Map<ListName, Set<string>>();
     const nextStored = new Map<LayerName, Set<string>>();
-    // The map's tables the rows are copied from, and their readers (a building's wear read from its row alone), one each for this save.
+    // The map's tables the rows are copied from, one each for this save.
     const tables = new Map<ArrayBufferLike, RecordTable>();
-    const readers = new Map<ArrayBufferLike, TableReader>();
     const tableOf = (buffer: ArrayBufferLike): RecordTable => { let t = tables.get(buffer); if (!t) tables.set(buffer, t = new RecordTable(buffer)); return t; };
-    const readerOf = (buffer: ArrayBufferLike): TableReader => { let r = readers.get(buffer); if (!r) readers.set(buffer, r = tableOf(buffer).reader()); return r; };
     for (const name of KEYED_NAMES) {
       const spec = KEYED[name], st = this.keyed[name];
       const { dirty, wear } = st;
@@ -326,14 +324,10 @@ export class TiledSaves {
       for (const square of wear) if (!dirty.has(square) && st.stored.has(square)) asked.add(square);
       const members = asked.size ? this.membersOf(doc, name, asked) : new Map<string, number[]>();
       const items = spec.items(doc);
-      /** A square's wears: each building's id and decay, the decay of a row of the table read from the row alone (`TableReader.field`). */
+      /** A square's wears: each building's id and decay, nothing decoded for a row of the table (`BuildingStore.decayOf`: the wear written over it, or the row's own field). */
       const wears = (ids: readonly number[]): ArrayBuffer => {
         const pairs: number[] = [];
-        for (const id of ids) {
-          const ref = spec.ref?.(doc, id);
-          const decay = ref ? readerOf(ref.buffer).field(ref.row, 'decay') : (items.get(id) as Building | undefined)?.decay;
-          pairs.push(id, typeof decay === 'number' ? decay : 0);
-        }
+        for (const id of ids) pairs.push(id, doc.buildings.decayOf(id as BuildingId));
         return wearFrame(pairs);
       };
       for (const square of dirty) {

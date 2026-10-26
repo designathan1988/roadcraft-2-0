@@ -69,7 +69,8 @@ describe('the town filed from the table\'s summary columns', () => {
     const copy = new TableWriter<Building>(false, null, (b) => storedBounds(b), buildingSummaryColumns());
     copy.copyRows(table, [3, 0, table.rows - 1]);
     const out = new RecordTable(copy.finish().buffer);
-    expect(Array.from(out.summary!)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8].flatMap((c) => [3, 0, table.rows - 1].map((row) => table.summary![c * table.rows + row]!)));
+    const columns = Array.from({ length: SUMMARY_WIDTH }, (_, c) => c);
+    expect(Array.from(out.summary!)).toEqual(columns.flatMap((c) => [3, 0, table.rows - 1].map((row) => table.summary![c * table.rows + row]!)));
   });
 
   it('marks a signature exactly where the layer draws one, and a flag where the mesh flies one', () => {

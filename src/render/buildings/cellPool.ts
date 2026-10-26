@@ -418,7 +418,8 @@ export class CellPool {
       writer.copyRows(table, [e.record.row]);
     }
     const buffer = tableBytes(writer.finish().buffer);
-    return entries.map((e, row) => ({ ...e, record: { buffer, row } }));
+    // The field written over a row (a building's wear, `RecordRef.field`) goes with it: the row copied is the table's.
+    return entries.map((e, row) => ({ ...e, record: e.record.field ? { buffer, row, field: e.record.field } : { buffer, row } }));
   }
 
   /** What every job carries, on the page or off it. */

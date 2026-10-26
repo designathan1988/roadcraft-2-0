@@ -3,7 +3,7 @@ import { buildingHeight, storedBounds } from '@world/buildings/geometry';
 import type { Building } from '@world/buildings/types';
 import {
   MARK_FLIES, MARK_SIGNATURE, SUMMARY_GROUND_MAX_X, SUMMARY_GROUND_MAX_Y, SUMMARY_GROUND_MIN_X, SUMMARY_GROUND_MIN_Y, SUMMARY_HEIGHT, SUMMARY_MARKS,
-  SUMMARY_MASS_SIG, SUMMARY_SIG, fliesFlag, isSignature, recordDigests,
+  SUMMARY_MASS_SIG, SUMMARY_SIG, fliesFlag, isSignature, recordDigests, wornDigest,
 } from '@world/buildings/summary';
 import { BATCH_CELL } from './layerCells';
 
@@ -113,10 +113,11 @@ export class TownColumns {
 
   /**
    * A row of the town's table put in its columns from the table's own (its place, its box, its summary: `buildings/summary.ts`), its record
-   * never decoded: the same numbers `file` reads out of the record. `summary` holds column c of the row at `summary[c * rows + row]`.
+   * never decoded: the same numbers `file` reads out of the record. `summary` holds column c of the row at `summary[c * rows + row]`; `wear`,
+   * the wear written over the row (`TableItems.writeField`, NaN: none), its digest worked out of the one without its wear (`wornDigest`).
    */
   fileRow(id: number, x: number, y: number, box: { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number },
-    summary: Float64Array, rows: number, row: number): number {
+    summary: Float64Array, rows: number, row: number, wear = Number.NaN): number {
     const slot = this.slots.take(id);
     const at = (c: number): number => summary[c * rows + row]!;
     this.ids[slot] = id;
@@ -125,7 +126,7 @@ export class TownColumns {
     this.height[slot] = at(SUMMARY_HEIGHT);
     this.groundMinX[slot] = at(SUMMARY_GROUND_MIN_X); this.groundMinY[slot] = at(SUMMARY_GROUND_MIN_Y);
     this.groundMaxX[slot] = at(SUMMARY_GROUND_MAX_X); this.groundMaxY[slot] = at(SUMMARY_GROUND_MAX_Y);
-    this.sig[slot] = at(SUMMARY_SIG);
+    this.sig[slot] = Number.isNaN(wear) ? at(SUMMARY_SIG) : wornDigest(at(SUMMARY_MASS_SIG), wear);
     this.massSig[slot] = at(SUMMARY_MASS_SIG);
     const marks = at(SUMMARY_MARKS);
     let flags = (this.flags[slot]! & (SHOWN | KEPT | FILED)) | KNOWN;

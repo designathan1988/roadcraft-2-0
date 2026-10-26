@@ -3,7 +3,7 @@ import { Digest } from '@core/digest';
 
 import type { RoadDoc } from '@world/doc';
 import type { GroundAt, PavedAt } from '@world/buildings/foundation';
-import type { RecordRef } from '@world/buildings/recordTable';
+import type { RecordRef, RecordTable } from '@world/buildings/recordTable';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { CellFiling } from '@world/cells';
 import { type BuildingMeshes, type LotGround, buildBuildingMeshes, emitChunk, kitBoxes, lotGroundAgain, signatureFloorOf } from './buildingMesh';
@@ -106,8 +106,17 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   const slotNow = (id: number): number => {
     const slot = columns.slotOf(id);
     if (slot >= 0 && columns.has(slot, KNOWN)) return slot;
+    // A row of the table from its columns (a building that only wore: `BuildingStore.summaryOf`), nothing decoded; a record written on the page read.
+    const row = docNow?.buildings.summaryOf(id as BuildingId);
+    if (row) return fileSummary(id, row.table, row.at, row.wear);
     const b = docNow?.buildings.get(id as BuildingId);
     return b ? columns.file(b) : -1;
+  };
+  /** A row of the town's table filed from its columns (`TownColumns.fileRow`). */
+  const fileSummary = (id: number, table: RecordTable, at: number, wear: number): number => {
+    const boxes = table.boxes!;
+    return columns.fileRow(id, table.xs[at]!, table.ys[at]!,
+      { minX: boxes.minX[at]!, minY: boxes.minY[at]!, maxX: boxes.maxX[at]!, maxY: boxes.maxY[at]! }, table.summary!, table.rows, at, wear);
   };
   /** A record's digest: its columns' when it is the document's, else worked out (a building drawn on its own). */
   const sigOf = (b: Building): number => {
@@ -831,11 +840,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
             columns.set(slot, SHOWN, shown);
             if (shown && inCell(id)) solid.push(slot);
           };
-          doc.buildings.eachSummarised((id, table, at) => {
-            const boxes = table.boxes!;
-            placed(id, columns.fileRow(id, table.xs[at]!, table.ys[at]!,
-              { minX: boxes.minX[at]!, minY: boxes.minY[at]!, maxX: boxes.maxX[at]!, maxY: boxes.maxY[at]! }, table.summary!, table.rows, at));
-          }, (b) => placed(b.id, columns.file(b)));
+          doc.buildings.eachSummarised((id, table, at, wear) => placed(id, fileSummary(id, table, at, wear)), (b) => placed(b.id, columns.file(b)));
           town.reset(solid);
           // The ids no longer in the document (not filed again by the walk): what was kept of them let go, their slots with it.
           const goneIds: number[] = [];
