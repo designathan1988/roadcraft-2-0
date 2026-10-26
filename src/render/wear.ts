@@ -135,6 +135,28 @@ export function createWearField(seed = 0x9e3779b9): WearField {
   };
 }
 
+/**
+ * The field read through a cubic B-spline, four bilinear reads (Sigg and Hadwiger, "Fast Third-Order Texture Filtering", GPU Gems 2 ch. 20,
+ * https://developer.nvidia.com/gpugems/gpugems2/part-iii-high-quality-rendering/chapter-20-fast-third-order-texture-filtering). DO NOT read it
+ * bilinearly: a texel is 5 m, and the wheels' wear came out as dark squares on the world's grid, diamonds on a road at 45 degrees, every lane
+ * blotched (the owner: the roads' texture looked strange, 2026-10-26).
+ */
+const WEAR_CUBIC = `
+        vec4 wearCubic(vec2 uv) {
+          vec2 size = vec2(textureSize(uWear, 0));
+          vec2 st = uv * size - 0.5;
+          vec2 i = floor(st), f = st - i;
+          vec2 f2 = f * f, f3 = f2 * f;
+          vec2 w0 = (1.0 - 3.0 * f + 3.0 * f2 - f3) / 6.0;
+          vec2 w1 = (4.0 - 6.0 * f2 + 3.0 * f3) / 6.0;
+          vec2 w2 = (1.0 + 3.0 * f + 3.0 * f2 - 3.0 * f3) / 6.0;
+          vec2 w3 = f3 / 6.0;
+          vec2 g0 = w0 + w1, g1 = w2 + w3;
+          vec2 h0 = (i - 0.5 + w1 / g0) / size, h1 = (i + 1.5 + w3 / g1) / size;
+          return g0.y * (g0.x * texture(uWear, h0) + g1.x * texture(uWear, vec2(h1.x, h0.y)))
+            + g1.y * (g0.x * texture(uWear, vec2(h0.x, h1.y)) + g1.x * texture(uWear, h1));
+        }`;
+
 /** The wear's texture and window, its world position from the vertex shader and its noise (`applyRoadWear`). */
 function wearDeclared(shader: WebGLProgramParametersWithUniforms, field: WearField): void {
     Object.assign(shader.uniforms, { uWear: { value: field.texture }, uWearWindow: field.window });
@@ -151,8 +173,9 @@ function wearDeclared(shader: WebGLProgramParametersWithUniforms, field: WearFie
           vec2 i = floor(p), f = fract(p);
           f = f * f * (3.0 - 2.0 * f);
           return mix(mix(wearHash(i), wearHash(i + vec2(1.0, 0.0)), f.x), mix(wearHash(i + vec2(0.0, 1.0)), wearHash(i + vec2(1.0, 1.0)), f.x), f.y);
-        }`);
+        }${WEAR_CUBIC}`);
 }
+
 
 /** Where the pixel is in the wear's window, and whether it is in it. */
 const WEAR_AT = `
@@ -164,7 +187,7 @@ const WEAR_AT = `
 /** A channel's wear read and inked: 0 the wheels' on a carriageway, 1 the feet's on a footway. */
 function wearInk(channel: 0 | 1): string {
   return `
-          float wear = texture2D(uWear, wearAt / uWearWindow.z)[${channel}] * wearOn;
+          float wear = wearCubic(wearAt / uWearWindow.z)[${channel}] * wearOn;
           ${channel === 0 ? `
           // Tyre rubber darkens the tracks; hard-used, the surface breaks up.
           diffuseColor.rgb *= 1.0 - 0.38 * smoothstep(0.0, 0.8, wear);

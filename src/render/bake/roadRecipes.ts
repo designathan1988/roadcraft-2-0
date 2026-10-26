@@ -25,6 +25,12 @@ function cellHash(x: number, y: number, seed: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4_294_967_296;
 }
 
+/** 0 under `a`, 1 over `b`, the Hermite curve between (GLSL's smoothstep). */
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
 /** The asphalt; `raised` its paler tone for raised crossings, whose colour alone is baked (it shares the road's normal and roughness). */
 function asphaltRecipe(raised: boolean): SurfaceRecipe {
   const grain = makeNoise(0x51ed);
@@ -50,29 +56,29 @@ function asphaltRecipe(raised: boolean): SurfaceRecipe {
       // Exposed stones: light flecks of aggregate in the dark binder.
       const stone = fbm(grain, u * 420 + 3, v * 420 + 9, 420, 1);
       const flecks = stone > 0.74 ? (stone - 0.74) * 0.5 : stone < 0.2 ? -0.02 : 0;
-      // Patches: rectangles of newer, darker asphalt where a trench was filled.
-      const pu = Math.floor(u * 5), pv = Math.floor(v * 3);
-      const patchy = cellHash(pu, pv, 0x91c) > 0.82 && (u * 5 - pu) > 0.15 && (u * 5 - pu) < 0.75 && (v * 3 - pv) > 0.2 && (v * 3 - pv) < 0.6;
+      // The repairs fade in over a band of the noise. DO NOT cut them at one value, nor lay trench rectangles in the tile: the texture repeats
+      // every `ASPHALT_TILE` on every street, and their hard edges drew a lattice of dark squares and pale blots over the city, diamonds on a
+      // road at 45 degrees (the owner: the roads' texture looked strange, 2026-10-26).
+      const repaired = smoothstep(0.66, 0.84, repair);
       const tone = raised
         ? RAISED_ASPHALT_BASE +
           (chips - 0.5) * 0.03 +
           (wear - 0.5) * 0.032 +
-          (repair > 0.74 ? 0.018 : 0) -
+          repaired * 0.018 -
           drip
         : ASPHALT_BASE +
           (chips - 0.5) * 0.055 +
           flecks +
           (wear - 0.5) * 0.04 +
-          (repair > 0.74 ? 0.022 : 0) -
-          (patchy ? 0.03 : 0) -
+          repaired * 0.022 -
           drip;
       out.r = tone;
       out.g = tone * 1.01;
       out.b = tone * 1.05;
       // Only the aggregate is relief.
       out.h = chips;
-      // Polished wheel tracks are smoother than the rest of the lane.
-      out.rough = 0.9 - (wear > 0.62 ? 0.09 : 0) - chips * 0.05 - drip * 2;
+      // Polished wheel tracks are smoother than the rest of the lane, over a band of the wear as the repairs.
+      out.rough = 0.9 - smoothstep(0.56, 0.7, wear) * 0.09 - chips * 0.05 - drip * 2;
     },
   };
 }

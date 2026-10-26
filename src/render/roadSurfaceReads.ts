@@ -169,13 +169,16 @@ export function passSurfaces(pass: PassDesc, reads: SurfaceReads): SurfaceRead[]
   const suffix = pass.id === 'ground' ? '' : `-${pass.id}`;
 
   /** A point's place on the carriageway's road, for its lines and the marks of its use (`mesh/roadEdges.ts`, `roadPaint.ts`): across and along
-   *  its road, and the road's place in the paint's table (its id); -1 off any road's span between its mouths (a junction's plate). */
+   *  its road, and the road's place in the paint's table (its id); -1 on no road (a junction's plate has its own, `asphaltPlate`).
+   *  DO NOT give a point past its road's mouth -1: the shader reads the slot of a triangle's last corner alone (`flat`), and a road's strip is one quad
+   *  from mouth to mouth, a corner of it past the mouth where the mouth is skewed (9 m along against a span from 15 m, an avenue of the large city):
+   *  half of every such road drew no line. The lines and marks are cut to their painted stretch in the shader (`CARRIAGEWAY_PAINT` inStretch). */
   const asphaltSection: TintFn = (x, y, out) => {
     const sample = field.roadAt(x, y, only, pass.segment !== undefined);
     const look = sample.segment === undefined ? undefined : reads.look(sample.segment);
     out[0] = sample.across;
     out[1] = sample.along;
-    out[2] = !look || look.paint === undefined || offSpan(sample.along, look) ? -1 : look.paint;
+    out[2] = !look || look.paint === undefined ? -1 : look.paint;
   };
   /** The same in the frame of the road nearest (pickX, pickY) (`TileMeshOptions.sectionFrame`): a triangle whose corners lie nearer two roads
    *  (the wedge two roads share at a bend) is read all of it on one, so its lines do not run between the two roads' frames. */
@@ -186,7 +189,7 @@ export function passSurfaces(pass: PassDesc, reads: SurfaceReads): SurfaceRead[]
     const frame = field.surfaceFrameAt(x, y, only, pickX, pickY, pass.segment !== undefined, pick.segment);
     out[0] = frame.across;
     out[1] = frame.along;
-    out[2] = look.paint === undefined || offSpan(frame.along, look) ? -1 : look.paint;
+    out[2] = look.paint === undefined ? -1 : look.paint;
   };
   /** A vertex of a junction's plate (`TileMeshOptions.plateSection`): its node's slot as `-2 - slot` (`roadMarks.ts`: a plate's marks, never a
    *  road's lines), the node at the end of the road nearest it that it lies before (a plate's point is before its legs' mouths along each of them). */

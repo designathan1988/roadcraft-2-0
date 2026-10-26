@@ -57,15 +57,9 @@ function oldCanvasBake(recipe: SurfaceRecipe): { map: Uint8ClampedArray; normal:
   return { map, normal, rough: roughTexels };
 }
 
-/** The old road bake's per-slab hash (`materials.ts` `cellHash` at 3adccde). */
-function oldCellHash(x: number, y: number, seed: number): number {
-  let h = Math.imul(x | 0, 0x27d4eb2d) ^ Math.imul(y | 0, 0x165667b1) ^ seed;
-  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
-  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
-  return ((h ^ (h >>> 16)) >>> 0) / 4_294_967_296;
-}
-
-/** The road's asphalt colour and, written beside it, the raised crossings' (`materials.ts` `asphaltBake` and its `raisedPixels` at 3adccde). */
+/** The road's asphalt colour and, written beside it, the raised crossings' (`materials.ts` `asphaltBake` and its `raisedPixels` at 3adccde), with
+ *  the repairs faded in over a band of their noise and no trench rectangles (`bake/roadRecipes.ts`: their hard edges repeated with the tile drew a
+ *  lattice of squares over every street, the owner, 2026-10-26). */
 function oldAsphalt(): { road: Uint8ClampedArray; raised: Uint8ClampedArray } {
   const grain = makeNoise(0x51ed);
   const macro = makeNoise(0x9a17);
@@ -85,10 +79,9 @@ function oldAsphalt(): { road: Uint8ClampedArray; raised: Uint8ClampedArray } {
       const drip = stain > 0.66 ? (stain - 0.66) * 0.12 : 0;
       const stone = fbm(grain, u * 420 + 3, v * 420 + 9, 420, 1);
       const flecks = stone > 0.74 ? (stone - 0.74) * 0.5 : stone < 0.2 ? -0.02 : 0;
-      const pu = Math.floor(u * 5), pv = Math.floor(v * 3);
-      const patchy = oldCellHash(pu, pv, 0x91c) > 0.82 && (u * 5 - pu) > 0.15 && (u * 5 - pu) < 0.75 && (v * 3 - pv) > 0.2 && (v * 3 - pv) < 0.6;
-      const tone = 0.215 + (chips - 0.5) * 0.055 + flecks + (wear - 0.5) * 0.04 + (repair > 0.74 ? 0.022 : 0) - (patchy ? 0.03 : 0) - drip;
-      const raisedTone = 0.245 + (chips - 0.5) * 0.03 + (wear - 0.5) * 0.032 + (repair > 0.74 ? 0.018 : 0) - drip;
+      const r = Math.min(1, Math.max(0, (repair - 0.66) / 0.18)), repaired = r * r * (3 - 2 * r);
+      const tone = 0.215 + (chips - 0.5) * 0.055 + flecks + (wear - 0.5) * 0.04 + repaired * 0.022 - drip;
+      const raisedTone = 0.245 + (chips - 0.5) * 0.03 + (wear - 0.5) * 0.032 + repaired * 0.018 - drip;
       const at = (y * size + x) * 4;
       road[at] = Math.round(Math.min(1, Math.max(0, tone * 1.0)) * 255);
       road[at + 1] = Math.round(Math.min(1, Math.max(0, tone * 1.01)) * 255);

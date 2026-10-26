@@ -142,8 +142,9 @@ export interface RoadSurfaces {
 }
 
 /** The version of how a piece is made (`roads/`): a part's digest holds it, so the parts kept by an older base (the store, `derivedCache.ts`)
- *  are never read for this one. 3: a part's bundle carries its footprint (`roads/pieceMesh.ts` FOOTPRINT). */
-const SURFACE_BASE = 3;
+ *  are never read for this one. 3: a part's bundle carries its footprint (`roads/pieceMesh.ts` FOOTPRINT). 4: a corner's footway closed on one back
+ *  point (`junctionPiece.ts` footwayOf), a road's strip carrying its slot past its mouths (`roadSurfaceReads.ts` asphaltSection). */
+const SURFACE_BASE = 4;
 /** How far over a tunnel's road the ground may stand for its footprint to cut it (the middle of the band where the shaping lets the hill close
  *  over it, `world/elevation.ts` roadShapeAt): past it the road bores under the hill and the terrain is left whole over it. */
 const TUNNEL_OPEN = (TUNNEL_ROOF + TUNNEL_BORE) / 2;

@@ -4282,11 +4282,13 @@ booted = true;
 requestDraw();
 
 // A development shortcut for the browser checks and a player testing the small city: ?city=small&seed=7 opens it, whatever the
-// autosave holds. The probes' own `generateCity` asks the same (`openSmallCity`).
+// autosave holds; ?city=large&radius=1524 a large city of that radius in metres (three times the large city's area, made on the spot: no
+// cooked file holds it). The probes' own `generateCity` asks the same (`openSmallCity`, `openLargeCity`).
 if (PROBES) {
   const query = new URLSearchParams(location.search);
   const city = query.get('city');
   const seed = Number(query.get('seed') ?? 7);
+  const radius = Number(query.get('radius') ?? Number.NaN);
   if (city === 'small') openSmallCity(Number.isFinite(seed) ? seed : 7);
-  else if (city === 'large') openLargeCity(Number.isFinite(seed) ? seed : 7);
+  else if (city === 'large') openLargeCity(Number.isFinite(seed) ? seed : 7, Number.isFinite(radius) && radius > 0 ? m(radius) : undefined);
 }

@@ -463,10 +463,12 @@ function faceOf(corner: Corner): Geom | null {
 }
 
 /** A corner's footway: its kerb's line, then its outer run back (the next leg's outer mouth corner, the footway's back corner, this leg's), one polygon;
- *  its mouths the two edges across the legs; walled on its outer side on a deck alone. */
+ *  its mouths the two edges across the legs; walled on its outer side on a deck alone. A return as tight as the footway is wide closes its back on one
+ *  point, both mouth corners there (`squareRun` cleaned): the kerb's line and that point. DO NOT ask two points of the back: such a corner (a local
+ *  street's 3 m return under a 3 m footway) had none, and the terrain's grass showed through it (the owner, 2026-10-26). */
 function footwayOf(corner: Corner): Geom | null {
   const outer = corner.sidewalk;
-  if (!outer || outer.length < 2) return null;
+  if (!outer || outer.length < 1) return null;
   const ring = [...corner.kerb, ...[...outer].reverse()];
   const k = corner.kerb.length, count = ring.length;
   if (count < 3) return null;
