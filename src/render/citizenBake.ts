@@ -84,14 +84,14 @@ export function setSliceMs(ms: number): void {
 let sliceStart = 0;
 
 /** Lets the frame loop in once this stretch of baking has run for `SLICE_MS`. */
-export async function breathe(): Promise<void> {
+async function breathe(): Promise<void> {
   if (performance.now() - sliceStart < SLICE_MS) return;
   await afterFrame();
   sliceStart = performance.now();
 }
 
 /** Resolves just after the next frame has been drawn: one slice of work per frame. */
-export function afterFrame(): Promise<void> {
+function afterFrame(): Promise<void> {
   if (typeof requestAnimationFrame !== 'function') return new Promise<void>(resolve => setTimeout(resolve, 0));
   return new Promise<void>(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }
@@ -164,7 +164,7 @@ export async function bakeFrames(body: BakeRig, pose: (time: number) => void, du
 }
 
 /** Bakes the Rocketbox walk onto one body: `amplitude` untouched is the capture as recorded, anything less the elder's. */
-export async function bakeWalk(body: BakeRig, sex: WalkSex, amplitude?: WalkAmplitude, hand?: 'L' | 'R', carry = false): Promise<ClipFrames> {
+async function bakeWalk(body: BakeRig, sex: WalkSex, amplitude?: WalkAmplitude, hand?: 'L' | 'R', carry = false): Promise<ClipFrames> {
   body.reset();
   const walk = neutralWalkFor(body.rig, body.mesh, sex, amplitude);
   const duration = walkDuration(sex);
@@ -178,7 +178,7 @@ export async function bakeWalk(body: BakeRig, sex: WalkSex, amplitude?: WalkAmpl
 }
 
 /** Bakes one library clip onto one body, with its travel and turn curves resampled to the baked frames (`gaitClipOf`). */
-export async function bakeLibraryClip(body: BakeRig, clip: LibraryClip, amplitude?: WalkAmplitude, name?: string, carry = false): Promise<ClipFrames> {
+async function bakeLibraryClip(body: BakeRig, clip: LibraryClip, amplitude?: WalkAmplitude, name?: string, carry = false): Promise<ClipFrames> {
   body.reset();
   const transfer = clipTransferFor(body.rig, body.mesh, clip, amplitude);
   const room = LIMB_ROOM[name ?? ''] ?? LIMB_ROOM_DEFAULT;

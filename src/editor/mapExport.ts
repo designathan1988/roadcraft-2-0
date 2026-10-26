@@ -3,7 +3,7 @@ import { type SavedSettings, withUnit } from './persistence';
 import { FILE_MAGIC, FILE_DOC, FILE_SETTINGS, framePieces, jsonBytes } from './saveBinary';
 
 /** The map file's name: a binary `.roadcraft` file (`persistence.ts` `importFromFile` reads it back, and the JSON files before it). */
-export const MAP_FILE_NAME = 'roadcraft-map.roadcraft';
+const MAP_FILE_NAME = 'roadcraft-map.roadcraft';
 
 /** A map file (Save map) as the pieces of one Blob: the frame's header, the settings' JSON (with the unit its camera is in, as the autosave stamps it), the map's binary sections (`RoadDoc.toBinary`) - never one text of the map, nor one buffer of the file. */
 export function mapFileBlob(doc: RoadDoc, settings?: SavedSettings): Blob {
@@ -34,7 +34,7 @@ export function exportToFile(
 }
 
 /** A file offered to the player to save (a link to it clicked): whether it was. */
-export function offerFile(blob: Blob, filename: string): boolean {
+function offerFile(blob: Blob, filename: string): boolean {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

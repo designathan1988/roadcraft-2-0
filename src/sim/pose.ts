@@ -49,7 +49,7 @@ export function vehiclePose(w: SimWorld, v: Vehicle, alpha: number): Pose | null
 }
 
 /** `vehiclePose` into `out`; false where there is none. */
-export function vehiclePoseInto(w: SimWorld, v: Vehicle, alpha: number, out: PoseOut): boolean {
+function vehiclePoseInto(w: SimWorld, v: Vehicle, alpha: number, out: PoseOut): boolean {
   // Off the road (parked, or manoeuvring to or from a bay): its own pose.
   const free = v.free;
   const t = clamp(alpha, 0, 1);

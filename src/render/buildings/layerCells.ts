@@ -117,14 +117,14 @@ const COVER_VERSION = 1;
 export const coverPolygons = (b: Building): Vec2[][] => [...solidFootprints(b, PLANT_MARGIN), ...footprintRects(b)];
 
 /** One cell of the cover: the polygons reaching it, flat (x, y pairs; polygon k's points from `starts[k]` to `starts[k + 1]`), filed by bucket. */
-export interface CoverCell {
+interface CoverCell {
   readonly xy: Float64Array;
   readonly starts: Uint32Array;
   readonly buckets: ReadonlyMap<number, Uint32Array>;
 }
 
 /** What the cover index reads: the document's buildings and its diary. */
-export interface CoverSource {
+interface CoverSource {
   readonly buildings: BuildingStore;
   readonly changes: ChangeJournal;
 }
@@ -146,7 +146,7 @@ const bucketKey = (i: number, j: number): number => i * 100_003 + j;
 const EMPTY_COVER: CoverCell = Object.freeze({ xy: new Float64Array(0), starts: new Uint32Array(1), buckets: Object.freeze(new Map<number, Uint32Array>()) });
 
 /** A cell's cover from the buildings reaching it: a pure function of the cell and the document. */
-export function coverCell(buildings: BuildingStore | null, rect: ChangeRect): CoverCell {
+function coverCell(buildings: BuildingStore | null, rect: ChangeRect): CoverCell {
   if (!buildings) return EMPTY_COVER;
   const near = buildings.near(rect[0] - COVER_PAD, rect[1] - COVER_PAD, rect[2] + COVER_PAD, rect[3] + COVER_PAD);
   if (near.length === 0) return EMPTY_COVER;

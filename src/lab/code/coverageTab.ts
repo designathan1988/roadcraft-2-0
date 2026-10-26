@@ -23,7 +23,7 @@ interface FileRow {
 const ENTRY = '/src/main.ts';
 const COMMAND = 'node scripts/lab/coverage.mjs --seconds=60 --city --views';
 
-export interface CoverageResult {
+interface CoverageResult {
   readonly modules: number;
   readonly declared: number;
   readonly seen: number;

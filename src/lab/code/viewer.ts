@@ -13,7 +13,7 @@ export interface CodeViewer {
 const AROUND = 14;
 
 /** Asks the dev server to open `file` at `line` in the editor it finds running (or $LAUNCH_EDITOR). */
-export function openInEditor(file: string, line: number, column: number): void {
+function openInEditor(file: string, line: number, column: number): void {
   const path = file.replace(/^\//, '');
   void fetch(`/__open-in-editor?file=${encodeURIComponent(`${path}:${line}:${column}`)}`).catch((error: unknown) => console.warn('lab code: editor not opened', error));
 }

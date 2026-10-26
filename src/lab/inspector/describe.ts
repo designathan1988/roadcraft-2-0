@@ -20,7 +20,7 @@ const BLENDINGS: Readonly<Record<number, string>> = { [NoBlending]: 'No', [Norma
 const FORMATS: Readonly<Record<number, string>> = { [RGBAFormat]: 'RGBA', [RedFormat]: 'Red', [RGFormat]: 'RG' };
 const TYPES: Readonly<Record<number, string>> = { [UnsignedByteType]: 'UnsignedByte', [FloatType]: 'Float', [HalfFloatType]: 'HalfFloat', [UnsignedShortType]: 'UnsignedShort', [UnsignedIntType]: 'UnsignedInt', [IntType]: 'Int' };
 /** A constant's name by its table, else its number. */
-export const named = (table: Readonly<Record<number, string>>, v: number): string => table[v] ?? String(v);
+const named = (table: Readonly<Record<number, string>>, v: number): string => table[v] ?? String(v);
 
 /** The scene's path down to an object: each ancestor's name (its type where unnamed). */
 export function pathOf(object: Object3D): string {
@@ -114,7 +114,7 @@ export interface TextureInfo {
   readonly reuploadable: boolean;
 }
 
-export function textureInfo(slot: string, t: Texture): TextureInfo {
+function textureInfo(slot: string, t: Texture): TextureInfo {
   const image = t.image as { width?: number; height?: number; depth?: number; data?: unknown } | null;
   const level0 = (t.mipmaps as { width?: number; height?: number }[] | undefined)?.[0];
   const w = image?.width ?? level0?.width ?? 0;

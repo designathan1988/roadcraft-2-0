@@ -1,4 +1,4 @@
-import { COVER_KINDS, isBiomeKind, isGeologyKind, type CoverKind, type GeologyKind, type PaintDab } from '@world/terrainPaint';
+import { COVER_KINDS, type CoverKind, type GeologyKind, type PaintDab } from '@world/terrainPaint';
 import { TERRAIN_CELL, TERRAIN_HALF, TERRAIN_SEGMENTS, TERRAIN_SIZE } from './terrainGrid';
 
 /** A PLATE'S COVER DENSITIES AND ROCK, LAID FROM ITS DABS (`terrain.ts` paintStep; a tile's cover bake, `coverTiles.ts`): the one way both lay and read them */
@@ -33,27 +33,6 @@ export function rasterGeology(sand: Float32Array, basalt: Float32Array, dab: Pai
 
 /** Side of the forest density grid over the plate (8 m a cell over its 2,000 m, `world/bounds.ts` PLATE_SIZE). */
 export const FOREST_RES = 250;
-
-/** A plate's cover densities and rock at its corners, as the plate lays them from its dabs (`paintStep`) and a tile's cover bake does (`coverTiles.ts`). */
-export interface PlateCover {
-  readonly covers: Readonly<Record<CoverKind, Uint8Array>>;
-  readonly sand: Float32Array;
-  readonly basalt: Float32Array;
-}
-
-/** A plate's cover and rock with nothing laid. */
-export function plateCover(): PlateCover {
-  return {
-    covers: Object.fromEntries(COVER_KINDS.map((kind) => [kind, new Uint8Array(FOREST_RES * FOREST_RES)])) as Record<CoverKind, Uint8Array>,
-    sand: new Float32Array(GRID * GRID), basalt: new Float32Array(GRID * GRID),
-  };
-}
-
-/** One dab laid on a plate's cover and rock, in the plate's own frame, as the plate lays it (`paintStep`; a biome dab lays neither). */
-export function layCover(plate: PlateCover, dab: PaintDab): void {
-  if (isGeologyKind(dab.kind)) rasterGeology(plate.sand, plate.basalt, dab);
-  else if (!isBiomeKind(dab.kind)) rasterCover(plate.covers, dab);
-}
 
 /** A cover's density at a point of a plate's frame, 0..1. */
 export function coverOf(covers: Readonly<Record<CoverKind, Uint8Array>>, kind: CoverKind, x: number, y: number): number {

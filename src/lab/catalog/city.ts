@@ -1,7 +1,4 @@
-import {
-  Group as GroupClass, InstancedMesh as InstancedMeshClass, LineSegments as LineSegmentsClass, Mesh as MeshClass, Points as PointsClass,
-  type BufferGeometry, type Camera, type InstancedMesh, type Material, type Object3D,
-} from 'three';
+import type { BufferGeometry, Camera, InstancedMesh, Material, Object3D } from 'three';
 import { createBuildingKit } from '../../render/buildings/kit';
 import { buildBuildingMeshes } from '../../render/buildings/buildingMesh';
 import { createSceneryKit } from '../../render/scenery';
@@ -155,7 +152,7 @@ export function previewItems(add: Add): void {
 }
 
 /** One geometry a layer drew, and every copy of it the views saw, each once (by its place in the world). */
-export interface ScenePart {
+interface ScenePart {
   readonly name: string;
   readonly geometry: BufferGeometry;
   readonly material: Material | Material[];
@@ -270,53 +267,6 @@ export function sceneSnapshot(seen: SceneSeen): void {
     for (const child of o.children) walk(child, o === root ? child.name || child.type : layer);
   };
   walk(root, '');
-}
-
-/** The layers that depend on the city's layout (roads, junctions, markings, ground, water, bridges, gardens, lots, rails, signals, signs, wires...): they count in the cost. */
-const CITY_LAYERS = /road|street-?net|marking|paint|terrain|ground|plate|water|structure|bridge|pier|far-?road|far-?forest|forest|garden|lot|transit|track|station|signal|sign|barrier|flag|density|wire|kerb|curb|junction|surface|asphalt|footway|verge|median|flat-world|slab|rim/i;
-
-/** A geometry the test city drew, made again with every copy where it stood (world matrices): one mesh for one copy, an instanced mesh for more. */
-function standIn(p: ScenePart): Object3D {
-  const places = [...p.places.values()];
-  if (places.length > 1 && p.type === 'mesh') {
-    const mesh = new InstancedMeshClass(p.geometry, p.material, places.length);
-    places.forEach((m, i) => (mesh.instanceMatrix.array as Float32Array).set(m, i * 16));
-    mesh.name = p.name;
-    mesh.frustumCulled = false;
-    return mesh;
-  }
-  const group = new GroupClass();
-  for (const m of places) {
-    const mesh = p.type === 'points' ? new PointsClass(p.geometry, p.material) : p.type === 'lines' ? new LineSegmentsClass(p.geometry, p.material) : new MeshClass(p.geometry, p.material);
-    mesh.matrixAutoUpdate = false;
-    mesh.matrix.fromArray(m);
-    mesh.name = p.name;
-    group.add(mesh);
-  }
-  return places.length === 1 ? group.children[0]! : group;
-}
-
-/** Every kind of mesh the test city drew, every mesh of it from every view where it stood: the layout's own layers counted in the cost, the scene's copies of the kits' objects listed apart. */
-export function cityLayerItems(add: Add, seen: SceneSeen, counts: Map<string, CountEntry>): void {
-  for (const l of seen.layers.values()) {
-    if (l.parts.size === 0) continue;
-    const label = `${l.layer} / ${l.kind}`;
-    const own = CITY_LAYERS.test(label);
-    const captured = [...l.parts.values()];
-    const object = new GroupClass();
-    object.name = label;
-    for (const p of captured) object.add(standIn(p));
-    const countKey = `layer:${label}`;
-    counts.set(countKey, { n: 1, from: `the layer itself: every geometry and every copy of it the scene drew over the ${seen.views} views, each copy once (its copies are inside its triangles)` });
-    const classes = [...l.classes];
-    add({
-      group: own ? 'Test city layers' : 'Test city scene (copies of kit objects)', name: l.kind, variation: l.layer, origin: 'test city', source: `scene layer "${l.layer}"`,
-      build: classes.includes('instanced') || classes.includes('batched') ? 'instanced' : classes[0] as ItemSpec['build'], countKey, shadow: [...l.casts].join(' / '), sceneCopy: !own, object,
-      pieces: captured.map((p) => ({ label: p.name || l.kind, geometry: p.geometry, material: p.material, copies: p.places.size })),
-      notes: [`${l.meshes} geometries, ${l.instances} copies (distinct places) over the ${seen.views} views of the sweep${classes.includes('batched') ? '; a GPU batch\'s geometries read back from the GPU' : ''}`,
-        ...(own ? [] : ['the scene\'s copy of objects a kit row already counts: kept out of the cost'])],
-    });
-  }
 }
 
 /** How many copies of each object the test city holds: from its records where it has them (buildings, street furniture, poles, vehicles, people), else the scene's meshes.

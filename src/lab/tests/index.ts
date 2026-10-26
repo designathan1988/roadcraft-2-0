@@ -13,7 +13,7 @@ import { runSweep, type SweepOptions, type SweepResult, type SweepRow } from './
 
 type TestResult = SweepResult | BenchmarkResult;
 
-export interface LabTests {
+interface LabTests {
   sweep(options?: SweepOptions): Promise<SweepResult>;
   benchmark(kind: BenchmarkKind, options?: BenchmarkOptions): Promise<BenchmarkResult>;
   results(): readonly TestResult[];

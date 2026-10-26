@@ -250,7 +250,7 @@ function boundsOf(s: SweepSamples): { minX: number; minY: number; maxX: number; 
 }
 
 /** A sweep's HEAVY rectangles filed by cell over the sweep's own box, as typed arrays (CSR: each cell's samples at `items[start[c]..start[c + 1])`, in sample order): DO NOT go back to a map of a list a cell, an array per cell and per sweep the collector had to take back (the allocation profile, 2026-10-17: `pairTable` 2.8-4.7 GB in the traffic's workers). */
-export interface SweepGrid {
+interface SweepGrid {
   readonly gx0: number;
   readonly gy0: number;
   readonly w: number;

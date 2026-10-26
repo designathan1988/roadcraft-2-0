@@ -44,12 +44,12 @@ export interface ShellGrid {
   readonly step: number;
 }
 /** How far past its cell a cell's buildings may reach on its grid, m: 250 + 2 x 60 = 370 m, under the 384 m (256 + 2 x 64) whose step was the bound. */
-export const SHELL_GRID_MARGIN = 60;
+const SHELL_GRID_MARGIN = 60;
 /** The grid's step: the cell (250 m) and its margins (2 x 60 m) in an unsigned short, 5.65 mm (a point within 2.9 mm, a hundredth of the far level's 0.3 m). */
 export const SHELL_GRID_STEP = (CELL + 2 * SHELL_GRID_MARGIN) / 65535;
 
 /** A cell's grid, its height from the lowest of its shells. */
-export const cellShellGrid = (i: number, j: number, lowest: number): ShellGrid =>
+const cellShellGrid = (i: number, j: number, lowest: number): ShellGrid =>
   ({ x: i * CELL - SHELL_GRID_MARGIN, y: lowest, z: -(j + 1) * CELL - SHELL_GRID_MARGIN, step: SHELL_GRID_STEP });
 
 /** Pieces with their places on a grid: four unsigned shorts a vertex (the fourth left over: no 3-short format in Direct3D 11); null where a point falls off it (the cell keeps its floats). */
@@ -96,7 +96,7 @@ export const NORMAL_UNIT = 32767;
 /** A linear colour channel as the shell's paint holds it: 16 bits over `COLOUR_RANGE`, a step of 3e-5 (a byte would band the dark paints). */
 export const paintShort = (x: number): number => Math.round(Math.max(0, Math.min(1, Math.fround(x) / COLOUR_RANGE)) * PAINT_UNIT);
 /** A number in [-1, 1] as a signed short the GPU reads back normalised: the shell's normal and wear. */
-export const snorm16 = (x: number): number => Math.round(Math.max(-1, Math.min(1, x)) * NORMAL_UNIT);
+const snorm16 = (x: number): number => Math.round(Math.max(-1, Math.min(1, x)) * NORMAL_UNIT);
 
 /** Numbers a shell vertex carries in its paint (`paint`): four shorts, rgb and its finish with its wear (`finishWear`). */
 export const SHELL_SHORTS = 4;
@@ -275,7 +275,7 @@ export function massPlaces(mass: CellMass): Float32Array {
 }
 
 /** A mass's places in floats put on its square's grid; the mass as it was where a point falls off it. */
-export function massOnGrid(mass: CellMass, square: MassSquare): CellMass {
+function massOnGrid(mass: CellMass, square: MassSquare): CellMass {
   const p = massPlaces(mass), n = p.length / 3;
   const grid = massGrid(square, mass.bounds[1]!);
   const q = new Uint16Array(n * 4);

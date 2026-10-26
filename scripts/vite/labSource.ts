@@ -24,7 +24,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /** The strings looked for, each with what it says and how much it weighs: the whole name quoted, then the fixed start and end of a template. */
-export function patternsOf(name: string): { text: string; how: string; score: number }[] {
+function patternsOf(name: string): { text: string; how: string; score: number }[] {
   const out: { text: string; how: string; score: number }[] = [];
   for (const q of ["'", '"', '`']) out.push({ text: `${q}${name}${q}`, how: 'whole name', score: 100 });
   // A piece of code asked as it is written (the lab's investigation: `mark('drawing')`, `hitch:draw/Render`, `gpuTimer.begin()`).

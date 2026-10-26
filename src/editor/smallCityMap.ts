@@ -28,7 +28,7 @@ export function buildLargeCityMap(seed: number, radius?: number): SerializedDoc 
 }
 
 /** A planned city laid out as one map: its footways, lots, green and zones, and every lot grown, on the flat ground of a new map. The size is the plan's (`cityGen/plan.ts`): the probes' larger cities test the renderer's scale. */
-export function buildCityMap(city: CityPlan): SerializedDoc {
+function buildCityMap(city: CityPlan): SerializedDoc {
   return growCity(city, null, null).toJSON();
 }
 
@@ -49,7 +49,7 @@ const SPILL_KEEP = 1024;
  * and prepare it after: ~20 KB of JS heap a building, twice over while it was prepared, and the city of 160,000 buildings took its
  * worker to 5.6 GB, past the V8 cage the worker shares with its page (2026-10-22). `phase`: told as each step ends (the scale probes).
  */
-export function buildCityTable(city: CityPlan, phase?: (name: string) => void): PreparedCity {
+function buildCityTable(city: CityPlan, phase?: (name: string) => void): PreparedCity {
   // One table of shared members for both: the page's records are the growth's migrated, their members made canonical once.
   const shared = new SharedMembers();
   const page = new PreparedCityWriter(shared);

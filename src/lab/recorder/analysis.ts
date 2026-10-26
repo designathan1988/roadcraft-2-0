@@ -28,7 +28,7 @@ export interface Dist {
   readonly spread: number;
 }
 
-export interface Settle {
+interface Settle {
   /** ms after the change the settling lasted (`SETTLE_MS` at least). */
   readonly ms: number;
   /** It never settled before the next change or `SETTLE_MAX_MS`. */
@@ -61,7 +61,7 @@ export interface Segment {
   readonly systems: readonly { readonly name: string; readonly meanMs: number }[];
 }
 
-export type Verdict = 'improved' | 'worse' | 'within noise';
+type Verdict = 'improved' | 'worse' | 'within noise';
 
 export interface Delta {
   readonly metric: string;
@@ -92,7 +92,7 @@ const quantile = (sorted: readonly number[], q: number): number => {
   return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
 };
 
-export function distribution(values: readonly number[]): Dist | null {
+function distribution(values: readonly number[]): Dist | null {
   if (!values.length) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const n = sorted.length;
@@ -114,7 +114,7 @@ function slopePerSecond(ts: readonly number[], ys: readonly number[]): number | 
 }
 
 /** The cuts: every event that splits, those close together as one. */
-export function boundaries(events: readonly RecEvent[]): { readonly t: number; readonly causes: RecEvent[] }[] {
+function boundaries(events: readonly RecEvent[]): { readonly t: number; readonly causes: RecEvent[] }[] {
   const out: { t: number; causes: RecEvent[] }[] = [];
   for (const e of events) {
     if (!e.split) continue;
@@ -249,7 +249,7 @@ export function describeDelta(d: Delta): string {
   return `${d.metric} ${signed(d.delta, digits)}${unit(d.metric)}${d.pct === null ? '' : ` (${signed(d.pct, 0)}%)`}${d.verdict === 'within noise' ? ' — within noise' : ''}`;
 }
 
-export function compare(a: Segment, b: Segment, kind: 'previous' | 'baseline'): Comparison {
+function compare(a: Segment, b: Segment, kind: 'previous' | 'baseline'): Comparison {
   const deltas: Delta[] = [];
   for (const m of METRICS) {
     const da = m.pick(a), db = m.pick(b);

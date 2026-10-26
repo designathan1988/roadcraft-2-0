@@ -5,9 +5,9 @@ import type { Recording } from './recording';
 
 /** THE RECORDING'S REPORT, written for an AI to read: the JSON with everything, and a Markdown that says what was changed, what it did, and how sure it is. */
 
-export const REPORT_FORMAT = 'roadcraft-lab-recording/1';
+const REPORT_FORMAT = 'roadcraft-lab-recording/1';
 
-export interface Anomaly {
+interface Anomaly {
   readonly kind: 'hitch' | 'settle' | 'heap' | 'recompile' | 'longtask';
   readonly t: number;
   readonly detail: string;

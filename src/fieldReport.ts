@@ -5,7 +5,7 @@ import type { SampleRing, SampleStats } from '@core/sampleRing';
  *  and to nothing else. In a browser there is no shell: the console only. Nothing leaves the machine.
  *  Every problem of the page passes through `fieldReport.report`, so a remote reporter (Sentry later) is plugged in at ONE place: `fieldReport.addSink`. */
 
-export type ProblemKind = 'error' | 'rejection' | 'ensure' | 'webgl-lost' | 'webgl-restored' | 'shader' | 'session' | 'note';
+type ProblemKind = 'error' | 'rejection' | 'ensure' | 'webgl-lost' | 'webgl-restored' | 'shader' | 'session' | 'note';
 
 export interface Problem {
   readonly kind: ProblemKind;
@@ -66,10 +66,10 @@ export class FieldReport {
 export const fieldReport = new FieldReport();
 
 /** The desktop shell's log as a sink. */
-export const bridgeSink = (bridge: ProblemBridge): ProblemSink => (problem) => bridge.reportProblem(problem);
+const bridgeSink = (bridge: ProblemBridge): ProblemSink => (problem) => bridge.reportProblem(problem);
 
 /** The browser's sink: the console, since there is no file to write. */
-export const consoleSink: ProblemSink = (problem) => console.info(`[field] ${problem.kind}: ${problem.message}`, problem.data ?? '');
+const consoleSink: ProblemSink = (problem) => console.info(`[field] ${problem.kind}: ${problem.message}`, problem.data ?? '');
 
 /** The shell's problem calls when the page runs inside it. */
 export function problemBridge(host: unknown): ProblemBridge | null {

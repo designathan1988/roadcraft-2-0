@@ -267,6 +267,3 @@ export class BaseWriter {
 /** Every buffer of a base: handed over, not copied. */
 export const baseBuffers = (base: BaseMass): ArrayBuffer[] =>
   base.pieces.flatMap((piece) => [piece.vertices, piece.index, piece.cells, piece.bounds].map((a) => a.buffer as ArrayBuffer));
-
-/** The bytes a base holds on the GPU: its vertices and indices. */
-export const baseBytes = (base: BaseMass): number => base.pieces.reduce((sum, piece) => sum + piece.vertices.byteLength + piece.index.byteLength, 0);

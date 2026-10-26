@@ -40,7 +40,7 @@ export function wearFrame(records: readonly Building[]): ArrayBuffer {
 }
 
 /** Wears read back, by id; null when the bytes are not a wears' frame. */
-export function readWearFrame(bytes: ArrayBuffer): Map<number, number> | null {
+function readWearFrame(bytes: ArrayBuffer): Map<number, number> | null {
   const pairs = readFrame(bytes, WEAR_MAGIC)?.get(K_PAIRS);
   const values = pairs ? f64Of(pairs) : null;
   if (!values || values.length % 2 !== 0) return null;

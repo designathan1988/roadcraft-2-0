@@ -81,7 +81,7 @@ export const trafficBuilding: (b: Building) => TrafficBuilding = project;
 // ------------------------------------------------------------------ what is read of every building without its traffic record
 
 /** The kinds of place a building is (`ambient/demand.ts` kindOf), in the order of the draws' classes and of `LotPlaces`' trees. */
-export const TRAFFIC_KINDS: readonly (keyof Mix)[] = ['home', 'shop', 'work', 'civic'];
+const TRAFFIC_KINDS: readonly (keyof Mix)[] = ['home', 'shop', 'work', 'civic'];
 /** A building with a `parking` element: a lot whose stalls are bays (`parking.ts`). */
 export const TRAIT_PARKING = 1;
 /** A gated lot with docks: a lorry's yard (`lorryTraffic.ts`). */
@@ -102,7 +102,7 @@ export interface TrafficFacts {
 }
 
 /** The most frontage a building's way on foot can have (`lotDoors.ts`): its blocks' width along its widest people's gate, or along its facade with none, 6 m at the least. */
-export function frontageBound(b: Pick<TrafficBuilding, 'volumes' | 'elements'>): number {
+function frontageBound(b: Pick<TrafficBuilding, 'volumes' | 'elements'>): number {
   const gates = personGates(b);
   if (!gates.length) {
     let lo = Infinity, hi = -Infinity;
@@ -223,7 +223,7 @@ export function docBuildings(doc: RoadDoc): TrafficBuildings {
 export const BATCH_DETAIL = 'batch:';
 export const BATCH_GONE = 'g';
 export const BATCH_KEPT = 'k';
-export const BATCH_NEW = 'n';
+const BATCH_NEW = 'n';
 
 /** A building of the page changed, as the worker is told it: its traffic record now and where its record is read (`RecordRef`), null when it is gone. */
 export interface BuildingChange {

@@ -9,7 +9,7 @@ import { ZSTDDecoder } from 'three/examples/jsm/libs/zstddec.module.js';
 /** KTX2 FILES AS THE GAME READS THEM (`scripts/vite/ktx2.ts` writes them): the baked surfaces, the people's atlases. RGBA8 levels as they are, UASTC transcoded by three's loader to what the GPU takes. */
 
 export type Ktx2Codec = 'rgba8' | 'uastc';
-export type Ktx2Use = 'color' | 'normal' | 'data';
+type Ktx2Use = 'color' | 'normal' | 'data';
 
 /** Basis Universal's transcoder from three's addons, served by the surface-bake plugin at a fixed path (Vite's prebundled three cannot find it beside the loader). */
 const TRANSCODER = `${import.meta.env.BASE_URL}basis/`;

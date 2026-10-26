@@ -108,7 +108,7 @@ const plateGrid = { n: GRID, cell: TERRAIN_CELL, half: TERRAIN_HALF } as const;
 /** A plate's grid as its patches read it (`terrainLod.ts`). */
 const LAND_GRID: LandGrid = { seg: TERRAIN_SEGMENTS, cell: TERRAIN_CELL, half: TERRAIN_HALF };
 /** The ground's place in three's opaque order (`renderOrder`): after the layers standing on it, whose order is 0 (a faded building 1, a ghost 2). */
-export const GROUND_AFTER = 10;
+const GROUND_AFTER = 10;
 
 /** Where the grass field stands this frame (`grassField.ts`): world x, y, how far it reaches, and 1 when it is drawn. */
 const GRASS_FIELD: { value: [number, number, number, number] } = { value: [0, 0, 0, 0] };

@@ -48,7 +48,6 @@ import { normalizePerson, type PersonSpec } from '@people/spec';
 import { ChangeJournal, DOC_CHANGE_KINDS, TILE_LOADED, TILE_UNLOADED, isStreaming, rectAround, type ChangeRect, type DocChangeKind } from './changes';
 import { OWNER, TILE, TILE_COUNTED, tileIdBase, tileKey, tileOfKey, tileRect } from './tiles';
 import { JournalCursor } from './derived';
-import { type GrownRows, selectRows } from './growth/rows';
 import { gatesOf } from './buildingGates';
 import { PoleIndex } from './poleIndex';
 import { TileIndex } from './tileIndex';
@@ -1460,8 +1459,6 @@ export class RoadDoc {
   }, lotKeyPlace))(this);
   /** Each loaded tile's next ids, by kind (`TileRecords.next`): a record made in a tile takes its id from the tile's range. */
   private tileNext = new Map<number, TileNext>();
-  /** Each loaded tile's grown rows (`TileRecords.grown`, kept by `preparedGrown`), and its lots as they were put in: a row is written back only while its lot is that very record (an edit replaces it). */
-  private tileGrown = new Map<number, { readonly grown: PreparedGrown; readonly lots: ReadonlyMap<number, Lot> }>();
 
   /** Whether an edit is open (`beginEdit`..`endEdit`): no tile comes in or goes out then. */
   get editing(): boolean {
@@ -1577,10 +1574,8 @@ export class RoadDoc {
     const barrierIds: number[] = [];
     for (const raw of records.barriers) { const barrier = barrierRecord(raw, false); if (barrier) { this.putBarrierRecord(barrier); barrierIds.push(barrier.id); } }
     if (barrierIds.length) this.changes.record('barriers', [square], { ids: barrierIds });
-    // The buildings and the lots, each in one entry of its own store: a prepared tile's buildings as they are (read from its table), another's migrated.
-    const prepared = preparedTiles.has(records);
-    const buildings = prepared ? records.buildings as unknown as readonly Building[] : migratedBuildings(records.buildings);
-    this.buildings.placeAll(buildings, prepared);
+    // The buildings and the lots, each in one entry of its own store, the buildings migrated.
+    this.buildings.placeAll(migratedBuildings(records.buildings));
     const lotIds = new Set<number>();
     const lots: Lot[] = [];
     for (const lot of records.lots) {
@@ -1613,9 +1608,6 @@ export class RoadDoc {
     // The gates it came with stand for its buildings until one changes (the diary, `tileGatesOf`).
     this.followGates();
     if (records.gates) this.tileGates.set(records.key, records.gates); else this.tileGates.delete(records.key);
-    const grown = preparedTiles.get(records);
-    if (grown) this.tileGrown.set(records.key, { grown, lots: new Map(lots.map((lot) => [lot.id, this.lot(lot.id)!])) });
-    else this.tileGrown.delete(records.key);
     this.changes.causeNext(cause);
   }
 
@@ -1647,7 +1639,6 @@ export class RoadDoc {
     if (this.recorder) throw new Error('the tiles cannot be left during an edit');
     this.tileContents.clear();
     this.tileNext.clear();
-    this.tileGrown.clear();
     this.tileGates.clear();
   }
 
@@ -1708,29 +1699,13 @@ export class RoadDoc {
   tileRecords(key: number, version: number): TileRecords {
     const t = this.tileMembers(key);
     const next = this.tileNext.get(key) ?? freshTileNext(key);
-    // DO NOT write a grown building no edit touched as a whole record: it is written back as its row (the generator's few numbers), made again where it is read.
-    const kept = this.tileGrown.get(key);
-    const made = kept?.grown;
-    const asRows = new Set<number>();
-    if (kept && made) {
-      // Each row's lot: a building whose lot was moved, curved, rezoned, split or joined since is written whole (its row would be made again on another lot).
-      const lotOf = new Map<number, number>();
-      for (let k = 0; k < made.rows.id.length; k++) lotOf.set(made.rows.id[k]!, made.rows.lot[k]!);
-      for (const b of t.buildings) {
-        if (!made.made.has(b)) continue;
-        const lot = lotOf.get(b.id);
-        if (lot !== undefined && this.lot(lot) !== undefined && this.lot(lot) === kept.lots.get(lot)) asRows.add(b.id);
-      }
-    }
-    const grown = made && asRows.size ? selectRows(made.rows, asRows) : null;
     return {
       key, version,
       nodes: t.nodes.map(savedNode), borrowedNodes: t.borrowedNodes.map(savedNode), segments: t.segments.map(savedSegment),
       poles: t.poles.map(savedPole), borrowedPoles: t.borrowedPoles.map(savedPole), poleSpans: t.spans.map(savedSpan),
       // DO NOT copy a building (a record is replaced, never edited, `BuildingStore`): the write posts each as its table's row (`tileStore.ts` tileWrite).
-      buildings: asRows.size ? t.buildings.filter((b) => !asRows.has(b.id)) : t.buildings,
-      // Every building's gates, the rows' too (a write does not make them again, `tileWrite`): the ones kept while no building of the tile changed.
-      ...(grown ? { grown } : {}),
+      buildings: t.buildings,
+      // Every building's gates: the ones kept while no building of the tile changed.
       ...(t.buildings.length ? { gates: this.tileGatesOf(key, t.buildings) } : {}),
       lots: t.lots.map((lot) => ({ ...lot, corners: lot.corners.map((q) => ({ x: q.x, y: q.y })) })),
       lotKeys: [...t.lotKeys],
@@ -1754,7 +1729,6 @@ export class RoadDoc {
       put('buildings', t.buildings.map((b) => b.id)); put('lots', t.lots.map((l) => l.id));
     }
     this.tileContents.delete(key);
-    this.tileGrown.delete(key);
     this.tileGates.delete(key);
     // Its allocators go with it (they are its records', read only while it is here, `tileRecords`): DO NOT keep one for every tile ever loaded.
     this.tileNext.delete(key);
@@ -1888,7 +1862,6 @@ export class RoadDoc {
     copy.nextTerrainId = this.nextTerrainId;
     // The same tiles, their counters copied: a dry run that is let go takes no id of a tile for good (`takeFork` carries them on).
     copy.tileContents = this.tileContents;
-    copy.tileGrown = this.tileGrown;
     copy.tileNext = new Map([...this.tileNext].map(([key, next]) => [key, { ...next }]));
     copy.buildings.forkFrom(this.buildings);
     copy.lotStore.forkFrom(this.lotStore);
@@ -3083,7 +3056,7 @@ function barrierRecord(raw: NonNullable<SerializedDoc['barriers']>[number], repa
   return points.length < 2 ? null : { id: raw.id, kind: raw.kind, points };
 }
 
-/** A tile's buildings not prepared by a worker (`preparedTiles`), each through `migrateBuilding` as a map's are (`BuildingStore.load`). */
+/** A tile's buildings, each through `migrateBuilding` as a map's are (`BuildingStore.load`). */
 function migratedBuildings(raw: TileRecords['buildings']): Building[] {
   const store = new BuildingStore();
   store.load(raw as unknown as readonly unknown[]);
@@ -3103,15 +3076,6 @@ function lotKeyPlace(key: string): { x: number; y: number } | null {
 }
 
 /** A tile as the store keeps it (`TileStore`): the records it owns, as a saved map holds them, and the ends of its roads and spans that are its neighbours' */
-/** The tiles whose buildings a worker prepared (`editor/tileStore.ts` `prepareTile`: migrated and interned there): `loadTile` files them as they are. A set beside the records, never a field of them: every list field of `TileRecords` is a list. */
-export const preparedTiles = new WeakMap<TileRecords, PreparedGrown | null>();
-
-/** A prepared tile's grown rows and the buildings made from them (`editor/tileStore.ts` preparedRecords), each the very record so made: a record is replaced, never edited (`BuildingStore`), so one still in `made` is exactly its row's, written back as the row (`tileRecords`). */
-export interface PreparedGrown {
-  readonly rows: GrownRows;
-  readonly made: WeakSet<object>;
-}
-
 export interface TileRecords {
   readonly key: number;
   /** Written again at each change of the tile (the store's), for what is baked from it (far levels, link tables) to know it is stale. */
@@ -3126,8 +3090,6 @@ export interface TileRecords {
   readonly borrowedPoles: NonNullable<SerializedDoc['poles']>;
   readonly poleSpans: NonNullable<SerializedDoc['poleSpans']>;
   readonly buildings: readonly unknown[];
-  /** The buildings its generator grew, as rows (`growth/rows.ts`): made records again by whoever reads them (`growth/grownRows.ts` `tileBuildingsOf`). */
-  readonly grown?: GrownRows;
   readonly lots: readonly Lot[];
   readonly lotKeys: readonly string[];
   readonly landscape: NonNullable<SerializedDoc['landscape']>;
@@ -3175,7 +3137,6 @@ export interface Restoration {
 
 /** The map's parts no tile holds (`RoadDoc.worldPart`), each named as the diary's kind that changes it (`allocators`: the map's own id allocators). */
 export type WorldPart = 'terrain' | 'markingStyle' | 'nature' | 'fog' | 'gullies' | 'clouds' | 'weather' | 'clearings' | 'zones' | 'people' | 'transit' | 'economy' | 'allocators';
-export const WORLD_PARTS: readonly WorldPart[] = ['terrain', 'markingStyle', 'nature', 'fog', 'gullies', 'clouds', 'weather', 'clearings', 'zones', 'people', 'transit', 'economy', 'allocators'];
 
 export interface SerializedDoc {
   readonly version: 1;

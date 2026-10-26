@@ -71,7 +71,7 @@ export function litStandIns(roots: readonly Object3D[], lit = true): Group {
   return group;
 }
 
-/** `people`: every program a person can be drawn with (`people/proceduralCrowd.ts` personProgramStandIns), built without a body. `lightVariants`: the sets of the scene's lights a light switched on or off makes (`renderer.ts`), each compiled before the curtain lifts, one at a time and when nothing else compiles (`compilesQuiet`): a program first used in play waits for its link in the frame (three's WebGLRenderer.compileAsync: precompile before the first render). */
+/** `people`: every program a person can be drawn with (`people/proceduralCrowd.ts` personProgramStandIns), built without a body. `lightVariants`: the sets of the scene's lights a light switched on or off makes (`renderer.ts`), the set the town opens under compiled before the curtain lifts, the others one at a time after it (`afterReveal`): a program first used in play waits for its link in the frame (three's WebGLRenderer.compileAsync: precompile before the first render). */
 export function createShaderCatalogue(people: () => FamilyStandIns, lightVariants: () => readonly (readonly Object3D[])[] = () => []): ShaderCatalogue {
   const counts = Object.fromEntries(PROGRAM_FAMILIES.map((name) => [name, null])) as Record<ProgramFamily, FamilyCount | null>;
   let settle: () => void = () => {};

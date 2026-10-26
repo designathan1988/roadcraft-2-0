@@ -10,7 +10,7 @@ export interface WorkerLike {
 }
 
 /** What the host in the other process posts when its thread failed or stopped (`desktop/jobs.cjs`). */
-export interface ThreadFailed { readonly threadFailed: string }
+interface ThreadFailed { readonly threadFailed: string }
 const isThreadFailed = (data: unknown): data is ThreadFailed =>
   typeof data === 'object' && data !== null && typeof (data as { threadFailed?: unknown }).threadFailed === 'string';
 

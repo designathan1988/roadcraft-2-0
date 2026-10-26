@@ -27,7 +27,7 @@ export interface FrameColumns {
   readonly systems: Map<string, number[]>;
 }
 
-export interface ViewSample {
+interface ViewSample {
   readonly t: number;
   readonly kind: string;
   readonly x: number;
@@ -37,7 +37,7 @@ export interface ViewSample {
   readonly elevation: number;
 }
 
-export interface SimSample {
+interface SimSample {
   readonly t: number;
   readonly vehicles: number | null;
   readonly people: number | null;
@@ -46,14 +46,14 @@ export interface SimSample {
   readonly programs: number | null;
 }
 
-export interface SettingsSnapshot {
+interface SettingsSnapshot {
   readonly t: number;
   readonly cause: string;
   readonly effects: Readonly<Record<string, unknown>>;
   readonly optimizations: unknown;
 }
 
-export type RecState = 'recording' | 'paused' | 'stopped';
+type RecState = 'recording' | 'paused' | 'stopped';
 
 export interface Recording {
   readonly startedAt: string;
@@ -87,7 +87,7 @@ const SPLITS = /^(switch|opt|quality|edit)\.|^rec\.(marker|resume)$/;
 /** Settings read again after these. */
 const SETTING_CHANGE = /^(switch|opt|quality|edit)\./;
 /** About an hour at 60 Hz: past it the recording stops itself. */
-export const MAX_FRAMES = 216_000;
+const MAX_FRAMES = 216_000;
 const VIEW_EVERY_MS = 250;
 const SIM_EVERY_MS = 1000;
 /** A view still this long, then moved, is a new camera move (one event). */

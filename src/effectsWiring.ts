@@ -68,7 +68,7 @@ export interface OptimizationState {
 }
 
 /** The lab's optimisations (`optimizations.ts`), set live, kept between runs (`roadcraft.optimizations`). Every change told to `EffectsWiring.onChange` as `opt.<id>`. */
-export interface OptimizationControl {
+interface OptimizationControl {
   list(): OptimizationState[];
   get(id: string): OptValue | undefined;
   /** False when `id` or the value is not one of its choices. */

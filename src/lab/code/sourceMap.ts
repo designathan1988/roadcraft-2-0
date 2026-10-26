@@ -26,7 +26,7 @@ const DIGIT = (() => {
 })();
 
 /** The `mappings` string decoded (Base64 VLQ: 5 bits a digit, 32 the continuation, the first digit's lowest bit the sign; the generated column relative within a line, the rest across the whole string). */
-export function decodeMappings(mappings: string): Int32Array[] {
+function decodeMappings(mappings: string): Int32Array[] {
   const lines: Int32Array[] = [];
   let source = 0, line = 0, column = 0, name = 0;
   let row: number[] = [];
@@ -83,7 +83,7 @@ interface RawMap {
 }
 
 /** A map's JSON decoded; its sources resolved against `baseUrl` (the module's URL) as server paths. */
-export function decodeMap(raw: RawMap, baseUrl: string): DecodedMap {
+function decodeMap(raw: RawMap, baseUrl: string): DecodedMap {
   const root = raw.sourceRoot ? (raw.sourceRoot.endsWith('/') ? raw.sourceRoot : `${raw.sourceRoot}/`) : '';
   const sources = (raw.sources ?? []).map((s) => {
     if (s === null) return '(unnamed)';

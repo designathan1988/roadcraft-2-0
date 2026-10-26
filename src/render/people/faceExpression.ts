@@ -4,7 +4,7 @@ import { personHash } from '@sim/people/view';
 export type FaceWeights = Record<string, number>;
 
 /** Each channel as ARKit shapes. */
-export const CHANNELS: Record<string, FaceWeights> = {
+const CHANNELS: Record<string, FaceWeights> = {
   faceBlink: { eyeBlinkLeft: 1, eyeBlinkRight: 1 },
   faceJoy: { cheekSquintLeft: 0.55, cheekSquintRight: 0.55, mouthSmileLeft: 0.75, mouthSmileRight: 0.75, eyeSquintLeft: 0.2, eyeSquintRight: 0.2 },
   faceSadness: { browInnerUp: 0.7, browDownLeft: 0.25, browDownRight: 0.25, mouthFrownLeft: 0.55, mouthFrownRight: 0.55, mouthShrugLower: 0.2 },
@@ -20,22 +20,6 @@ export const CHANNELS: Record<string, FaceWeights> = {
 };
 /** The eyeballs' turn, a channel of its own (`facialMorphs.ts`). */
 const GAZE = ['lookLeft', 'lookRight'];
-
-/** The crowd's morphs: one per channel, mixed from the ARKit shapes. */
-export function channelShapes(arkit: Record<string, Float32Array>): Record<string, Float32Array> {
-  const out: Record<string, Float32Array> = {};
-  for (const [channel, mix] of Object.entries(CHANNELS)) {
-    let shape: Float32Array | undefined;
-    for (const [name, weight] of Object.entries(mix)) {
-      const unit = arkit[name];
-      if (!unit) continue;
-      shape ??= new Float32Array(unit.length);
-      for (let i = 0; i < unit.length; i++) shape[i] = shape[i]! + unit[i]! * weight;
-    }
-    if (shape) out[channel] = shape;
-  }
-  return out;
-}
 
 const VISEMES = ['mouthOpen', 'mouthSpread', 'mouthSpread', 'mouthRound', 'mouthPuckered', 'mouthShut', 'mouthShut', 'mouthOpen', 'mouthSpread'];
 const SYLLABLES = 4.2; // per second, ordinary speech

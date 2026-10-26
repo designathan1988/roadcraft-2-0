@@ -18,10 +18,12 @@ describe('city golden', () => {
   it('the small city of seed 7 is made exactly as before', () => {
     const doc = buildSmallCityMap(7);
     const text = JSON.stringify(doc);
+    // 2026-10-25: every pole carries its kind (`kind: 'urban'`, the urban and rural structures, commit af98b0f5): the 796 poles' 11,940
+    // characters are the whole change from the last number (the two documents compared field by field).
     expect({ hash: hashText(text), length: text.length }).toMatchInlineSnapshot(`
       {
-        "hash": 2248681661,
-        "length": 10470148,
+        "hash": 102970153,
+        "length": 10482088,
       }
     `);
   });

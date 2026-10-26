@@ -21,7 +21,7 @@ export interface StreetLevel {
 }
 
 /** A street that must start at `p`, on the family of the field running nearest `along`; failing that, a straight street along `along` to the first street it meets within `reach`. */
-export interface ForcedSeed {
+interface ForcedSeed {
   readonly p: Vec2;
   readonly along: Vec2;
   readonly reach: number;

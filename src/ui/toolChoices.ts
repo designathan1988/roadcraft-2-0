@@ -37,28 +37,27 @@ export function setStreetscapeKind(next: LandscapeKind): void {
 }
 
 const LAMP_KEY = 'roadcraft.poleLamps';
-let lamps: PoleLampMode = stored(LAMP_KEY, POLE_LAMP_MODES, 'alternate');
-
-export function poleLampMode(): PoleLampMode {
-  return lamps;
-}
-
-export function setPoleLampMode(next: PoleLampMode): void {
-  lamps = next;
-  keep(LAMP_KEY, next);
-}
-
-/** What the pole tool builds: urban poles (the arm over the street, the secondary rack, the light under the wires) or rural ones. */
 const POLE_KIND_KEY = 'roadcraft.poleKind';
-let poleKindNow: PoleKind = stored(POLE_KIND_KEY, POLE_KINDS, 'urban');
 
-export function poleKind(): PoleKind {
-  return poleKindNow;
+/** What the pole tool builds, as the player chose it in its panel: the kind of pole - urban (the arm over the street, the secondary
+ *  rack, the light under the wires) or rural - and the street lights on them; kept between sessions. */
+export interface PoleChoices {
+  kind(): PoleKind;
+  setKind(next: PoleKind): void;
+  lamps(): PoleLampMode;
+  setLamps(next: PoleLampMode): void;
 }
 
-export function setPoleKind(next: PoleKind): void {
-  poleKindNow = next;
-  keep(POLE_KIND_KEY, next);
+/** The pole tool's choices, read from the last session: one made by the game (`main.ts`), handed to the tool and to its panel. */
+export function createPoleChoices(): PoleChoices {
+  let kind: PoleKind = stored(POLE_KIND_KEY, POLE_KINDS, 'urban');
+  let lamps: PoleLampMode = stored(LAMP_KEY, POLE_LAMP_MODES, 'alternate');
+  return {
+    kind: () => kind,
+    setKind(next) { kind = next; keep(POLE_KIND_KEY, next); },
+    lamps: () => lamps,
+    setLamps(next) { lamps = next; keep(LAMP_KEY, next); },
+  };
 }
 
 /** What a click of the pole tool does: build a run, or remove the pole under it. */

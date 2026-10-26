@@ -22,7 +22,7 @@ export interface Cover {
 }
 
 /** How far out of a bay's face its neighbour's mass is looked for: two walls on one lot line, never a gap a view could go into. */
-export const PARTY_NUDGE = m(0.03);
+const PARTY_NUDGE = m(0.03);
 /** A bay is looked at this often along its width, its ends this far in. */
 const PARTY_STEP = m(1);
 const PARTY_INSET = m(0.01);

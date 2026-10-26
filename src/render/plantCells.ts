@@ -110,7 +110,7 @@ export function createTreeCells(kit: NatureTreeKit, name: string, treesIn: (cell
 }
 
 /** A cell's trees put in a run of the woods' stores (`TREE_POSE`, a store a model): each shaped by the trees round it (`standsAmong`, `among` its cell's and its neighbours'), tinted, its model picked of `variants` (`varietyOf`); the page's cells and a tile's bake (`plantedTiles.ts`) alike. */
-export function treesInto(builder: RunBuilder, own: readonly TreePlacement[], among: readonly TreePlacement[], variants: number): void {
+function treesInto(builder: RunBuilder, own: readonly TreePlacement[], among: readonly TreePlacement[], variants: number): void {
   const pose = new Float32Array(TREE_POSE.stride), col = new Float32Array(3), tint = { r: 1, g: 1, b: 1 };
   const stand = standsAmong(own, among);
   own.forEach((tree, i) => {
@@ -149,14 +149,14 @@ export function createCoverCells(kit: GroundCoverKit, name: string, places: {
 }
 
 /** Where each kind of cover is drawn among a cover layer's stores (`createCoverCells`): each rock model's store, each scrub model's, each forest species' models'. */
-export interface CoverLayout {
+interface CoverLayout {
   readonly rocks: readonly number[];
   readonly scrub: readonly number[];
   readonly trees: Readonly<Record<(typeof FOREST_SPECIES)[number], readonly number[]>>;
 }
 
 /** Stones, scrub and card trees put in a run of a cover layer's stores: posed by their stance, tinted by their kind (a stone by its rock), the model picked by the seed. */
-export function coverInto(builder: RunBuilder, layout: CoverLayout, rocks: readonly CoverPlacement[], scrub: readonly CoverPlacement[], trees: readonly TreePlacement[]): void {
+function coverInto(builder: RunBuilder, layout: CoverLayout, rocks: readonly CoverPlacement[], scrub: readonly CoverPlacement[], trees: readonly TreePlacement[]): void {
   const pose = new Float32Array(COVER_POSE.stride), colour = new Color(), tint = { r: 1, g: 1, b: 1 };
   const put = (store: number, item: CoverPlacement, stance: (typeof COVER_STANCE)[keyof typeof COVER_STANCE], paint: (item: CoverPlacement, out: Color) => Color): void => {
     coverPoseInto(item, stance.sink, stance.tilt, stance.upright, pose, 0);

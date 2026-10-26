@@ -216,7 +216,7 @@ export class MassRecorder {
 }
 
 /** The bytes a program holds, as near as its arrays tell: what the cache weighs it by. */
-export function programBytes(p: BuildingProgram): number {
+function programBytes(p: BuildingProgram): number {
   const q = p.mass;
   let bytes = 512 + q.bays.byteLength + q.rows.byteLength + q.blockRows.byteLength + q.sides.byteLength + q.blockSides.byteLength
     + q.groups.byteLength + q.faces.byteLength + q.points.byteLength + q.tris.byteLength;
@@ -235,7 +235,7 @@ export function programBytes(p: BuildingProgram): number {
 }
 
 /** The bytes a lots part holds (its lots' ground's surfaces counted a few hundred bytes a lot). */
-export function lotsBytes(l: LotsProgram): number {
+function lotsBytes(l: LotsProgram): number {
   let bytes = 256 + l.faces.byteLength + l.points.byteLength + l.tris.byteLength;
   for (const s of l.slabs) bytes += 160 + s.xs.byteLength + s.ys.byteLength;
   return bytes + (l.lotGround ? 512 : 0);

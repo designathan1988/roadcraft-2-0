@@ -136,7 +136,7 @@ export interface PartArrays {
 }
 
 /** A level: the finer one again (`same`), or its own attributes, index and bounding sphere. */
-export type LevelArrays = 'same' | {
+type LevelArrays = 'same' | {
   readonly position: ArrayOf; readonly color: ArrayOf; readonly normal: ArrayOf;
   readonly index: Uint32Array; readonly sphere: readonly number[];
 };

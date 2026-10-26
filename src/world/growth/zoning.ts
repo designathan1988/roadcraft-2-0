@@ -449,28 +449,6 @@ export function designOnLot(site: GrowthSite, lot: Lot, rng: Rng, choice?: { val
   return null;
 }
 
-/** The record `designOnLot` made on a lot, made again from its choices (`GrownChoice`) alone: the same try with the same stream, the same candidate kept, the same pieces left out - no neighbour, road or paving read. `ground`: the land it was made on (a generated tile's is flat). Null when the choices do not make a building on this lot (another lot, another generator). */
-export function replayOnLot(lot: Lot, choice: GrownChoice, ground: (x: number, y: number) => number): Omit<Building, 'id'> | null {
-  const frame = frameOf(lot);
-  const density = densitiesOf(lot)[choice.density];
-  const at = trySites(frame)[choice.attempt];
-  if (!density || !at) return null;
-  const tried = tryOnLot(lot, frame, density, at, Rng.fromState(choice.state), choice.corner === 1 ? 'left' : choice.corner === 2 ? 'right' : undefined,
-    choice.neighbours, ground, () => choice.floor, { made: choice.made, kept: choice.kept, ...(choice.keptState && choice.afterState ? { keptState: choice.keptState, afterState: choice.afterState } : {}) });
-  if (!tried) return null;
-  const { body, bare, ring } = tried;
-  if (bare && choice.reach === 0) {
-    body.volumes = bare.volumes;
-    if (bare.elements) body.elements = bare.elements;
-    else delete body.elements;
-    fitToLot(body, ring);
-  }
-  const record = { ...body, x: at.anchor.x, y: at.anchor.y, rotation: frame.rotation } as Omit<Building, 'id'>;
-  if (!choice.dropped.length) return record;
-  const gone = new Set(choice.dropped);
-  return { ...record, elements: (record.elements ?? []).filter((_, k) => !gone.has(k)) };
-}
-
 /** A building grown on its lot written in the document: the record added (as checked, `designOnLot`), the lot naming it (`OpenLots.grew`). Returns its id. @perItem Runs once a building grown: nothing it reaches may walk the map. */
 export function commitGrown(doc: RoadDoc, lot: Lot, record: Omit<Building, 'id'>): number {
   const id = doc.buildings.add(record).id as number;

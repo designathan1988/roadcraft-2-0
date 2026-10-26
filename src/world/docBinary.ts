@@ -3,7 +3,7 @@ import { type BuildingSections, sectionsBytes } from './buildings/sections';
 /** THE MAP AS BINARY SECTIONS, NEVER ONE TEXT (report "Arquitetura para cidades grandes", "A conta de memória": V8 strings stop near 512 MiB; region files of offsets and lengths, each section read on its own): each part of the map's JSON one short UTF-8 section (a long list cut in runs), the buildings their table and what was written over it (`BuildingSections`). An undo of a whole map keeps the same image unpacked (`DocImage`), the buildings' table shared with the map it was, never copied. */
 
 /** A part of the map as `RoadDoc.toJSON` writes it: one key's value, or a run of a long list's items; its JSON in UTF-8. */
-export interface DocPart {
+interface DocPart {
   readonly name: string;
   /** Of a list cut in runs: this run's items, appended to the runs before it of the same name. */
   readonly run: boolean;

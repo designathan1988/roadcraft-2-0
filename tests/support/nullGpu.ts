@@ -75,7 +75,7 @@ function extensionObject(): object {
 interface NullCanvasLike { width: number; height: number }
 
 /** A WebGL2 context on `canvas` that accepts every call and draws nothing. */
-export function nullWebGl2(canvas: NullCanvasLike, attributes: WebGLContextAttributes = {}): WebGL2RenderingContext {
+function nullWebGl2(canvas: NullCanvasLike, attributes: WebGLContextAttributes = {}): WebGL2RenderingContext {
   const contextAttributes = {
     alpha: attributes.alpha ?? true, antialias: attributes.antialias ?? true, depth: attributes.depth ?? true,
     stencil: attributes.stencil ?? false, premultipliedAlpha: true, preserveDrawingBuffer: false,
@@ -215,7 +215,7 @@ export class NullCanvas {
 }
 
 /** An image: loaded at once (a turn later), one pixel, its texels never read (SMAA's lookup tables, three's `ImageLoader`). */
-export class NullImage {
+class NullImage {
   width = 1;
   height = 1;
   naturalWidth = 1;

@@ -58,7 +58,7 @@ interface JobSpec {
 }
 
 /** The worker a job's message is written for: whether it shares the page's memory (a worker of the page), or every shared buffer of the message is copied to it (a desktop job process's, `processWorker.ts` unshared). */
-export interface JobTaker { readonly sharesMemory: boolean }
+interface JobTaker { readonly sharesMemory: boolean }
 
 /** A job of the queue as its asker holds it. */
 export interface JobTicket {
@@ -618,7 +618,7 @@ export function setJobFocus(x: number, y: number): void {
 const RERANK_MOVE = 64;
 
 /** How far a point is from where the view looks (`setJobFocus`): a queued job's priority. */
-export const focusDistance = (x: number, y: number): number => Math.hypot(x - system.focusX, y - system.focusY);
+const focusDistance = (x: number, y: number): number => Math.hypot(x - system.focusX, y - system.focusY);
 
 /** DO NOT pin a lane by a hash of its service, nor put a long-running service's lane on a worker of the other kinds (or the other way round): the traffic's conflict pairs waited behind tile after tile and the city's clock stood still (the long lanes were placed last, on the workers the traffic's lanes already held) */
 function place(service: JobService): Host {
@@ -655,7 +655,7 @@ export function laneFirst(service: JobService, on: boolean): void {
 }
 
 /** A kind of work's lane in the pool: answers as a `Worker` does (`onmessage`, `onerror`, `postMessage`, `terminate`). */
-export class JobPort {
+class JobPort {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: ErrorEvent) => void) | null = null;
   onmessageerror: ((event: MessageEvent) => void) | null = null;

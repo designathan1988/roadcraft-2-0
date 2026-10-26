@@ -46,7 +46,7 @@ export interface LotToolHost {
 }
 
 /** What the scene draws of the lots, a group at a time (the shape of `render/lotOverlay.ts` `LotOverlayShapes`), and the labels. */
-export interface LotOverlay {
+interface LotOverlay {
   /** `built`: a lot with a building, whose yard's paving is coloured too. */
   readonly polygons: { corners: readonly Vec2[]; fill: number | null; fillAlpha: number; line: number; lineAlpha: number; width: number; built?: boolean }[];
   readonly lines: { a: Vec2; b: Vec2; colour: number; dashed: boolean; width: number }[];

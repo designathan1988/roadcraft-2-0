@@ -230,14 +230,6 @@ function once(done: () => void, object: Object3D): CompileEntry {
   return entry;
 }
 
-/** What waits for the door to be quiet (`compilesQuiet`): told at the first drain with nothing asked and nothing in flight. */
-const quietWaiters: (() => void)[] = [];
-/** Settles at the first drain with no compile asked nor in flight: what the view does not need yet (a light's variants, `shaderCatalogue.ts`) asked after what it does, never alongside it (the driver builds a few programs at once, Chrome's limit on its compile threads: public_webgl 2019, KHR_parallel_shader_compile). At once where no renderer answers. */
-export function compilesQuiet(): Promise<void> {
-  if (!compiler) return Promise.resolve();
-  return new Promise((done) => quietWaiters.push(done));
-}
-
 /** `shadow`: the object's material is a shadow's depth material, compiled for a shadow map. */
 export function compileAhead(object: Object3D, shadow = false): Promise<void> {
   if (!compiler) return Promise.resolve();
@@ -293,10 +285,7 @@ export function drainCompiles(renderer: WebGLRenderer, camera: Camera, scene: Sc
       if (entry.waits.size === 0) entry.settle();
     }
   }
-  if (!toCompile.length) {
-    if (inFlight.size === 0) for (const done of quietWaiters.splice(0)) done();
-    return;
-  }
+  if (!toCompile.length) return;
   // Without the parallel compile, three's compileAsync polls each program with a timer: built here at once instead, off the draw, and settled.
   const extensions = (renderer as { extensions?: { has?: (name: string) => boolean } }).extensions;
   const parallel = extensions?.has?.('KHR_parallel_shader_compile') ?? true;

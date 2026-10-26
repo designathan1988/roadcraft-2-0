@@ -40,6 +40,7 @@
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "@eslint/js": "^10.0.1",
+    "@jridgewell/trace-mapping": "0.3.31",
     "@playwright/test": "^1.62.1",
     "@types/node": "^24.13.3",
     "@types/three": "^0.186.0",
@@ -51,6 +52,7 @@
     "knip": "6.38.0",
     "meshoptimizer": "1.2.0",
     "patch-package": "^8.0.1",
+    "source-map-js": "1.2.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.67.0",
     "vite": "^8.2.2",
@@ -66,6 +68,12 @@
     "three": "^0.186.0"
   },
   "knip": {
+    "vitest": {
+      "config": [
+        "vitest.config.ts",
+        "vitest.scale.config.ts"
+      ]
+    },
     "entry": [
       "index.html",
       "src/main.ts!",
@@ -78,6 +86,9 @@
       "desktop/saves.cjs",
       "desktop/jobs.cjs",
       "src/jobs/nodeJobHost.ts!",
+      "src/lab/*Sheet.ts",
+      "src/lab/optimization/sheet.ts",
+      "src/lab/catalog/run.ts",
       "scripts/vite/desktop-jobs.config.ts",
       "eslint-rules/*.js"
     ],
@@ -95,7 +106,13 @@
       "steamworks.js"
     ],
     "ignoreBinaries": [
-      "taskkill.exe"
-    ]
+      "taskkill.exe",
+      "nvidia-smi"
+    ],
+    "paths": {
+      "/src/*": [
+        "./src/*"
+      ]
+    }
   }
 }

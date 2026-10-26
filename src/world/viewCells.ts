@@ -27,7 +27,7 @@ export const CellStage = { none: 0, derived: 1, resident: 2 } as const;
 export type CellStage = (typeof CellStage)[keyof typeof CellStage];
 
 /** What a cell's derivation made: its value, and the bytes it holds on the CPU and on the GPU. */
-export interface CellProduct<V> {
+interface CellProduct<V> {
   readonly value: V;
   readonly cpuBytes: number;
   /** Bytes on the GPU: a product holding some is resident. */

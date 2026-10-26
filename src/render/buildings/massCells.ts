@@ -31,7 +31,7 @@ const FINE_PIXELS = 0.5;
  *  comes and goes, and reads the other kept. Past it the facade level alone (the detail of a cell that far is not asked soon). */
 const PAIR_REACH = 2;
 /** A cell drawn near stays near down to this share of `NEAR_PIXELS`. */
-export const HYSTERESIS = 0.85;
+const HYSTERESIS = 0.85;
 const DETAIL_REACH = m(1_400); // cells within 1.4 km draw the detail level itself, whatever their pixels: the player asks for no LOD there (2026-10-20)
 /** A metre's pixels under which the 1.4 km reach forces no detail: a cell there spans too few pixels for any of it to be seen (the whole map at once, ~0.1 px a metre), and building it held the opening of a large city behind tens of seconds of work no pixel showed. */
 const DETAIL_REACH_VISIBLE = 0.5;
@@ -235,10 +235,10 @@ function sendUp(mesh: Mesh, cls: GpuClass, priority: () => number): void {
 }
 
 /** What the eye reads of a box (`measureSeen`): a metre's pixels there, the pixels allowed, its distance across the plan; `scale`, the frame's error scale (`frameBudget.ts`: 1 draws for 2 px, 2 for 4 px...). */
-export interface Seen { perMetre: number; allowed: number; across: number; scale?: number }
+interface Seen { perMetre: number; allowed: number; across: number; scale?: number }
 
 /** What the eye reads of a box (plan x/y, top), as Cesium measures to a tile's bounding volume; the eye low, the farther the box the more error it may make (`HORIZON_HALF`); the pixels allowed scaled by the frame's budget (`Seen.scale`). */
-export function measureSeen(seen: Seen, eyeX: number, eyeY: number, eyeZ: number, pxAtMetre: number, orthoPx: number | null, x0: number, y0: number, x1: number, y1: number, top: number): void {
+function measureSeen(seen: Seen, eyeX: number, eyeY: number, eyeZ: number, pxAtMetre: number, orthoPx: number | null, x0: number, y0: number, x1: number, y1: number, top: number): void {
   const dx = Math.max(x0 - eyeX, 0, eyeX - x1);
   const dy = Math.max(y0 - eyeY, 0, eyeY - y1);
   seen.across = Math.hypot(dx, dy);

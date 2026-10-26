@@ -34,10 +34,6 @@ export interface KerbReads {
   readonly laneAt: (x: number, y: number, segment: SegmentId) => BayLane | null;
   /** A street's link lanes as `laneAt` reads them, digested. */
   readonly linksKey: (segment: SegmentId) => number;
-  /** The street's bays baked with its tile (`sim/tileBays.ts`) when they were worked out from the very same (`key`); null: none. */
-  readonly baked?: (segment: SegmentId, key: number) => readonly Bay[] | null;
-  /** Whether the street's tile's baked bays are on their way (`parking.ts` tileBaysWanted): it waits for them, as a lot waits for the workers. */
-  readonly waits?: (segment: SegmentId) => boolean;
 }
 
 /** Ahead of a kerb bay, the place on the lane a car stops at to back in, and leaves for. */
@@ -80,16 +76,13 @@ export interface KerbBook {
   /** Each street's bays (ids from 0), and what they were worked out from (`kerbKey`). */
   readonly bays: Map<SegmentId, readonly Bay[]>;
   readonly keys: Map<SegmentId, number>;
-  /** Streets waiting for their tile's baked bays (`KerbReads.waits`); streets to look at again at the next follow (their tile's bays landed). */
-  readonly held: Set<SegmentId>;
-  readonly redo: Set<SegmentId>;
   /** The entrances of each building that has any, and the buildings by cell (`EntranceBook`). */
   readonly entrances: EntranceBook;
 }
 
 export function newKerbBook(): KerbBook {
   return {
-    net: null, netSeen: null, lanesSeen: null, reach: new Map(), streets: new Map(), bays: new Map(), keys: new Map(), held: new Set(), redo: new Set(),
+    net: null, netSeen: null, lanesSeen: null, reach: new Map(), streets: new Map(), bays: new Map(), keys: new Map(),
     entrances: new EntranceBook(),
   };
 }
@@ -97,7 +90,7 @@ export function newKerbBook(): KerbBook {
 interface Box { x0: number; y0: number; x1: number; y1: number }
 
 /** THE BUILDINGS' ENTRANCES AS NUMBERS IN COLUMNS (`core/idSlots.ts`), NOT THEIR RECORDS' ARRAYS: each building's run of entrances (ends x, y, x, y) in one typed array, and the ids by cell. DO NOT hold each building's `entrances` list in a `Map` with a `Set` entry a cell: ~1.2 KB of the simulation's heap a building of the city (2026-10-21). */
-export class EntranceBook {
+class EntranceBook {
   private readonly slots = new IdSlots(256);
   /** Each building's run of entrances at its slot, four numbers each (`RunPool`: a run let go stays until the dead outweigh the live). */
   private readonly runs = new RunPool();
@@ -220,15 +213,11 @@ export function followKerbs(w: KerbWorld, book: KerbBook, delta: BuildingDelta |
     for (const id of streets) {
       unfileStreet(book, id);
       book.keys.delete(id);
-      book.held.delete(id);
       if (book.bays.delete(id)) changed.add(id);
       fileStreet(w, book, id);
       if (book.reach.has(id)) dirty.add(id);
     }
   }
-  // The streets whose tile's baked bays landed: looked at again, with them.
-  for (const id of book.redo) if (book.reach.has(id)) dirty.add(id);
-  book.redo.clear();
   if (whole || delta === null) {
     for (const id of book.reach.keys()) dirty.add(id);
   } else {
@@ -245,19 +234,10 @@ export function followKerbs(w: KerbWorld, book: KerbBook, delta: BuildingDelta |
   }
   for (const id of [...dirty].sort((a, b) => a - b)) {
     const was = before.get(id);
-    if (reads.waits?.(id)) {
-      // No bays until its tile's land (`parking.ts` tileBaysRead): DO NOT lay it out before them only to lay it out again after.
-      book.held.add(id);
-      book.bays.delete(id);
-      book.keys.delete(id);
-      if (was?.length) changed.add(id);
-      continue;
-    }
-    book.held.delete(id);
     const entrances = entrancesFacing(book, book.reach.get(id)!, reads.rank);
     const key = kerbKey(w, id, entrances, reads);
-    // Worked out from the same: the same bays; else its tile's baked bays when baked from the same; else laid out here.
-    const now = was && keysBefore.get(id) === key ? was : reads.baked?.(id, key) ?? kerbBaysOf(w, id, entrances, reads.laneAt);
+    // Worked out from the same: the same bays; else laid out here.
+    const now = was && keysBefore.get(id) === key ? was : kerbBaysOf(w, id, entrances, reads.laneAt);
     book.bays.set(id, now);
     book.keys.set(id, key);
     if (!was || !sameBays(was, now)) changed.add(id);
@@ -297,7 +277,6 @@ function readStreets(w: KerbWorld, book: KerbBook): void {
   book.streets.clear();
   book.bays.clear();
   book.keys.clear();
-  book.held.clear();
   for (const id of w.net.ribbons.keys()) fileStreet(w, book, id);
 }
 

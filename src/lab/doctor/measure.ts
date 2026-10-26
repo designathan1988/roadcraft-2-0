@@ -2,12 +2,12 @@ import type { LabContext, LabSample } from '../labTypes';
 
 /** THE DIAGNOSIS'S MEASURES: one snapshot of where the frame goes (the GPU's passes, one frame's every draw, the CPU's systems and functions), and the quick A/B of one change (off, measured, back on, measured), from the other areas' probes. */
 
-export interface PassTime { readonly pass: string; readonly label: string; readonly avg: number; readonly p95: number; readonly share: number }
+interface PassTime { readonly pass: string; readonly label: string; readonly avg: number; readonly p95: number; readonly share: number }
 export interface Draw {
   readonly object: unknown; readonly name: string; readonly layer: string; readonly material: string; readonly program: string;
   readonly triangles: number; readonly calls: number; readonly instances: number; readonly pass: string; readonly target: string;
 }
-export interface ProfileFn { readonly name: string; readonly where: string; readonly category: string; readonly selfMs: number; readonly totalMs: number; readonly samples: number }
+interface ProfileFn { readonly name: string; readonly where: string; readonly category: string; readonly selfMs: number; readonly totalMs: number; readonly samples: number }
 
 export interface Snapshot {
   readonly at: number;
@@ -34,10 +34,10 @@ interface GpuProbe {
 }
 interface CodeProbe { start(live?: boolean): void; functions(view?: string): ProfileFn[]; status(): { running: boolean } }
 
-export const gpuProbe = (): GpuProbe | null => (window as unknown as { __labGpu?: GpuProbe }).__labGpu ?? null;
-export const codeProbe = (): CodeProbe | null => (window as unknown as { __labCode?: CodeProbe }).__labCode ?? null;
+const gpuProbe = (): GpuProbe | null => (window as unknown as { __labGpu?: GpuProbe }).__labGpu ?? null;
+const codeProbe = (): CodeProbe | null => (window as unknown as { __labCode?: CodeProbe }).__labCode ?? null;
 
-export const median = (values: readonly number[]): number => {
+const median = (values: readonly number[]): number => {
   if (!values.length) return NaN;
   const s = [...values].sort((a, b) => a - b);
   const m = s.length >> 1;
@@ -46,7 +46,7 @@ export const median = (values: readonly number[]): number => {
 const wait = (ms: number): Promise<void> => new Promise((resolve) => { window.setTimeout(resolve, ms); });
 
 /** The frames drawn for `ms`, every frame asked for (the game draws on demand: a still view would give none). */
-export async function framesFor(ctx: LabContext, ms: number): Promise<{ samples: LabSample[]; gpu: number[] }> {
+async function framesFor(ctx: LabContext, ms: number): Promise<{ samples: LabSample[]; gpu: number[] }> {
   const samples: LabSample[] = [];
   const ring = ctx.scene.gpu.samples;
   const pushed = ring.pushed;

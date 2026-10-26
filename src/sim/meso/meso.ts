@@ -20,9 +20,9 @@ import { SlotIndex, Threads, grown } from './slots';
 // waits for it (the far traffic slows, the tick does not grow). The page is sent only the links that changed (`MesoDelta`).
 
 /** Seconds of the city between two steps of the meso model. */
-export const MESO_DT = 1;
+const MESO_DT = 1;
 /** Links (and nodes) of meso work a tick: rates, the model's four phases and the publish together, about six units a link a step (measured: under 1 ms a tick at 200,000 links). A step of about 40,000 links keeps up with the clock at 60 ticks a second; past it the far traffic runs slower than the clock, the tick never longer. */
-export const MESO_WORK_PER_TICK = 4096;
+const MESO_WORK_PER_TICK = 4096;
 /** A trip's mean length, for the share of a link's traffic that ends its trip on it and how often its street's lots send one out. */
 const TRIP_LENGTH = m(3000);
 /** Most cars made in the window a tick, as the edge entries admit them (`vehicles/spawn.ts` ADMIT_PER_TICK). */

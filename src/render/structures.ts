@@ -428,7 +428,7 @@ function parapetRun(
 }
 
 /** A sheet of a structure's quads (parapets, retaining walls, their backfill), as arrays. */
-export interface StructureSheet {
+interface StructureSheet {
   readonly positions: Float32Array<ArrayBuffer>;
   readonly normals: Float32Array<ArrayBuffer>;
   readonly uvs: Float32Array<ArrayBuffer>;
@@ -436,7 +436,7 @@ export interface StructureSheet {
 }
 
 /** THE STRUCTURES OF SOME ROADS MADE, WITH NO MATERIAL (`buildStructureDetails`): each kind's instances' matrices, the sheets of quads, where they stand */
-export interface StructureParts {
+interface StructureParts {
   readonly piers: Float32Array<ArrayBuffer>;
   readonly caps: Float32Array<ArrayBuffer>;
   readonly abutments: Float32Array<ArrayBuffer>;
@@ -465,7 +465,7 @@ export function buildStructureDetails(
 }
 
 /** The roads' structures made (`only`: these roads'; all of the map without); `deckTile`, the deck's texture scale (`SceneMaterials.scale.deck`). */
-export function structureParts(net: Network, elevation: RoadElevation, terrainAt: (x: number, y: number) => number, deckTile: number, only?: readonly SegmentRibbon[]): StructureParts {
+function structureParts(net: Network, elevation: RoadElevation, terrainAt: (x: number, y: number) => number, deckTile: number, only?: readonly SegmentRibbon[]): StructureParts {
   const { raised, tunnels, walled } = structureRibbons(net, elevation, terrainAt, undefined, only);
   const spans = [...raised, ...tunnels, ...walled].map((ribbon) => {
     const bb = ribbon.full.bbox;
@@ -672,7 +672,7 @@ export function structureParts(net: Network, elevation: RoadElevation, terrainAt
 }
 
 /** THE STRUCTURES' MESHES from their parts (`structureParts`): the instances and sheets taken as they came; `groundMaterial`, the backfill's (none: no backfill drawn) */
-export function structureMeshes(parts: StructureParts, materials: SceneMaterials, groundMaterial?: Material,
+function structureMeshes(parts: StructureParts, materials: SceneMaterials, groundMaterial?: Material,
   shapes?: { readonly pier: BufferGeometry; readonly box: BufferGeometry }): StructureDetails {
   const group = new Group();
   group.matrixAutoUpdate = false;

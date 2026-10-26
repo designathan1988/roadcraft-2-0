@@ -5,7 +5,7 @@ export const ERROR_STEP = 1.25;
 /** The coarsest scale: 64 px of error, every cell at its masses or its plate (DO NOT climb for ever: a count that never fits, a view of nothing, would spin). */
 export const MOST_ERROR_SCALE = 32;
 /** Under this share of the budget the scale may come down a step (a gap under the budget, so a step down does not step up again next frame). */
-export const SLACK = 0.6;
+const SLACK = 0.6;
 
 /** THE CELLS HELD BACK THAT THE EYE CAME NEARER TO THAN A CELL KEPT (`layer.ts` capTriangles): let go. The budget coarsens the farthest first; a cell held in one view stayed held when the eye went down into it, its neighbours farther off kept in detail: the street view showed the building at the camera at its facade level (conferencia 09-street, 2026-10-17). `kept`: the cells drawn near now, each with whether at full detail; `away`: a cell's distance from the eye. */
 export function letGoPassed(heldFar: Set<string>, heldCoarse: Set<string>, kept: Iterable<{ readonly key: string; readonly fine: boolean }>, away: (key: string) => number): void {

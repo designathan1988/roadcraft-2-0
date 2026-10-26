@@ -52,7 +52,7 @@ import {
   planPoleRun,
   type PoleRunPlan,
 } from '@editor/poles';
-import { blockGridChoice, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleKind, poleLampMode, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
+import { blockGridChoice, createPoleChoices, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
 import { TERRAIN_MIN_MS, TerrainBrush, type DabSettings } from '@editor/terrainBrush';
 import { CLOUD_SPAN, scatterClouds } from '@world/clouds';
 import { CloudTool } from '@editor/cloudTool';
@@ -484,14 +484,16 @@ const roadTool = new RoadTool({
   hint: (key) => flashHint(key),
   redraw: () => requestDraw(),
 });
+/** What the pole tool builds (its panel's choices, `ui/toolChoices.ts`), shared by the tool and its panel. */
+const poleChoices = createPoleChoices();
 /** The pole tool (`editor/poles.ts`): the stretch being dragged and the line's last pole. */
 const poleTool = new PoleTool({
   doc,
   net,
   zoom: () => view.zoom,
   mode: () => poleToolMode(),
-  lamps: () => poleLampMode(),
-  kind: () => poleKind(),
+  lamps: () => poleChoices.lamps(),
+  kind: () => poleChoices.kind(),
   inHand: () => game.tool === 'pole',
   mutate: (fn) => mutateBuilt(fn),
   hint: (key) => flashHint(key),
@@ -1863,6 +1865,7 @@ function mountInterface(): void {
     workspace: buildings.workspace,
     game: gameState,
     inspectorPanel: document.getElementById('inspector'),
+    poleChoices,
     pickTool: (next) => { if (isTool(next)) pickTool(next); },
     setTool: (next) => { if (isTool(next)) setTool(next); },
     putDown: freeSelection,

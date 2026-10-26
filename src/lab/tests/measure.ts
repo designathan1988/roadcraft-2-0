@@ -34,13 +34,13 @@ export const median = (values: readonly number[]): number | null => {
   const m = s.length >> 1;
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 };
-export const quantile = (values: readonly number[], q: number): number | null => {
+const quantile = (values: readonly number[], q: number): number | null => {
   if (!values.length) return null;
   const s = [...values].sort((a, b) => a - b);
   return s[Math.min(s.length - 1, Math.max(0, Math.ceil(s.length * q) - 1))]!;
 };
 /** The median absolute deviation scaled to a standard deviation (×1.4826, as robust regression detectors use it). */
-export const robustSigma = (values: readonly number[]): number | null => {
+const robustSigma = (values: readonly number[]): number | null => {
   const m = median(values);
   if (m === null) return null;
   return 1.4826 * median(values.map((v) => Math.abs(v - m)))!;
@@ -134,9 +134,6 @@ export type ViewId = 'current' | 'map' | 'district' | 'street';
 export const VIEW_LABELS: Readonly<Record<ViewId, string>> = { current: 'current', map: 'map', district: 'district', street: 'street' };
 /** The zooms of the standard views (`scripts/look/views.json`: map 0.17, district 2.5, street 28). */
 const VIEW_ZOOM: Readonly<Record<Exclude<ViewId, 'current'>, number>> = { map: 0.17, district: 2.5, street: 28 };
-
-/** The budget's view (`VIEW_BUDGETS`) a zoom falls in. */
-export const budgetView = (zoom: number): 'map' | 'district' | 'street' => (zoom < 1 ? 'map' : zoom < 10 ? 'district' : 'street');
 
 export interface CameraAt { readonly x: number; readonly y: number; readonly zoom: number }
 export const cameraAt = (): CameraAt | null => {

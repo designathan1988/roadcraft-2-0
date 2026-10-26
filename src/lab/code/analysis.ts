@@ -5,7 +5,7 @@ import type { SourceStore } from './sourceStore';
 /** WHAT THE SUMS SAY: each function placed in its TypeScript file and given a category; the recursion, the deep stacks and the suspects read off them. */
 
 /** `game`: the game; `browser`: a native browser frame; `engine`: an engine-internal frame. `lab`: the debugging lab's own code (this sampler among it), apart so it can be filtered out. */
-export type Category = 'game' | 'lab' | 'three' | 'deps' | 'vite' | 'wasm' | 'browser' | 'engine' | 'worker' | 'other';
+type Category = 'game' | 'lab' | 'three' | 'deps' | 'vite' | 'wasm' | 'browser' | 'engine' | 'worker' | 'other';
 
 export interface FunctionRow {
   readonly stat: FunctionStat;
@@ -34,7 +34,7 @@ export interface Suspect {
 const num = (v: number, digits: number): string => v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
 /** The category of a script by its URL (and a native frame by its name). */
-export function categoryOf(id: FunctionId): Category {
+function categoryOf(id: FunctionId): Category {
   if (!id.url) return id.name.startsWith('(') ? 'engine' : 'browser';
   if (id.url.startsWith('wasm:')) return 'wasm';
   let path: string;
@@ -49,9 +49,9 @@ export function categoryOf(id: FunctionId): Category {
 }
 
 /** A server path short: no origin, no leading slash, no Vite query. */
-export const shortPath = (url: string): string => url.replace(/^[a-z]+:\/\/[^/]+\//i, '').replace(/\?.*$/, '');
+const shortPath = (url: string): string => url.replace(/^[a-z]+:\/\/[^/]+\//i, '').replace(/\?.*$/, '');
 
-export function whereOf(id: FunctionId, loc: SourceLocation | null): string {
+function whereOf(id: FunctionId, loc: SourceLocation | null): string {
   if (loc) return `${loc.file.replace(/^\//, '')}:${loc.line}`;
   // A script with no map (a prebundled dependency): its name alone, the line generated.
   return id.url ? `${shortPath(id.url).split('/').pop()}:${id.line} (generated)` : '(native)';

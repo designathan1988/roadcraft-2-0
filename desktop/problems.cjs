@@ -92,4 +92,4 @@ function createProblemLog({ folder, maxBytes = 512 * 1024, keep = 3, sessionMax 
   };
 }
 
-module.exports = { createProblemLog, fromPage, PAGE_KINDS };
+module.exports = { createProblemLog, fromPage };

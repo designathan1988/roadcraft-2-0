@@ -5,7 +5,7 @@ import type { QualitySettings } from './quality';
 /** THE OPTIMISATIONS THE GAME DOES NOT MAKE (the lab's "Optimisations" tab, `lab/optimizations/`): each one chosen alone, live, to measure what it gains and what it costs the picture. Its first value is the game as it draws today: every one at its first value, nothing differs (`isDefaultOptimizations`). Applied in the renderer (`optimizationsApply.ts`), the tier's settings (`withOptimizations`) and the frame (`main.ts` population). */
 
 export { OPT_SYSTEM_TITLES } from './optimizationTypes';
-export type { OptChoice, OptSystem, OptValue } from './optimizationTypes';
+export type { OptSystem, OptValue } from './optimizationTypes';
 
 /** An optimisation as written below, before what it affects is given it. */
 interface BaseSpec {
@@ -306,10 +306,6 @@ export function optimizationChoice(id: string, value: unknown): OptValue | undef
   const spec = optimizationSpec(id);
   if (!spec) return undefined;
   return spec.choices.find((c) => c.value === value || String(c.value) === String(value))?.value;
-}
-
-export function isDefaultOptimizations(values: Optimizations): boolean {
-  return OPTIMIZATIONS.every((spec) => values[spec.id] === spec.choices[0]!.value);
 }
 
 /** The tier's settings that the optimisations change. */

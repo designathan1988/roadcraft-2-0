@@ -8,7 +8,7 @@ import { summarize } from './overview';
 
 /** THE LAB'S DIAGNOSTICS ("Checks"): the machine, the browser and the game's resources checked one by one, each with its verdict (ok, warning, problem), what it read and why it matters, and the tab where to look further */
 
-export type Verdict = 'ok' | 'warning' | 'problem' | 'info';
+type Verdict = 'ok' | 'warning' | 'problem' | 'info';
 
 export interface Check {
   readonly id: string;

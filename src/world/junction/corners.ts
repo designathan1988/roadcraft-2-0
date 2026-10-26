@@ -8,9 +8,6 @@ import { type Leg } from './legs';
 import type { Corner, CornerMode } from './types';
 export type { Corner };
 
-/** A corner as plain data (`cornerData`, `cornerOf`): what a message's clone keeps of it (`NetworkBake`). */
-export type CornerData = { -readonly [K in keyof Corner]: Corner[K] };
-
 /** Where a corner's numbers stand in its run (`PackedCorner`): its wedge and trims, its point (NaN: none), its fillet (NaN: none). */
 const PSI = 0, TRIM_I = 1, TRIM_J = 2, XX = 3, XY = 4, TAX = 5, TAY = 6, TBX = 7, TBY = 8, CX = 9, CY = 10, R = 11, RUN = 12;
 
@@ -61,11 +58,6 @@ export function unpackCorners(nums: readonly number[]): Corner[] {
     k += 5 + n;
   }
   return out;
-}
-
-/** A corner's fields as plain data (`CornerData`). */
-export function cornerData(c: Corner): CornerData {
-  return { i: c.i, j: c.j, mode: c.mode, x: c.x, psi: c.psi, fillet: c.fillet, trimI: c.trimI, trimJ: c.trimJ };
 }
 
 /** Resolves every corner of a junction. */

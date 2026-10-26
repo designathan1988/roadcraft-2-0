@@ -1,6 +1,6 @@
 import type { BufferGeometry, Material, Object3D } from 'three';
 import { createLabTable } from '../table';
-import { bytes, el, fold, heading, kv, num, valueTree } from './dom';
+import { bytes, el, fold, heading, kv, valueTree } from './dom';
 import {
   attributeRows, decomposed, geometrySummary, instanceMatrix, layerOf, materialProps, materialsOf, ownCompile, pathOf, programOf, texturesOf, trianglesUnder,
 } from './describe';
@@ -11,7 +11,7 @@ import type { Hit, InspectorState, Selection } from './state';
 /** THE INSPECTOR'S 3D SECTIONS: the object (its path, flags, matrices, instance, the other objects under the cursor), its geometry and its materials - each with its live edits (`edit.ts`). */
 
 /** The selection moved to another object (an ancestor, another hit), the game's entity kept. */
-export function reselect(state: InspectorState, base: Selection, object: Object3D, hit?: Hit): void {
+function reselect(state: InspectorState, base: Selection, object: Object3D, hit?: Hit): void {
   state.select({
     ...base, object, instanceId: hit?.instanceId ?? null, batchId: hit?.batchId ?? null, point: hit?.point ?? base.point, exact: hit?.exact ?? false,
   });
@@ -188,6 +188,3 @@ const safeKey = (material: Material): string => {
     return String(error);
   }
 };
-
-/** A short line for lists: type, name, triangles. */
-export const objectLine = (o: Object3D): string => `${o.type} "${o.name || '—'}" · ${num(trianglesUnder(o))} tri`;

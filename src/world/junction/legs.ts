@@ -9,9 +9,6 @@ import { type PolylineCache, frameFromNode, farNode, segmentStartsAt } from '../
 import type { Leg } from './types';
 export type { Leg };
 
-/** A leg as plain data, every field its own (`legData`, `legOf`): what a message's clone keeps of it (`NetworkBake`). */
-export type LegData = { -readonly [K in keyof Leg]: Leg[K] };
-
 /** Where a leg's numbers stand in its run (`PackedLeg`). */
 const OX = 0, OY = 1, DX = 2, DY = 3, NX = 4, NY = 5, ANG = 6, HW = 7, HW_LEFT = 8, HW_RIGHT = 9, HW_SIDEWALK = 10, LENGTH = 11, SHIFT = 12;
 
@@ -81,15 +78,6 @@ export function unpackLegs(nums: readonly number[], roads: readonly RoadType[]):
       DIRECTIONS[nums[k + 4]!]!, nums[k + 5] === 1, roads[nums[k + 6]!]!, nums.slice(k + 7, k + LEG_PACK)));
   }
   return out;
-}
-
-/** A leg's fields as plain data (`LegData`). */
-export function legData(leg: Leg): LegData {
-  return {
-    seg: leg.seg, far: leg.far, origin: leg.origin, dir: leg.dir, nrm: leg.nrm, ang: leg.ang, hw: leg.hw, hwLeft: leg.hwLeft,
-    hwRight: leg.hwRight, plusSide: leg.plusSide, hwSidewalk: leg.hwSidewalk, length: leg.length, typeIndex: leg.typeIndex,
-    direction: leg.direction, approaching: leg.approaching, road: leg.road, shift: leg.shift,
-  };
 }
 
 export interface LegBuildOptions {

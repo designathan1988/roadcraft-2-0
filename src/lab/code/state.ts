@@ -6,7 +6,7 @@ import { createSourceStore, type SourceStore } from './sourceStore';
 
 /** THE CODE TABS' SHARED STATE: the sampler, the sources, what is shown, the engine's products counted (idle refreshes). */
 
-export interface ProductCount { refreshes: number; idle: number; ms: number }
+interface ProductCount { refreshes: number; idle: number; ms: number }
 
 export interface CodeState {
   readonly sampler: CodeSampler;

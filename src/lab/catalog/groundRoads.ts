@@ -50,7 +50,7 @@ const LAYOUTS: readonly { readonly name: string; readonly variation: string; lay
 
 /** The plate's corners (the plate centred on the origin), shaped to the roads on level land (height 0, the ground the layout's roads were solved
  *  on) as `shapeCorners` blends them, and the diagonals the terrain draws its cells with. */
-export function shapedPlate(elevation: Pick<RoadElevation, 'shapeAt'>): { heights: Float64Array; flip: Uint8Array } {
+function shapedPlate(elevation: Pick<RoadElevation, 'shapeAt'>): { heights: Float64Array; flip: Uint8Array } {
   const heights = new Float64Array(N * N);
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
@@ -68,7 +68,7 @@ export function shapedPlate(elevation: Pick<RoadElevation, 'shapeAt'>): { height
 }
 
 /** The plate's whole cells over [x0, x1] x [y0, y1] (`cut` left out: their own mesh draws them), as level 0 draws them; three's axes (x, height, -y). */
-export function groundCells(plate: { heights: Float64Array; flip: Uint8Array }, cut: ReadonlySet<number>, x0: number, y0: number, x1: number, y1: number): BufferGeometry {
+function groundCells(plate: { heights: Float64Array; flip: Uint8Array }, cut: ReadonlySet<number>, x0: number, y0: number, x1: number, y1: number): BufferGeometry {
   const i0 = Math.floor((x0 + TERRAIN_HALF) / TERRAIN_CELL), i1 = Math.ceil((x1 + TERRAIN_HALF) / TERRAIN_CELL);
   const j0 = Math.floor((TERRAIN_HALF - y1) / TERRAIN_CELL), j1 = Math.ceil((TERRAIN_HALF - y0) / TERRAIN_CELL);
   const positions: number[] = [];
@@ -92,7 +92,7 @@ export function groundCells(plate: { heights: Float64Array; flip: Uint8Array }, 
 }
 
 /** The cut cells' mesh as level 0 draws it, unmorphed (`terrainLod.ts` seamVertex: a corner at its grid height, an edge's point at its own). */
-export function seamGeometry(joined: JoinedSeams): BufferGeometry {
+function seamGeometry(joined: JoinedSeams): BufferGeometry {
   const geometry = new BufferGeometry();
   geometry.setAttribute('position', new BufferAttribute(joined.positions, 3));
   geometry.setAttribute('normal', new BufferAttribute(joined.normals, 3));

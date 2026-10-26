@@ -31,7 +31,7 @@ export interface PassRow {
   readonly share: number;
 }
 
-export interface Capture {
+interface Capture {
   readonly t: number;
   readonly records: readonly DrawRecord[];
   readonly targets: readonly RenderTarget[];

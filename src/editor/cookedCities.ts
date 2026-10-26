@@ -6,11 +6,12 @@ import type { SerializedDoc } from '@world/doc';
 export const COOKED_CITY_SEEDS = { large: 7, small: 7 } as const;
 export type CookedKind = keyof typeof COOKED_CITY_SEEDS;
 
-/** Where they are kept beside the game (`cook-plugin.ts` copies the folder into the build). */
+/** Where they are kept beside the game (`cook-plugin.ts` copies the folder into the build). Read by name by `scripts/cook-cities.mjs` (Vite's `ssrLoadModule`).
+ *  @public */
 export const COOKED_CITIES_DIR = 'cities';
 
 /** What `cook-cities.mjs` writes: the generator's fingerprint it grew them with (`__CITY_GEN_HASH__`), each city's two files. */
-export interface CookedCitiesManifest {
+interface CookedCitiesManifest {
   readonly hash: string;
   readonly cities: Partial<Record<CookedKind, { readonly seed: number; readonly data: string; readonly table: string }>>;
 }

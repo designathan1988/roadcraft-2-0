@@ -2,7 +2,7 @@ import { onLanguageChange, t } from './i18n';
 
 /** THE GRAPHICS OPTIONS: a dialog of choices, each applied to the running game as it is picked (`graphicsWiring.ts`). */
 
-export type PresetName = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
+type PresetName = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
 
 export interface GraphicsChoices {
   readonly preset: PresetName;

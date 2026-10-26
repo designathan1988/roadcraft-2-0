@@ -3,7 +3,6 @@ import type { BuildingId } from '@world/buildings/types';
 import type { ChangeRect } from '@world/changes';
 import type { SegmentId } from '@world/ids';
 import type { LaneletId } from '@world/lanelets';
-import { OWNER } from '@world/tiles';
 import { type Bay, type BayLane, bayWork } from './bay';
 import { LOT_READS, TRAIT_PARKING, type TrafficBuilding, type TrafficBuildings, type TrafficFacts } from './trafficBuildings';
 import { BuildingsInOrder } from './buildingOrder';
@@ -69,25 +68,6 @@ export function useBayWorkers(w: BayWorld, workers: BayWorkers): void {
   bookOf(w).workers = workers;
 }
 
-/** A tile's bays as baked where it was written (`sim/tileBays.ts` TileBays): each lot's and street's, with what they were worked out from. */
-export interface BakedBays {
-  /** The lots and the streets it holds bays of. */
-  lots(): Iterable<BuildingId>;
-  kerbs(): Iterable<SegmentId>;
-  /** A lot's bays, when baked from this very record (`lotKey`) and these lanes and walls (`lookAtLot`); null else. */
-  lot(id: BuildingId, record: number, sources: number): readonly Bay[] | null;
-  /** A street's bays, when baked from the very same (`kerbBays.ts` kerbKey); null else. */
-  kerb(id: SegmentId, sources: number): readonly Bay[] | null;
-}
-
-/** One lot's or street's bays as a bake keeps them (`bakeBays`): the record's digest (0 for a street) and the sources'. */
-export interface BakedSource {
-  readonly id: number;
-  readonly record: number;
-  readonly sources: number;
-  readonly bays: readonly Bay[];
-}
-
 /** The bays of a world as last worked out, and what they were worked out from. */
 interface BayBook {
   /** The bays' sources (`L<building>` a lot, `K<segment>` a street's kerb) whose bays changed since `logBase`, oldest first */
@@ -112,12 +92,6 @@ interface BayBook {
   lanesSeen: object | null;
   /** The town's list, ids in order. */
   out: readonly Bay[];
-  /** The bays baked with the tiles held (`tileBaysRead`), by tile, and the tile's bake each lot and street is in: taken where worked out from the same. */
-  readonly bakedTiles: Map<number, BakedBays>;
-  readonly bakedLots: Map<BuildingId, BakedBays>;
-  readonly bakedKerbs: Map<SegmentId, BakedBays>;
-  /** The tiles whose baked bays are being read, with the read (`tileBaysWanted`): their streets wait for them. */
-  readonly reading: Map<number, number>;
   /** What the kerbs read of this world (`kerbReads`), made once. */
   reads: KerbReads | null;
 }
@@ -128,60 +102,14 @@ function bookOf(w: BayWorld): BayBook {
   let book = BOOKS.get(w);
   if (!book) {
     book = { lots: new BuildingsInOrder(hasParking), known: new Map(), waiting: new Map(), kerb: newKerbBook(), workers: null, lanesSeen: null,
-      out: [], log: [], logHead: 0, logBase: 0, serial: 0, readers: new Map(), outStale: true, bakedTiles: new Map(), bakedLots: new Map(), bakedKerbs: new Map(), reading: new Map(),
+      out: [], log: [], logHead: 0, logBase: 0, serial: 0, readers: new Map(), outStale: true,
       reads: null };
     BOOKS.set(w, book);
   }
   return book;
 }
 
-/** A tile's baked bays are being read (`simHost.ts` tileBuildings): its own streets wait for them (`KerbReads.waits`), as a lot waits for the workers. */
-export function tileBaysWanted(w: BayWorld, tile: number, read: number): void {
-  bookOf(w).reading.set(tile, read);
-}
-
-/** A tile's read landed: its baked bays (null: none stored, of another format, or not read) offered while that read is the tile's last, its streets looked at again. */
-export function tileBaysRead(w: BayWorld, tile: number, read: number, bays: BakedBays | null): void {
-  const book = bookOf(w);
-  if (book.reading.get(tile) !== read) return;
-  book.reading.delete(tile);
-  if (bays) {
-    dropBaked(book, tile);
-    book.bakedTiles.set(tile, bays);
-    for (const id of bays.lots()) book.bakedLots.set(id, bays);
-    for (const id of bays.kerbs()) book.bakedKerbs.set(id, bays);
-  }
-  release(book);
-}
-
-/** A tile let go: its baked bays dropped, its streets no longer wait. */
-export function tileBaysGone(w: BayWorld, tile: number): void {
-  const book = bookOf(w);
-  dropBaked(book, tile);
-  if (book.reading.delete(tile)) release(book);
-}
-
-/** Another map put in: every tile's baked bays and reads of the old one dropped. */
-export function tileBaysReset(w: BayWorld): void {
-  const book = bookOf(w);
-  for (const tile of new Set([...book.bakedTiles.keys(), ...book.reading.keys()])) tileBaysGone(w, tile);
-}
-
-function dropBaked(book: BayBook, tile: number): void {
-  const was = book.bakedTiles.get(tile);
-  if (!was) return;
-  book.bakedTiles.delete(tile);
-  for (const id of was.lots()) if (book.bakedLots.get(id) === was) book.bakedLots.delete(id);
-  for (const id of was.kerbs()) if (book.bakedKerbs.get(id) === was) book.bakedKerbs.delete(id);
-}
-
-/** The streets held for a tile's bays looked at again at the next follow (those whose tile still waits held again). */
-function release(book: BayBook): void {
-  for (const id of book.kerb.held) book.kerb.redo.add(id);
-  book.kerb.held.clear();
-}
-
-/** What a street's kerb bays read of the world, and its tile's bake (`kerbBays.ts` KerbReads). */
+/** What a street's kerb bays read of the world (`kerbBays.ts` KerbReads). */
 function kerbReads(w: BayWorld, book: BayBook): KerbReads {
   return {
     rank: (id) => book.lots.rank(id),
@@ -196,35 +124,10 @@ function kerbReads(w: BayWorld, book: BayBook): KerbReads {
       }
       return digest.value();
     },
-    baked: (segment, key) => book.bakedKerbs.get(segment)?.kerb(segment, key) ?? null,
-    waits: (segment) => book.reading.size > 0 && book.reading.has(streetTile(w, segment)),
   };
 }
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
-
-/** The tile a street belongs to (`OWNER`: by the middle of its ends); NaN when it cannot be said. */
-function streetTile(w: BayWorld, segment: SegmentId): number {
-  const s = w.doc.segment(segment);
-  const a = s && w.doc.node(s.a), b = s && w.doc.node(s.b);
-  return a && b ? OWNER.segment(a, b) : Number.NaN;
-}
-
-/** @rebuild Every lot's and street's bays of a world worked out here and now (no workers), each with what it was worked out from: what a tile's bake keeps (`sim/tileBays.ts`). */
-export function bakeBays(w: BayWorld): { readonly lots: readonly BakedSource[]; readonly kerbs: readonly BakedSource[] } {
-  const book = baysNow(w);
-  const lots: BakedSource[] = [];
-  for (const id of book.lots.ids) {
-    const known = book.known.get(id);
-    if (known) lots.push({ id, record: known.lot, sources: known.key, bays: known.bays });
-  }
-  const kerbs: BakedSource[] = [];
-  for (const id of streetsInOrder(book)) {
-    const bays = book.kerb.bays.get(id), key = book.kerb.keys.get(id);
-    if (bays && key !== undefined) kerbs.push({ id, record: 0, sources: key, bays });
-  }
-  return { lots, kerbs };
-}
 
 /** A lot asked of the workers, with what it is worked out from. */
 interface Asked { readonly id: BuildingId; readonly sources: LotSources; readonly ask: LotAsk }
@@ -391,14 +294,6 @@ function lookAtLot(w: BayWorld, book: BayBook, b: TrafficBuilding, rects: readon
   const key = digest.value();
   if (was && was.lot === lot && was.key === key) { book.waiting.delete(b.id); return; }
   if (waiting && waiting.lot === lot && waiting.key === key) return;
-  // Its tile's baked bays, worked out from this very record, these lanes and walls (`sim/tileBays.ts`): taken, nothing worked out.
-  const baked = book.bakedLots.get(b.id)?.lot(b.id, lot, key);
-  if (baked) {
-    book.waiting.delete(b.id);
-    book.known.set(b.id, { lot, key, bays: baked });
-    noteBays(book, `L${b.id}`);
-    return;
-  }
   bayWork.lots++;
   if (!asked) {
     book.known.set(b.id, { lot, key, bays: bayRows(pageReads(w, walls), b) });

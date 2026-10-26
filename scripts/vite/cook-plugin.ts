@@ -84,7 +84,8 @@ function derivedHash(root: string, entry: string, also: readonly string[] = []):
   return hash.digest('hex').slice(0, 16);
 }
 
-/** The city generator's fingerprint (`__CITY_GEN_HASH__`): what the shipped cities are stamped with (`scripts/cook-cities.mjs`). */
+/** The city generator's fingerprint (`__CITY_GEN_HASH__`): what the shipped cities are stamped with (`scripts/cook-cities.mjs`, read by name through Vite's `ssrLoadModule`).
+ *  @public */
 export function cityGenHash(root: string): string {
   return derivedHash(root, 'src/cityGen.worker.ts');
 }

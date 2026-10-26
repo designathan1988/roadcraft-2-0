@@ -24,7 +24,7 @@ export interface SweepOptions {
   readonly settleMaxMs?: number;
 }
 
-export type Verdict = 'gain' | 'loss' | 'noise';
+type Verdict = 'gain' | 'loss' | 'noise';
 
 export interface SweepRow {
   readonly item: string;
@@ -73,7 +73,7 @@ interface Rep { a1: WindowStats; b: WindowStats; a2: WindowStats; sceneChanged: 
 const text = (v: unknown): string => (v === undefined ? '—' : String(v));
 
 /** The items a sweep's options pick. */
-export function pickItems(all: readonly SweepItem[], options: SweepOptions): SweepItem[] {
+function pickItems(all: readonly SweepItem[], options: SweepOptions): SweepItem[] {
   if (options.items?.length) return all.filter((i) => options.items!.includes(i.id) || options.items!.includes(i.label));
   if (options.groups?.length) return all.filter((i) => options.groups!.some((g) => i.group.startsWith(g)));
   return [...all];

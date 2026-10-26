@@ -92,7 +92,7 @@ export interface GrowAsk {
 }
 
 /** A lot grown: the building made for it, null when nothing fits it. */
-export interface Grown {
+interface Grown {
   readonly lot: number;
   readonly record: Omit<Building, 'id'> | null;
 }
@@ -106,7 +106,7 @@ export type GrowAnswer =
 export const BATCH_MOST = 32;
 
 /** A question asked outside where the request said its lot reads: the page sends it again with more round it. */
-export class GrowthMiss extends Error {}
+class GrowthMiss extends Error {}
 
 /** Whether rectangle `a` lies within `b`. */
 const within = (a: ChangeRect, b: ChangeRect): boolean => a[0] >= b[0] && a[1] >= b[1] && a[2] <= b[2] && a[3] <= b[3];

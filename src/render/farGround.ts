@@ -8,8 +8,8 @@ import { PLATE_SIZE, plateOf } from '@world/bounds';
  */
 
 /** A node is split while the view is nearer its box than this many times its side: level 1's (from 2 x 2 plates down to the plates), and above it. DO NOT lower `SPLIT_PLATES` under 2 sqrt 2 (a map of 6 x 6 plates' farthest 2 x 2 from its corner, 4 sqrt 2 plates off): within it every plate of a map of 6 x 6 plates (12 km) stays a plate's patch wherever the view stands (the ground seen as before). */
-export const SPLIT_PLATES = 3;
-export const SPLIT_ABOVE = 2;
+const SPLIT_PLATES = 3;
+const SPLIT_ABOVE = 2;
 
 /** One node of the far ground chosen for the view: its level, its key, its square (world units; clipped to the map's ring where it passes it), its quads' step and how many of its quads lie on the map each way. */
 export interface FarNode {

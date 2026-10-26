@@ -22,7 +22,7 @@ export function layPowerLines(doc: RoadDoc, net: Network, segments: Iterable<Seg
 }
 
 /** `layPowerLines` a few streets at a time: yields every `STREETS_A_STEP` segments and returns how many runs were built. */
-export function* layPowerLinesSteps(doc: RoadDoc, net: Network, segments: Iterable<SegmentId>, plan?: PlanRun): Generator<void, number> {
+function* layPowerLinesSteps(doc: RoadDoc, net: Network, segments: Iterable<SegmentId>, plan?: PlanRun): Generator<void, number> {
   let built = 0;
   let seen = 0;
   const ids = [...segments].sort((a, b) => a - b);

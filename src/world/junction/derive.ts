@@ -44,7 +44,7 @@ function derivable(base: Junction): boolean {
 }
 
 /** The carriageway's trims by road, the last leg of a road standing (a road that comes back to its node). */
-export function baseTrims(base: Junction): Map<SegmentId, number> {
+function baseTrims(base: Junction): Map<SegmentId, number> {
   const trimOf = new Map<SegmentId, number>();
   base.legs.forEach((leg, i) => trimOf.set(leg.seg, base.trims[i] as number));
   return trimOf;
@@ -54,7 +54,7 @@ export function baseTrims(base: Junction): Map<SegmentId, number> {
  * One outer level of `base` from its legs at that level (`buildLegs` framed at the carriageway's trims, or the same legs kept as
  * numbers, `junction/levels.ts`): reads no document, so a level let go is made again, the same, from what the junction keeps.
  */
-export function deriveFromLegs(base: Junction, level: SurfaceLevel, legs: readonly Leg[]): Junction | null {
+function deriveFromLegs(base: Junction, level: SurfaceLevel, legs: readonly Leg[]): Junction | null {
   if (!derivable(base)) return null;
   if (base.transition) return deriveTransitionFromLegs(base, level, legs);
   const nodeId: NodeId = base.nodeId;

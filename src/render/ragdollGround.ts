@@ -1,7 +1,7 @@
 /** THE GROUND THE BODIES LAND ON: heights at the corners of a fine grid, kept by tiles while something on them moves */
 
 /** Corners a world unit along each axis (a corner every 0.2 units). */
-export const CORNERS_PER_UNIT = 5;
+const CORNERS_PER_UNIT = 5;
 /** Corners along a tile's side: 10 m of them (`CORNERS_PER_UNIT`), the universal grid's cell (`world/grid.ts` GRID_CELL). */
 const TILE = 50;
 /** Tile indices are shifted by this much into the key (`key`): maps up to 2^20 tiles across either way. */

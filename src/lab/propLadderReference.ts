@@ -23,6 +23,8 @@ export interface ReferenceFurniture {
   dispose(): void;
 }
 
+/** The reference layer, loaded by name through `propLadderSheet.ts`'s dynamic import (`REFERENCE`).
+ *  @public */
 export function referenceFurniture(kit: SceneryKit): ReferenceFurniture {
   const pictures = sceneryPictures(kit);
   const ladder = propLadder(kit);

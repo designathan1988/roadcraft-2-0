@@ -113,7 +113,7 @@ import { type BuildingProgram, type LotsProgram, MASS_FLATTENED, MASS_KEEP, MASS
 import { PARASOL_HALF, PARASOL_HIGH, PARASOL_LOW, ROOF_COLOURS, TANK_COLOURS, machineRooms, roofPlantOf, terraceDeck, terraceParasols, terraceSeed } from './roofPlan';
 import type { FlagInstance } from './flagLayer';
 import type { BuildingChunk, LotGround, LotGroundRecipe, PartBatch, RunChunk, ShellChunk } from './chunk';
-export type { BuildingChunk, LotGround, LotGroundRecipe, PartBatch,  } from './chunk';
+export type { BuildingChunk, LotGround, LotGroundRecipe, PartBatch } from './chunk';
 import { drawsSignature } from './signature';
 import { type Cover, type PartyWalls, hiddenByCovers } from './partyWalls';
 import { POSE_FLOATS, letGoPosed, partPoseDepth, poseMatrixInto, posedCopy } from './partPose';
@@ -4284,11 +4284,6 @@ export function emitChunk(b: Building, groundAt: GroundAt, pavedAt?: PavedAt, na
   party?: PartyWalls, writer?: ShellWriter): BuildingChunk {
   const p = emitProgram(b, groundAt, pavedAt, naturalAt, { near: !far, far }, { slots, apart, ...(party ? { party } : {}), ...(writer ? { writer } : {}) });
   return (far ? p.far : p.near)!;
-}
-
-/** What the page keeps of a building (`cellWork.ts` `ChunkSummary`): its program's summary, its mass stage alone walked (no level laid). */
-export function chunkSummary(b: Building, groundAt: GroundAt, pavedAt?: PavedAt, naturalAt: GroundAt = groundAt, party?: PartyWalls): ProgramSummary {
-  return summaryOf(emitProgram(b, groundAt, pavedAt, naturalAt, { near: false, far: false }, party ? { party } : {}));
 }
 
 /** A part's arrays viewed at their length, no copy. */

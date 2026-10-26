@@ -8,7 +8,7 @@ import { buildingsChangedSince, cellKey } from '../ambient/ambientIndex';
 /** WHAT THE LAND USE PUTS ON THE STREETS, BY THE WORLD'S 250 m CELL: the meso traffic's trips start and end where the buildings are */
 
 /** The world's cell (CLAUDE.md, one grid; `world/cells.ts`). */
-export const DEMAND_CELL = CELL;
+const DEMAND_CELL = CELL;
 /** Buildings in a cell at which its streets carry the ambient's full density (`ambient/demand.ts` CARS); fewer, in proportion. */
 const FULL_CELL = 24;
 const KINDS: readonly (keyof Mix)[] = ['home', 'shop', 'work', 'civic'];

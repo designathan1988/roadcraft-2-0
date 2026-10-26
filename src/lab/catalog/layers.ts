@@ -42,7 +42,7 @@ const LEG = m(70);
 
 /** A layer's instances culled as a camera close by sees them (`renderer.ts` crowdFrustum, crowdProjection): a run's copies are written only by its cull,
  *  each at the level its size on the screen picks; this camera, 60 m off and 40 m up looking at the centre, sees the whole layout up close. */
-export function cullClose(layer: { cull(frustum: Frustum, view: Matrix4): void }): void {
+function cullClose(layer: { cull(frustum: Frustum, view: Matrix4): void }): void {
   const camera = new PerspectiveCamera(90, 16 / 9, m(0.1), m(2000));
   camera.position.set(0, m(40), m(60));
   camera.lookAt(0, 0, 0);

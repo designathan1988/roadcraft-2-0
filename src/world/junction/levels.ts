@@ -89,7 +89,7 @@ function filled(kit: JunctionKit, j: Junction): boolean {
 }
 
 /** A junction kept small (`LeanJunction`). */
-export function leanJunction(j: Junction, kit: JunctionKit): Junction {
+function leanJunction(j: Junction, kit: JunctionKit): Junction {
   if (j instanceof LeanJunction) return j;
   const kept = filled(kit, j) ? null
     : j.tongues.length === 0 && j.rings.length === 0 ? { tongues: EMPTY_RINGS, rings: EMPTY_RINGS } : { tongues: j.tongues, rings: j.rings };
@@ -121,11 +121,11 @@ function sameLeg(a: Leg, b: Leg): boolean {
 }
 
 /** A ring as its run of numbers (`Ring.run`): what a message's clone keeps of it (a class's methods are not cloned, `structuredClone`). */
-export type RingRun = ReturnType<Ring['run']>;
+type RingRun = ReturnType<Ring['run']>;
 const runOf = (r: Ring): RingRun => r.run();
 
 /** A junction as runs of numbers, for another thread (`NetworkBake`): its legs and corners packed (`packLegs`, `packCorners`), its rings as runs. */
-export interface JunctionData {
+interface JunctionData {
   readonly nodeId: NodeId;
   readonly level: SurfaceLevel;
   readonly legs: readonly number[];

@@ -98,7 +98,7 @@ export function shoreLevelsInto(levels: Float32Array, position: ArrayLike<number
 }
 
 /** The levels' nodes after `job.box` moved, as the page's `LandLevels` measures them (`markBox`, `measure`). */
-export function measureLevels(job: LevelsJob): Float32Array {
+function measureLevels(job: LevelsJob): Float32Array {
   const levels = new LandLevels(job.seg);
   levels.seams.set(job.seams);
   levels.take(job.levels);
@@ -111,7 +111,7 @@ export function measureLevels(job: LevelsJob): Float32Array {
 export interface LandStrokeScratch { woods: Float32Array | null }
 
 /** The cells of the base `job.rect` reaches, as the page works them out (`woodsBaseInto` on the plate's natural land, `terrain.ts` sampleGrid). */
-export function woodsBlock(job: WoodsJob, scratch: LandStrokeScratch = { woods: null }): WoodsBlock {
+function woodsBlock(job: WoodsJob, scratch: LandStrokeScratch = { woods: null }): WoodsBlock {
   const { n, cell, half, natural, flip, outside } = job;
   const grid = { n, cell, half };
   let next = 0;

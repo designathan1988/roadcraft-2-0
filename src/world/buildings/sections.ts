@@ -49,27 +49,6 @@ export function sectionsBytes(s: BuildingSections): number {
   return (s.base?.byteLength ?? 0) + s.gone.byteLength + (s.replaced?.byteLength ?? 0) + (s.added?.byteLength ?? 0);
 }
 
-/** Every record of the sections in the store's order, one at a time (a worker's copy: `sim/agents/trafficBuildings.ts`): DO NOT hold them all - what is worked out of each goes with it. */
-export function* eachSectionRecord(s: BuildingSections): Generator<Building, void, void> {
-  const replaced = new Map<number, Building>();
-  if (s.replaced) for (const b of tableRecords(s.replaced)) replaced.set(b.id, b);
-  const gone = new Set<number>(s.gone);
-  if (s.base) {
-    const table = new RecordTable(s.base);
-    const reader = table.reader();
-    for (let row = 0; row < table.rows; row++) {
-      const id = table.ids[row]!;
-      if (gone.has(id)) continue;
-      yield replaced.get(id) ?? reader.record(row);
-    }
-  }
-  if (s.added) {
-    const table = new RecordTable(s.added);
-    const reader = table.reader();
-    for (let row = 0; row < table.rows; row++) yield reader.record(row);
-  }
-}
-
 /** Where each record of the sections is read, in the store's order (`eachSectionRecord`'s order): a row of the table, of the records replaced or of those added - nothing decoded (the worker's columns, `sim/agents/trafficBuildings.ts`). */
 export function* eachSectionRef(s: BuildingSections): Generator<RecordRef, void, void> {
   const replaced = new Map<number, number>();

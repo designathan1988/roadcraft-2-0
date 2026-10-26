@@ -136,7 +136,7 @@ export interface Pack {
   readonly count: number;
 }
 
-export interface CellChange {
+interface CellChange {
   readonly removed: readonly object[];
   /** Each thing's key (taken away by the same object later) and its packs, by kind. */
   readonly added: readonly { readonly key: object; readonly packs: ReadonlyMap<number, Pack> }[];
@@ -169,7 +169,7 @@ const MAIN = /\bvoid\s+main\s*\(\s*\)\s*\{/;
  * `project_vertex`, `worldpos_vertex` and `defaultnormal_vertex` read it, as do the wind and the far pictures)
  * becomes the matrix made from the pose at the top of `main`; the attribute itself is left unread.
  */
-export function poseVertexShader(source: string, format: SlotFormat): string {
+function poseVertexShader(source: string, format: SlotFormat): string {
   if (!MAIN.test(source)) throw new Error(`poseVertexShader: no main() to make the ${format.key} matrix in`);
   return `#ifdef USE_INSTANCING
 attribute vec4 ${POSE_A};
@@ -343,7 +343,7 @@ const bufferSize = new Vector2();
 export const screenHalf = (): number => screen.half;
 
 /** The screen's size noted each time three draws `mesh` (a mesh the cells did not make: a layer's far batches, `propCells.ts`). */
-export function watchScreen(mesh: InstancedMesh): void {
+function watchScreen(mesh: InstancedMesh): void {
   const before = mesh.onBeforeRender.bind(mesh);
   mesh.onBeforeRender = (renderer, ...rest) => {
     const half = renderer.getDrawingBufferSize(bufferSize).y / 2;

@@ -24,8 +24,8 @@ mat4 getBoneMatrix(const in float i) {
     texelFetch(citizenBones,ivec2(x+3,y),0));
 }`;
 
-/** The region a vertex belongs to (`cookedPerson.ts` lookByte). */
-export const REGION_PLAIN = 0, REGION_SKIN = 1, REGION_HAIR = 2, REGION_EYE = 3;
+/** The region a vertex belongs to (`cookedPerson.ts` lookByte): 0 plain, 1 skin, 2 hair, 3 eye. */
+export const REGION_SKIN = 1, REGION_HAIR = 2;
 
 const PERSON_VERTEX_PARS = /* glsl */ `
 attribute vec4 personColor;
@@ -110,9 +110,6 @@ function patchSkinning(material: MeshStandardMaterial | MeshDepthMaterial, palet
     shader.vertexShader = shader.vertexShader.replace('#include <skinning_pars_vertex>', SKINNING);
   };
 }
-
-/** Alpha under which a texel of the atlas is a hole (the hair's cards): the cook writes the same into the file (`CookedMesh.alphaTest`). */
-export const PERSON_ALPHA_TEST = 0.35;
 
 export interface PersonMaterials {
   readonly lit: MeshStandardMaterial;

@@ -19,7 +19,7 @@ export interface FramePoint {
 }
 
 /** A long animation frame as kept (W3C Long Animation Frames: `duration`, `blockingDuration`, `scripts`). */
-export interface LongFrame {
+interface LongFrame {
   readonly t: number;
   readonly duration: number;
   readonly blocking: number;
@@ -27,7 +27,7 @@ export interface LongFrame {
 }
 
 /** A slow reading of the platform, taken now and then: storage, the user agent's memory, the battery. */
-export interface PlatformReadings {
+interface PlatformReadings {
   storage: { usage: number; quota: number; details: Record<string, number>; persisted: boolean | null; at: number } | null;
   idbNames: string[] | null;
   opfs: { files: number; bytes: number; truncated: boolean } | null;
@@ -64,7 +64,7 @@ type LoafEntry = PerformanceEntry & { blockingDuration?: number; scripts?: reado
 type ResourceEntry = PerformanceResourceTiming;
 
 /** A URL shown short: its path without the query, the host only when it is not this page's. */
-export function shortUrl(url: string): string {
+function shortUrl(url: string): string {
   if (!url) return '';
   try {
     const u = new URL(url, location.href);
@@ -77,7 +77,7 @@ export function shortUrl(url: string): string {
 }
 
 /** A GPU ledger's owner named: a string as it is (its first two `|` parts), an object by its name or its type. */
-export function ownerLabel(owner: unknown): string {
+function ownerLabel(owner: unknown): string {
   if (typeof owner === 'string') return owner.split('|').slice(0, 2).join(' ');
   const o = owner as { name?: unknown; type?: unknown; constructor?: { name?: string } } | null;
   if (o && typeof o.name === 'string' && o.name) return o.name;

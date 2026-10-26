@@ -20,7 +20,7 @@ import {
 import type { TransitLine } from '@world/transit';
 import { blockGridChoice, roadGridShown, roadWidth, setRoadGridShown, setRoadWidth, setZoneColoursShown, signChoice, strikeChoice, zoneColoursShown } from '../toolChoices';
 import { SIGN_HAS_TEXT, SIGN_TEXT_MAX, SIGN_TYPES } from '@world/landscape';
-import { CLOUD_MODES, POLE_TOOL_MODES, cloudMode, setCloudMode, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, fogErase, paintKind, poleKind, poleLampMode, poleToolMode, setFogErase, setPaintKind, setPoleKind, setPoleLampMode, setPoleToolMode, setStreetscapeKind, streetscapeKind } from '../toolChoices';
+import { CLOUD_MODES, POLE_TOOL_MODES, cloudMode, setCloudMode, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, fogErase, paintKind, poleToolMode, setFogErase, setPaintKind, setPoleToolMode, type PoleChoices, setStreetscapeKind, streetscapeKind } from '../toolChoices';
 import { PAINT_KINDS, type PaintKind } from '@world/terrainPaint';
 
 /** The colour of each paintable ground, for its button. */
@@ -368,6 +368,8 @@ export interface ShellDeps {
   readonly game: ShellGame;
   /** The road inspector's panel (`ui/inspector.ts`), shown in the selection column. */
   readonly inspectorPanel: HTMLElement | null;
+  /** What the pole tool builds (`ui/toolChoices.ts` createPoleChoices), shown and set in its panel. */
+  readonly poleChoices: PoleChoices;
   /** Picks a tool, or puts it down when it is already in hand (`main.ts` `pickTool`). */
   pickTool(tool: string): void;
   /** Takes a tool in hand (`main.ts` `setTool`). */
@@ -1572,11 +1574,11 @@ export function mountShell(deps: ShellDeps): ShellHandle {
       } else if (current === 'pole' && poleToolMode() === 'build') {
         // What the next run's poles are built as: urban (the arm over the street) or rural (the arm across the crown).
         options.appendChild(orow(t('v2.row.poleKind'), choices(POLE_KINDS.map((k) => ({
-          label: t(`pole.kind.${k}`), on: poleKind() === k, run: () => { setPoleKind(k); render(); }, icon: svg(`pk_${k}`, 18),
+          label: t(`pole.kind.${k}`), on: deps.poleChoices.kind() === k, run: () => { deps.poleChoices.setKind(k); render(); }, icon: svg(`pk_${k}`, 18),
         })))));
         // Street lights on the poles of the next run.
         options.appendChild(orow(t('v2.row.lights'), choices(POLE_LAMP_MODES.map((m) => ({
-          label: `${t('pole.lamps')}: ${t(`pole.lamps.${m}`)}`, on: poleLampMode() === m, run: () => { setPoleLampMode(m); render(); }, icon: svg(`pl_${m}`, 18),
+          label: `${t('pole.lamps')}: ${t(`pole.lamps.${m}`)}`, on: deps.poleChoices.lamps() === m, run: () => { deps.poleChoices.setLamps(m); render(); }, icon: svg(`pl_${m}`, 18),
         })))));
       }
       note(t(current === 'barrier' ? 'help.tool.barrier' : current === 'pole' ? (poleToolMode() === 'remove' ? 'help.tool.poleRemove' : 'help.tool.pole') : 'help.tool.streetscape'));

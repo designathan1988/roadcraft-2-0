@@ -364,8 +364,6 @@ export const SHADOW_REACH = m(28);
 
 /* Each species used to be ONE instanced mesh spread over the whole map */
 
-/** Zoom at and above which plants are drawn with their close-up models. */
-export const PLANT_NEAR_ZOOM = perM(3.5);
 /** Below this zoom the plants' leaf cards are left out (`Scenery.setMap`). */
 export const PLANT_MAP_ZOOM = perM(2.5);
 

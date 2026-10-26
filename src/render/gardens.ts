@@ -217,7 +217,7 @@ export function createGardens(kit: SceneryKit): Gardens {
 }
 
 /** The plants of the gardens standing about a rectangle (at least every one in it): the buildings whose bounds (their elements' too) meet it, each one's garden placed. */
-export function gardenPacksAbout(buildings: BuildingStore, groundAt: (x: number, y: number) => number, rect: readonly [number, number, number, number]): ReadonlyMap<number, Pack> {
+function gardenPacksAbout(buildings: BuildingStore, groundAt: (x: number, y: number) => number, rect: readonly [number, number, number, number]): ReadonlyMap<number, Pack> {
   const list: GardenPlant[] = [];
   // A building's bounds hold its garden's elements (`buildingBounds`): a plant stands within them.
   for (const b of buildings.near(rect[0] - GARDEN_SLACK, rect[1] - GARDEN_SLACK, rect[2] + GARDEN_SLACK, rect[3] + GARDEN_SLACK)) {

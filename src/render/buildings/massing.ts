@@ -59,7 +59,7 @@ export const MASS_SILL = 0.3;
 export const MASS_HEAD = 0.85;
 /** A window's sill and head (shares of the storey) as one number a vertex: 32 steps each, an integer under 1,024 a half float holds exactly
  *  (`cellArrays.ts` MASS_GRID's fourth, `massingMaterial.ts` reads it back). */
-export const windowCode = (sill: number, head: number): number =>
+const windowCode = (sill: number, head: number): number =>
   Math.round(Math.min(Math.max(sill, 0), 1) * 31) * 32 + Math.round(Math.min(Math.max(head, 0), 1) * 31);
 /** A facade's pattern at a vertex: along, bay, storey height, first storey's height; the glass share, the window's sill and head. */
 interface Facade { readonly bay: number; readonly storey: number; readonly z0: number; readonly share: number; readonly sill: number; readonly head: number }

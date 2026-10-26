@@ -70,7 +70,7 @@ export interface NetworkBake {
   readonly nodes: BakedNode[];
   readonly segments: BakedSegment[];
 }
-export interface BakedNode {
+interface BakedNode {
   readonly id: NodeId;
   readonly key: number;
   readonly j1: BakedMemo | null;
@@ -80,7 +80,7 @@ export interface BakedNode {
 /** A pass's junctions as their data (`JunctionLevels.data`: the carriageway, the frames its outer levels are made from, what is kept whole; null: let go, `MemoEntry`). */
 interface BakedMemo { readonly key: number; readonly levels: JunctionLevelsData | null; readonly size: number; readonly plate: MemoEntry['plate']; readonly summary: readonly number[] }
 /** A ribbon as what it is made from (`ribbons.ts` LeanRibbon): its road, its whole centreline as its flat array (`Polyline.xy`) and its box; its levels made on the thread that reads them (`ribbonFromBake`). */
-export type BakedRibbon = Pick<SegmentRibbon, 'id' | 'typeIndex' | 'direction' | 'road' | 'dashOrigin'> & {
+type BakedRibbon = Pick<SegmentRibbon, 'id' | 'typeIndex' | 'direction' | 'road' | 'dashOrigin'> & {
   readonly full: Float64Array; readonly bounds: ChangeRect;
 };
 
@@ -92,7 +92,7 @@ function memoData(entry: MemoEntry | undefined): BakedMemo | null {
 function memoOf(baked: BakedMemo): MemoEntry {
   return { key: baked.key, byLevel: baked.levels ? JunctionLevels.fromData(baked.levels, JUNCTION_KIT) : null, size: baked.size, plate: baked.plate, summary: baked.summary };
 }
-export interface BakedSegment {
+interface BakedSegment {
   readonly id: SegmentId;
   /** `segmentSourceKey` of the road the ribbon was made from. */
   readonly source: number;
@@ -108,7 +108,7 @@ function ribbonFromBake(s: BakedSegment): SegmentRibbon {
 }
 
 /** What a node's junctions are solved from, whichever thread solves them: its record and its roads' (where their ends stand too), the roads in id order (a road of a tile not on that thread changes it: the page then solves the node itself). */
-export function nodeBakeKey(doc: RoadDoc, n: RoadNode): number {
+function nodeBakeKey(doc: RoadDoc, n: RoadNode): number {
   const incident = n.incident.slice().sort((p, q) => p - q);
   const digest = nodeSourceDigest({ ...n, incident });
   for (const id of incident) {

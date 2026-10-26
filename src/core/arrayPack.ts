@@ -54,24 +54,6 @@ export function packArrays(numbers: Readonly<Record<string, number>>, arrays: Re
   return out;
 }
 
-/** `packArrays`'s very bytes as a Blob made straight from the arrays (MDN "Blob()": its parts copied once, into the Blob): DO NOT pack into a buffer to put it in a Blob, two copies of every array where one is kept (a tile's link table, written with the tile). */
-export function packArraysBlob(numbers: Readonly<Record<string, number>>, arrays: Readonly<Record<string, PackableArray>>): Blob {
-  const { head, text, start, bytes } = layoutOf(numbers, arrays);
-  const lead = new Uint8Array(start);
-  new DataView(lead.buffer).setUint32(0, text.byteLength, true);
-  lead.set(text, 4);
-  const parts: BlobPart[] = [lead];
-  let at = start;
-  for (const [name, , offset] of head.a) {
-    const array = arrays[name]!;
-    if (start + offset > at) parts.push(new Uint8Array(start + offset - at));
-    parts.push(new Uint8Array(array.buffer as ArrayBuffer, array.byteOffset, array.byteLength));
-    at = start + offset + array.byteLength;
-  }
-  if (bytes > at) parts.push(new Uint8Array(bytes - at));
-  return new Blob(parts);
-}
-
 /** A pack read back: its arrays views on `buffer` (the buffer's own, from its start). */
 export function unpackArrays(buffer: ArrayBuffer): ArrayPack {
   const length = new DataView(buffer).getUint32(0, true);

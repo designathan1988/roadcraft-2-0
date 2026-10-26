@@ -7,7 +7,7 @@ import { LOOK_FLOATS, SHELL_PARTS, shellPartError } from './shellParts';
 
 /** A CELL'S PARTS FILED BY BAND AND SUB-CELL WHERE THE CELL IS MADE (`cellWork.ts`): the page is handed each band's buffers ready, never an instance to read (`partCells.ts` draws them) */
 
-export type { PartBanding, PartBandings } from './cellArrays';
+export type { PartBandings } from './cellArrays';
 
 /** Side of the sub-cells a cell's parts are filed by (five a side, 5 cells of the universal grid each, `world/grid.ts`): each part kind's level is chosen per sub-cell, or per run of sub-cells or the cell where they agree (`partCells.ts`). DO NOT read it of `layerCells.ts`: that module reaches the shells, which reach the filing. */
 export const DETAIL_CELL = m(50);
@@ -54,7 +54,7 @@ export function partBandings(screens: Readonly<Record<PartKind, PartScreen>>): P
 }
 
 /** One band of a kind's instances in the cell, by sub-cell in Morton order. */
-export interface FiledBand {
+interface FiledBand {
   readonly kind: PartKind;
   /** Each sub-cell's first instance; the last entry is the band's count. */
   readonly start: Uint32Array;

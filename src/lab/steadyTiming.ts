@@ -31,7 +31,7 @@ const WARM_MS = 1000;
 const SAMPLES = 30;
 
 /** A variant of a frame: what it shows set by `apply`, the scene then drawn as it stands. */
-export interface TimingVariant {
+interface TimingVariant {
   readonly name: string;
   apply(): void;
 }
@@ -88,7 +88,7 @@ void main() {
 }
 
 /** The variants of one frame timed in turn (see the file's head). */
-export async function timeVariants(renderer: WebGLRenderer, scene: Scene, camera: Camera, variants: readonly TimingVariant[]): Promise<Map<string, SteadyTiming>> {
+async function timeVariants(renderer: WebGLRenderer, scene: Scene, camera: Camera, variants: readonly TimingVariant[]): Promise<Map<string, SteadyTiming>> {
   // The GPU drawing, as the driver names it (`WEBGL_debug_renderer_info`).
   const gl = renderer.getContext();
   const info = gl.getExtension('WEBGL_debug_renderer_info');

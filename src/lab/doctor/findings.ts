@@ -3,7 +3,7 @@ import type { Draw, Snapshot } from './measure';
 
 /** THE DIAGNOSIS'S FINDINGS: the snapshot read as causes - the bottleneck, the passes and layers the GPU spends on, the objects that weigh most, the shadows, the draw calls, the CPU's systems and functions, the hitches, the memory - each with its figures, why it matters, the switch that tests it and where to look. */
 
-export type Severity = 'high' | 'medium' | 'low' | 'info';
+type Severity = 'high' | 'medium' | 'low' | 'info';
 
 export interface Finding {
   readonly id: string;

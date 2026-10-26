@@ -100,7 +100,7 @@ const NEAR_FADE_GLSL = /* glsl */ `
 const SWAYS = Symbol('sways');
 type Swaying = Material & { [SWAYS]?: true };
 /** A material the wind moves (its shader reads `windUniforms`): every shader that sways marks its material, lit and depth. */
-export function markSway(material: Material): void {
+function markSway(material: Material): void {
   (material as Swaying)[SWAYS] = true;
 }
 /** Whether a material sways in the wind (`markSway`). */

@@ -103,9 +103,9 @@ const ROOF_TILES: readonly MaterialSpec[] = [
   mat('metal', 0x4f6b55), mat('metal', 0x6e3b32), mat('tile', 0x6b5f57),
 ];
 /** The clay tile roofs alone: a colonial or a bungalow roof is ceramic. */
-export const CLAY: readonly MaterialSpec[] = ROOF_TILES.filter((r) => r.finish === 'tile');
+const CLAY: readonly MaterialSpec[] = ROOF_TILES.filter((r) => r.finish === 'tile');
 /** A works hall's panel roofs (`works`). */
-export const WORKS_ROOFS: readonly number[] = [0x6d7378, 0x8a8f86, 0x5d6870, 0x9a9890, 0x7a4a3a, 0x4f6b55];
+const WORKS_ROOFS: readonly number[] = [0x6d7378, 0x8a8f86, 0x5d6870, 0x9a9890, 0x7a4a3a, 0x4f6b55];
 const AWNINGS = [0xb8382e, 0x2f6b4f, 0x2f4f7a, 0xd9a43a, 0x6b3f6b, 0x3d3d3d, 0xc7652f, 0x1f5f6b, 0x8a2f3c, 0x3f7f8f, 0x5c6b2f, 0xd06d8a];
 
 /** A roof material, nudged. */

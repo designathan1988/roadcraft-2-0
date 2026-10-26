@@ -25,7 +25,7 @@ export interface GameProbe {
 export const gameProbe = (): GameProbe | null => (window as unknown as { __roadcraft?: GameProbe }).__roadcraft ?? null;
 
 /** The top-level group under the scene an object hangs from (its layer), and the names on its way. */
-export function namesUp(object: Object3D): string[] {
+function namesUp(object: Object3D): string[] {
   const names: string[] = [];
   for (let o: Object3D | null = object; o && o.parent; o = o.parent) names.push(o.name || o.type);
   return names;

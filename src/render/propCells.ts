@@ -129,7 +129,7 @@ function reachFor(v: PropView, size: number, px: number): number {
 export interface PropSquare { readonly cx: number; readonly cy: number; readonly k: number }
 
 /** The square round the view's point holding every plant `largest` across (world units) big enough to be drawn whole there (`PICTURE_PX`, less the band it keeps its level in). */
-export function nearSquareOf(v: PropView, largest: number): PropSquare {
+function nearSquareOf(v: PropView, largest: number): PropSquare {
   const reach = reachFor(v, largest, PICTURE_PX * (1 - HYSTERESIS));
   const cx = Math.floor(v.x / PROP_CELL), cy = Math.floor(v.y / PROP_CELL);
   return { cx, cy, k: reach < 0 ? -1 : Math.min(MOST_NEAR, Math.ceil(reach / PROP_CELL)) };

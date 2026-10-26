@@ -6,7 +6,7 @@ import { HEAD_SHADE, REVEAL_SHADE, SILL_SHADE } from './roomBehind';
 /** The kit's window frame (\`kit.ts\` frameGeometry, its material): its bars in the unit square (border \`t\`, a mullion and a transom 0.8 t wide,
  *  the transom 0.18 up), and how it is lit. */
 const FRAME_T = 0.045;
-export const PANE_FRAME_LOOK = { roughness: 0.55, metalness: 0.05 } as const;
+const PANE_FRAME_LOOK = { roughness: 0.55, metalness: 0.05 } as const;
 /** How far in front of its pane a frame's middle stands (\`buildingMesh.ts\` \`glazed\`: the frame put 3 cm out of the glass). */
 const FRAME_OUT = 0.03;
 

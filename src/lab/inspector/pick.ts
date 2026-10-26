@@ -16,7 +16,7 @@ const isGameCanvas = (target: EventTarget | null): target is HTMLCanvasElement =
   target instanceof HTMLCanvasElement && (target.id === 'game' || target.id === 'game-scene' || target.id === 'game-overlay');
 
 /** The selection under a canvas pixel (CSS px from its corner). */
-export function selectionAt(ctx: LabContext, px: number, py: number): Selection {
+function selectionAt(ctx: LabContext, px: number, py: number): Selection {
   const ray = rayAtPixel(ctx, px, py);
   const hits = ray ? hitsAlong(ctx.scene.scene, ray) : [];
   // A solid met by its triangles is what was pointed at; else the game's own pick says which entity, and the object is the one drawing it.

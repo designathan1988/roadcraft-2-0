@@ -11,11 +11,11 @@ import {
  */
 
 /** Format version written in every file. */
-export const COOKED_VERSION = 3;
+const COOKED_VERSION = 3;
 
 /** An array in the file: its kind, where, and how long. */
-export interface BufferRef { readonly kind: ArrayKind; readonly at: number; readonly length: number }
-export type ArrayKind = 'f32' | 'u32' | 'u16' | 'i16' | 'u8' | 'i8';
+interface BufferRef { readonly kind: ArrayKind; readonly at: number; readonly length: number }
+type ArrayKind = 'f32' | 'u32' | 'u16' | 'i16' | 'u8' | 'i8';
 
 /** The vertex attributes of a cooked body, in the file's order, and their layout: 26 bytes a vertex (KHR_mesh_quantization). */
 export const VERTEX_LAYOUT = [
@@ -31,7 +31,6 @@ export const VERTEX_LAYOUT = [
   /** The four weights, normalised bytes that sum to one. */
   { name: 'skinWeight', itemSize: 4, kind: 'u8', normalized: true },
 ] as const;
-export type VertexAttributeName = (typeof VERTEX_LAYOUT)[number]['name'];
 
 /** The most triangles each level holds in the cast's files: near, then the coarser mesh, drawn down to the impostor. The near levels are
  *  3,894 to 5,000 (5,000 the cap they were simplified to: under 4,000 the shirts opened on the skin and the hair tore, the sheets of
@@ -41,15 +40,15 @@ export const LEVEL_TRIANGLES = [5000, 2504] as const;
 
 /** A level's triangles in the shared index buffer, and its error as a share of the body's height (what the level is chosen by): the largest
  *  distance, measured both ways at the rest pose, between the level's surface and the body's near mesh before it was simplified. */
-export interface CookedLevel { readonly start: number; readonly count: number; readonly error: number }
+interface CookedLevel { readonly start: number; readonly count: number; readonly error: number }
 
 /** A face expression: the vertices it moves and their moves, in the position's quantised units. */
-export interface CookedMorph { readonly name: string; readonly vertices: BufferRef; readonly deltas: BufferRef }
+interface CookedMorph { readonly name: string; readonly vertices: BufferRef; readonly deltas: BufferRef }
 
 /** Where the impostor's frames are in the atlas: `frames` yaw views in a row, each `width` x `height` texels, from (`x`, `y`) (texel rows from the top). */
 export interface CookedImpostor { readonly frames: number; readonly x: number; readonly y: number; readonly width: number; readonly height: number }
 
-export interface CookedMesh {
+interface CookedMesh {
   /** The scene node the mesh is. */
   readonly node: number;
   readonly vertexCount: number;
@@ -74,7 +73,7 @@ export interface CookedMesh {
   readonly impostor: CookedImpostor;
 }
 
-export interface CookedNode {
+interface CookedNode {
   readonly name: string;
   readonly kind: 'bone' | 'skinned' | 'group' | 'node';
   readonly parent: number;

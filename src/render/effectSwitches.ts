@@ -13,9 +13,9 @@ export const LAYER_SWITCHES = ['terrain', 'water', 'roads', 'buildings', 'vegeta
 export const BUILDING_SWITCHES = ['bMasses', 'bFacadeLevel', 'bDetail', 'bParts', 'bSignatures', 'bFlags',
   'bShell', 'bGlass', 'bFrames', 'bFacadeDetails', 'bProps', 'bLots', 'bFurniture', 'bShadows', 'bNightWindows'] as const;
 
-export type PostSwitch = (typeof POST_SWITCHES)[number];
-export type LightSwitch = (typeof LIGHT_SWITCHES)[number];
-export type LayerSwitch = (typeof LAYER_SWITCHES)[number];
+type PostSwitch = (typeof POST_SWITCHES)[number];
+type LightSwitch = (typeof LIGHT_SWITCHES)[number];
+type LayerSwitch = (typeof LAYER_SWITCHES)[number];
 export type BuildingSwitch = (typeof BUILDING_SWITCHES)[number];
 export type EffectSwitch = PostSwitch | LightSwitch | LayerSwitch | BuildingSwitch;
 export type EffectSwitches = Readonly<Record<EffectSwitch, boolean>>;

@@ -9,14 +9,14 @@ import { drawTimeline, timelineLegend } from './timeline';
 
 /** THE LAB'S RECORDER (tabs "Recording" and "Reports"): the game recorded as it is set, cut at every change, each stretch held against the one before; on Stop a report for an AI (JSON + Markdown) downloaded, written by the dev server into `lab-reports/` and by the desktop app into its data folder. Probes drive it through `window.__labRecorder`. */
 
-export interface SessionReport {
+interface SessionReport {
   readonly report: LabReport;
   /** Where it was written: the dev server's files, the desktop folder (null: not there). */
   server: string | null;
   desktop: string | null;
 }
 
-export interface LabRecorderProbe {
+interface LabRecorderProbe {
   start(options?: { seconds?: number }): void;
   stop(): LabReport | null;
   pause(): void;

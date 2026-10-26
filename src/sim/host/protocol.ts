@@ -30,7 +30,7 @@ const HEAD = 8;
 const VEHICLES = FLEET_CEILING;
 const PEDS = PED_CEILING;
 /** One slot's Float64s: the head, then the vehicles, then the pedestrians. */
-export const SLOT = HEAD + VEHICLES * VEHICLE_STRIDE + PEDS * PED_STRIDE;
+const SLOT = HEAD + VEHICLES * VEHICLE_STRIDE + PEDS * PED_STRIDE;
 export const vehicleBase = (slot: number): number => slot * SLOT + HEAD;
 export const pedBase = (slot: number): number => slot * SLOT + HEAD + VEHICLES * VEHICLE_STRIDE;
 export const headBase = (slot: number): number => slot * SLOT;
@@ -39,7 +39,7 @@ export const MAX_PEDS = PEDS;
 
 /** The control words (Int32): the slot written last, the slot the page reads now (Atomics, MDN). */
 export const C = { latest: 0, reading: 1 } as const;
-export const CONTROL_WORDS = 2;
+const CONTROL_WORDS = 2;
 
 /** The memory both sides hold: three slots (a triple buffer) and the control words. */
 export interface SharedFrames {
@@ -80,7 +80,7 @@ export interface SignalLights {
 }
 
 /** A train drawn: its line's colour and each car's place. */
-export interface TrainCar { readonly x: number; readonly y: number; readonly heading: number }
+interface TrainCar { readonly x: number; readonly y: number; readonly heading: number }
 export interface TrainState { readonly colour: string; readonly metro: boolean; readonly cars: readonly TrainCar[] }
 
 /** The page to the worker: never the whole map nor a building's record, only what traffic reads (`agents/trafficBuildings.ts`). */
@@ -123,7 +123,7 @@ export interface SimControls {
   readonly opening?: boolean;
 }
 
-export interface SimFocus {
+interface SimFocus {
   readonly x: number;
   readonly y: number;
   readonly r: number;

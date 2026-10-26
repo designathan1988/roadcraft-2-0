@@ -24,7 +24,7 @@ export interface SegmentTrims {
 
 /** A level's two edges as its outline is made of them (`ribbonRing`): the left and right offsets of its trimmed centreline, point for point the
  *  outline's own, so a strip swept between two of them (`render/mesh/stripShape.ts`) meets the bands cut from the outlines without a crack. */
-export interface LevelEdges {
+interface LevelEdges {
   readonly left: readonly Vec2[];
   readonly right: readonly Vec2[];
 }

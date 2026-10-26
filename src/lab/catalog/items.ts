@@ -5,9 +5,9 @@ import { roadSheetMaterial } from '../../render/mesh/roadEdges';
 /** ONE ENTRY OF THE ENGINE'S CATALOGUE: what an object is made of, measured from the pieces its builder made (`scripts/model-catalog.mjs`). */
 
 /** Where the object came from: its own builder (kit), a model file, the test city (it depends on the city's layout), an editor preview, an effect. */
-export type Origin = 'kit' | 'file' | 'test city' | 'editor preview' | 'effect';
+type Origin = 'kit' | 'file' | 'test city' | 'editor preview' | 'effect';
 /** How the engine draws it: one draw for many copies, merged into a bigger mesh, a mesh of its own, skinned, points, lines. */
-export type Build = 'instanced' | 'merged' | 'individual' | 'skinned' | 'points' | 'lines';
+type Build = 'instanced' | 'merged' | 'individual' | 'skinned' | 'points' | 'lines';
 
 export interface PieceSpec {
   readonly label: string;
@@ -50,7 +50,7 @@ export interface ItemSpec {
   readonly sceneCopy?: boolean;
 }
 
-export interface LevelRow { readonly level: number; readonly triangles: number; readonly vertices: number }
+interface LevelRow { readonly level: number; readonly triangles: number; readonly vertices: number }
 
 export interface CatalogRow {
   readonly id: string;

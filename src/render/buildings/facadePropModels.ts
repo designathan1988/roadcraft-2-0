@@ -296,7 +296,7 @@ float acLidTone(vec3 p) {
   return mix(1.0, 0.93, smoothstep(${(AC.h / 2).toFixed(4)} - aa, ${(AC.h / 2).toFixed(4)} + aa, p.y));
 }`;
 /** The lid's height over the case (it was a slab of its own). */
-export const AC_LID = 0.02;
+const AC_LID = 0.02;
 /** The case's front face: its model-space front (z) within this of `AC.d / 2`, facing +z. */
 export const AC_FRONT_Z = AC.d / 2;
 

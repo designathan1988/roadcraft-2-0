@@ -61,7 +61,7 @@ export function fold(title: string, open: boolean, ...content: Node[]): HTMLDeta
 }
 
 /** A value's one-line preview, as a console shows it. */
-export function preview(value: unknown, depth = 0): string {
+function preview(value: unknown, depth = 0): string {
   if (value === null) return 'null';
   if (value === undefined) return 'undefined';
   if (typeof value === 'string') return depth ? JSON.stringify(value.length > 80 ? `${value.slice(0, 80)}…` : value) : value;

@@ -2,7 +2,7 @@ import { BufferAttribute, BufferGeometry, type Mesh } from 'three';
 import type { BlockArrays } from './roadLodPure';
 import type { GeometryArrays } from './gpuOnly';
 
-export { blockBuffers, coarseArrays, type BlockArrays, type BlockLock } from './roadLodPure';
+export { coarseArrays, type BlockArrays, type BlockLock } from './roadLodPure';
 
 /** DO NOT draw a far block at full detail: nothing there is resolved. */
 

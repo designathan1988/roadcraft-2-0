@@ -41,7 +41,7 @@ export interface EdgeStat {
   samples: number;
 }
 
-export interface StackStat {
+interface StackStat {
   /** Leaf first. */
   readonly keys: readonly string[];
   readonly depth: number;

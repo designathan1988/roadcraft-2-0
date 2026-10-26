@@ -207,15 +207,13 @@ export class BuildingStore {
     this.changed(was ? [was, now] : [now], 'restored');
   }
 
-  /** A tile's buildings put in the page's document, or taken out (`RoadDoc.loadTile`): one diary entry for all of them. */
-  /** `plain`: read from a tile's table (`recordTable.ts` `tableRecords`), plain and their shared members one object already: DO NOT walk and hash them again in the frame the tile is put in. */
-  placeAll(list: readonly Building[], plain = false): void {
+  /** A tile's buildings put in the page's document (`RoadDoc.loadTile`): one diary entry for all of them. */
+  placeAll(list: readonly Building[]): void {
     const placed: Building[] = [];
     this.leaveBelow();
     for (const value of list) {
       if (this.items.has(value.id)) continue;
-      if (plain) this.settled.add(value);
-      const now = plain ? value : settleBuilding(value, this.settled, undefined, this.internShared);
+      const now = settleBuilding(value, this.settled, undefined, this.internShared);
       this.items.set(now.id, now);
       this.grid?.insert(now);
       placed.push(now);

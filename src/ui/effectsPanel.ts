@@ -2,7 +2,7 @@ import { onLanguageChange, t } from './i18n';
 
 /** THE EFFECTS PANEL: every effect of the drawing and every heavy system of the frame switched on or off live, with what the GPU, the CPU and the memory spend beside them (`effectsWiring.ts`). Not modal: the game stays in view while it is open. */
 
-export interface EffectsPanelItem {
+interface EffectsPanelItem {
   readonly key: string;
   readonly label: string;
   readonly on: boolean;

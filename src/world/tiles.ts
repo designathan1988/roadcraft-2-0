@@ -34,7 +34,7 @@ export function tileOfKey(key: number): TileIJ {
 }
 
 /** The key of the tile a point lies in. */
-export const tileKeyAt = (x: number, y: number): number => {
+const tileKeyAt = (x: number, y: number): number => {
   const { i, j } = tileIJ(x, y);
   return tileKey(i, j);
 };
@@ -43,7 +43,7 @@ export const tileKeyAt = (x: number, y: number): number => {
 export const tileRect = (i: number, j: number): ChangeRect => [i * TILE, j * TILE, (i + 1) * TILE, (j + 1) * TILE];
 
 /** The ids a tile hands out: each tile its own range, so a tile is made, kept and loaded alone and two tiles never name one record alike */
-export const TILE_IDS = 1 << 19;
+const TILE_IDS = 1 << 19;
 
 /** Where the ranges of the tiles of 1,000 m start: past every range the tiles of 1,024 m handed out ((key + 1) x 2^20 for keys under 2^32: up to
  *  2^52 + 2^20), so a record of a map made on the old tiles keeps its id and a tile of now never hands it out again; the last range ends under
@@ -69,20 +69,6 @@ export function edgeNodeId(x: number, y: number): number | null {
   const along = onX ? y - j * TILE : x - i * TILE;
   const step = Math.round(along / EDGE_STEP);
   return tileIdBase(tileKey(i, j)) + TILE_COUNTED + (onX ? 0 : 1 << 17) + step;
-}
-
-/** The tiles within `radius` tiles of the tile at (`i`, `j`), the nearest first (a square ring by ring). */
-export function tilesAround(i: number, j: number, radius: number): TileIJ[] {
-  const out: TileIJ[] = [{ i, j }];
-  for (let r = 1; r <= radius; r++) {
-    for (let di = -r; di <= r; di++) {
-      out.push({ i: i + di, j: j - r }, { i: i + di, j: j + r });
-    }
-    for (let dj = -r + 1; dj <= r - 1; dj++) {
-      out.push({ i: i - r, j: j + dj }, { i: i + r, j: j + dj });
-    }
-  }
-  return out;
 }
 
 export const OWNER = {

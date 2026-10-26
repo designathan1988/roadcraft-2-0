@@ -48,9 +48,9 @@ const REGION_STRIDE = 1000;
 /** DO NOT cap the plates by count: the six newest were kept wherever the view stood */
 const KEEP_MARGIN = 1.25;
 /** Most plates drawn in full near the view, unless the tier holds fewer (`setPlates`). */
-export const NEAR_MOST = 9;
+const NEAR_MOST = 9;
 /** Most plates made but not drawn kept (nearest the view first), past the GPU's room: a view's worth, for a zoom out and back. DO NOT keep them by the GPU's room alone: a plate holds 10-20 MB of arrays on the page the GPU's book does not count (its corners, water, rock, ecosystem, paint), and every plate the view passed stayed made. */
-export const CACHED_MOST = NEAR_MOST;
+const CACHED_MOST = NEAR_MOST;
 /** Beyond this much ground in view, no plate is drawn in full: the far mesh alone. */
 const NEAR_VIEW = m(1400);
 /** Corners along a plate's side (the terrain's grid). */
@@ -151,7 +151,7 @@ const FAR_RING_SIDE = FAR_SIDE + 2;
 const farRingHeights = new Float64Array(FAR_RING_SIDE * FAR_RING_SIDE);
 
 /** Writes the patch of `FAR_QUADS` quads of `step` from (x0, y0) into `slot`, its skirts `skirt` deep (a coarser node's sampling misses more: deeper), from the land `ground` (the base added here); marks only that slot to be sent. */
-export function writeFarNode(far: FlatFar, slot: number, x0: number, y0: number, step: number, skirt: number, ground: (x: number, y: number) => number): void {
+function writeFarNode(far: FlatFar, slot: number, x0: number, y0: number, step: number, skirt: number, ground: (x: number, y: number) => number): void {
   const position = far.geometry.getAttribute('position') as BufferAttribute;
   const normal = far.geometry.getAttribute('normal') as BufferAttribute;
   const positions = position.array as Float32Array, normals = normal.array as Float32Array;

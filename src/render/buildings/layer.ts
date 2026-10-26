@@ -44,7 +44,7 @@ export const playerCause = (cause: string): boolean => cause.startsWith('tool ')
 /** The most the cells' detail may hold on the GPU as the game sets it (MB): a large city keeps its far levels and masses for the
  *  whole map, but the detail of the places the camera walked through is bounded (`keepToBudget`), and the road walked does not
  *  grow the memory for ever. The player's panel sets another value; -1 is this one. */
-export const GAME_DETAIL_MEMORY_MB = 768;
+const GAME_DETAIL_MEMORY_MB = 768;
 
 /** SHADOW CASTERS BY THEIR SIZE IN THE CASCADE (Unreal's r.Shadow.RadiusThreshold, 0.03 at its epic scalability to 0.06 at low: a caster
  *  whose bounding radius is under that share of the shadow's extent casts nothing; the Cities: Skylines II autopsy found 72 % of the draws

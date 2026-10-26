@@ -44,8 +44,7 @@ import {
   type TileRect,
 } from './mesh/surfaceMesh';
 
-export { TERRAIN_UV } from './roadSurfaceReads';
-export type { PassState, TileBundle } from './roadSurfaceBlocks';
+export type { TileBundle } from './roadSurfaceBlocks';
 
 /** The road network's surface bands */
 
@@ -95,10 +94,10 @@ function addBlock(group: Group, mesh: Mesh): void {
 }
 
 /** The name a tile is kept under between sessions: its pass, its place and its digest (a new digest at the same place replaces the old). */
-export const storedKey = (pass: string, tile: PartKey, digest: number): string => `${pass}|${tile}|${digest}`;
+const storedKey = (pass: string, tile: PartKey, digest: number): string => `${pass}|${tile}|${digest}`;
 
 /** The tiles kept off the page (`derivedCache.ts`) */
-export interface StoredTiles {
+interface StoredTiles {
   /** Whether a tile is kept. */
   has(key: string): boolean;
   /** The kept tiles of these keys, read from the store: never the whole of it. */
@@ -174,7 +173,7 @@ const PAVING_TINTS: Readonly<Record<string, readonly [number, number, number]>> 
   Object.entries(CARRIAGEWAY_TINT).map(([name, tint]) => [name, againstReference(tint)]));
 
 /** The page's constants the roads are drawn with (`PassLook`): what a road bake in a worker is handed to draw them alike (`nearRoadTiles.ts`). */
-export function passLook(materials: SceneMaterials): PassLook {
+function passLook(materials: SceneMaterials): PassLook {
   return {
     scale: { asphalt: materials.scale.asphalt, footway: materials.scale.footway, kerb: materials.scale.kerb, verge: materials.scale.verge, deck: materials.scale.deck },
     classTint: CLASS_TINTS,

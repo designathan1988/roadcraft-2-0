@@ -38,7 +38,7 @@ export interface Selection {
 }
 
 /** One live edit: undone alone (`undo`), described for the report. */
-export interface EditEntry {
+interface EditEntry {
   readonly id: number;
   readonly t: number;
   readonly kind: string;
@@ -67,7 +67,7 @@ export interface SetOptions {
   readonly after?: () => void;
 }
 
-export interface EditLog {
+interface EditLog {
   list(): readonly EditEntry[];
   /** `holder[key] = value` (a Color, a Vector copied into the one held), its first value kept for the undo; the same key set again is one entry. */
   set(holder: object, key: string, value: unknown, options: SetOptions): void;
@@ -88,7 +88,7 @@ const copyable = (v: unknown): v is Copyable => {
 };
 
 /** A value as the log shows it. */
-export function shown(v: unknown): string {
+function shown(v: unknown): string {
   if (v && typeof v === 'object') {
     const o = v as { isColor?: boolean; getHexString?: () => string; isVector2?: boolean; isVector3?: boolean; isVector4?: boolean; toArray?: () => number[]; isTexture?: boolean; name?: string; uuid?: string };
     if (o.isColor && o.getHexString) return `#${o.getHexString()}`;
@@ -99,7 +99,7 @@ export function shown(v: unknown): string {
   return String(v);
 }
 
-export function createEditLog(ctx: LabContext): EditLog {
+function createEditLog(ctx: LabContext): EditLog {
   const entries: EditEntry[] = [];
   const listeners: (() => void)[] = [];
   const ids = new WeakMap<object, number>();

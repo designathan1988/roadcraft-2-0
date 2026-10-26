@@ -33,7 +33,7 @@ export function yawMatrixInto(out: Float32Array | number[], at: number, px: numb
 export const NEAR_SQUARE = { value: new Vector3(0, 0, -1) };
 
 /** A far batch's cell (`propCells.ts`) as a pose's eighth float: exact in float32 for |column|, |row| < 2048 (512 km of 250 m cells). */
-export const NEAR_CODE_SPAN = 4096;
+const NEAR_CODE_SPAN = 4096;
 export const nearCode = (cx: number, cy: number): number => (cx + NEAR_CODE_SPAN / 2) * NEAR_CODE_SPAN + (cy + NEAR_CODE_SPAN / 2);
 /** The eighth float of a thing drawn wherever it stands (never by a far batch). */
 export const NEVER_NEAR = -1;

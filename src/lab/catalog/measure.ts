@@ -3,7 +3,7 @@ import type { BufferAttribute, BufferGeometry, InterleavedBufferAttribute, Mater
 /** THE MEASURES OF ONE PIECE OF GEOMETRY AND ITS MATERIAL, as the catalogue of the engine's objects reports them (`scripts/model-catalog.mjs`). */
 
 /** One vertex attribute: its name, its components and what one vertex of it weighs. */
-export interface AttributeMeasure {
+interface AttributeMeasure {
   readonly name: string;
   readonly itemSize: number;
   readonly type: string;
@@ -91,7 +91,7 @@ export function measureGeometry(g: BufferGeometry): GeometryMeasure {
   return { triangles, roomTriangles: room, vertices, indexed, attributes, bytesPerVertex, bytes, morphBytes, morphTargets, released, size };
 }
 
-export interface TextureMeasure {
+interface TextureMeasure {
   readonly slot: string;
   readonly name: string;
   readonly type: string;
@@ -123,7 +123,7 @@ const PLAIN_FORMATS: Readonly<Record<number, readonly [string, number]>> = {
 /** Bytes a channel of a type takes (three r186 constants). */
 const TYPE_BYTES: Readonly<Record<number, number>> = { 1009: 1, 1010: 1, 1011: 2, 1012: 2, 1013: 4, 1014: 4, 1015: 4, 1016: 2, 1017: 2, 1018: 2, 1020: 4 };
 
-export function measureTexture(slot: string, t: Texture): TextureMeasure {
+function measureTexture(slot: string, t: Texture): TextureMeasure {
   const image = (t.image ?? {}) as { width?: number; height?: number; depth?: number };
   const mipmaps = (t as { mipmaps?: { width: number; height: number }[] }).mipmaps ?? [];
   const width = image.width ?? mipmaps[0]?.width ?? 0;

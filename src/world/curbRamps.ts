@@ -153,7 +153,7 @@ function rampState(net: Network): RampState {
 }
 
 /** The network rebuilt or taken back (`Network.afterRebuild`, registered with its ramps' state): its ramps, where they are kept, brought up to it in that step, never while a walker reads them (`walkingRise`). */
-export function followRamps(net: Network): void {
+function followRamps(net: Network): void {
   const state = cache.get(net);
   if (state) bring(net, state);
 }

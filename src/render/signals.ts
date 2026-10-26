@@ -39,7 +39,7 @@ const COARSEN = 0.85;
 
 
 /** Where the eye stands (three's world: x, up, z) and the pixels a world unit spans at a unit's distance, or everywhere (`orthoPx`, the view from above). */
-export interface SignalView {
+interface SignalView {
   readonly x: number;
   readonly y: number;
   readonly z: number;

@@ -93,7 +93,7 @@ export const PHASE = {
 export const byWalk = (p: Entry, q: Entry): number => p.phase - q.phase || p.id - q.id || p.seq - q.seq;
 
 /** A part of one pass: its entries by slot, and what it reads once put together. */
-export interface TileInputs {
+interface TileInputs {
   readonly key: PartKey;
   readonly slots: Map<string, Set<Entry>>;
   /** The pass's entries in it; at none it goes. */
@@ -169,10 +169,10 @@ export const WAKE_PAD = m(24);
 /** How far past its roads' boxes and its plates a node's inputs may lie (its paint). */
 export const NODE_PAD = m(6);
 /** What an entry's input holds besides its numbers, and each number, bytes: an estimate for the budget. */
-export const ENTRY_BYTES = 460;
+const ENTRY_BYTES = 460;
 const NUMBER_BYTES = 8;
 /** Each part an entry is filed in: its place in the part's set. */
-export const TILE_BYTES = 24;
+const TILE_BYTES = 24;
 
 /** The numbers a shape holds. */
 function numbersOf(g: Geom): number {

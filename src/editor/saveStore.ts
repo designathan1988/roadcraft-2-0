@@ -18,7 +18,7 @@ export interface SaveEntry { readonly key: string; readonly bytes: ArrayBuffer; 
 /** What one save writes and removes, in one transaction: the frames of what changed, never the map. */
 export interface SaveBatch { readonly put: readonly SaveEntry[]; readonly remove: readonly string[] }
 /** The buffers a batch carries: the transfer list of its message. */
-export const batchBuffers = (batch: SaveBatch): ArrayBuffer[] => batch.put.map((entry) => entry.bytes);
+const batchBuffers = (batch: SaveBatch): ArrayBuffer[] => batch.put.map((entry) => entry.bytes);
 /** Writes a save's batch, true once it is stored. */
 export interface SaveWriter { write(batch: SaveBatch): Promise<boolean> }
 

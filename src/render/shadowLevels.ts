@@ -15,7 +15,7 @@ import { surfaceOff } from './mesh/surfaceOff';
  */
 
 /** A shape a caster may be drawn with in a cascade, and how far (model units) its surface strays from the model's, at most. */
-export interface ShadowShape {
+interface ShadowShape {
   readonly geometry: BufferGeometry;
   readonly error: number;
 }

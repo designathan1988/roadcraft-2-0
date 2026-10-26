@@ -139,7 +139,7 @@ export function objectEditor(state: InspectorState, object: Object3D, instanceId
 }
 
 /** Everything but the object hidden (each sibling on its way up to the scene), the lights and the inspector's own kept; one undo shows them again. */
-export function isolateObject(state: InspectorState, object: Object3D): void {
+function isolateObject(state: InspectorState, object: Object3D): void {
   const hidden: Object3D[] = [];
   for (let o: Object3D | null = object; o && o.parent; o = o.parent) {
     for (const sibling of o.parent.children) {

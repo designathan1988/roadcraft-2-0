@@ -229,7 +229,7 @@ function setRect(out: Rect, px: number, py: number, tx: number, ty: number, leng
 }
 
 /** What the sweeps over one surface work in, kept by the surface (`JunctionSurface.work`): the rectangles a sweep writes its positions into, and its lists; each sweep's are its own until it returns (no sweep runs inside another). */
-export class SweepWork {
+class SweepWork {
   readonly rects: Rect[] = [];
   taken = 0;
   readonly poses: Rect[] = [];

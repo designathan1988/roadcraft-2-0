@@ -51,7 +51,7 @@ const resolvePath = (path: string): { owner: unknown; fn: unknown } => {
 };
 
 /** JSON of anything: Maps and Sets as arrays, cycles and DOM nodes named, long text cut. */
-export function safeJson(value: unknown, limit = 200_000): string {
+function safeJson(value: unknown, limit = 200_000): string {
   const seen = new WeakSet<object>();
   const out = JSON.stringify(value, (_key, v: unknown) => {
     if (typeof v === 'bigint') return String(v);

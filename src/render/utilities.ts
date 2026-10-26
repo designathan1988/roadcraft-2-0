@@ -116,7 +116,7 @@ const POLE_PART = {
 export const POLE_PART_COUNT = 11;
 
 /** A shape a part may be drawn with, and how far (world units) its outline strays from the part's own. */
-export interface PartLevel {
+interface PartLevel {
   readonly geometry: BufferGeometry;
   readonly error: number;
 }

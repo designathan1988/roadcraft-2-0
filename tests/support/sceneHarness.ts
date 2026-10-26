@@ -54,7 +54,7 @@ export function setView(scene: SceneHandle, [x, y, zoom, azimuth, elevation]: Vi
 }
 
 interface Counted { objects: number; drawn: number }
-export interface Census { byName: Record<string, Counted>; objects: number; drawn: number; draws: number; triangles: number; points: number; lines: number }
+interface Census { byName: Record<string, Counted>; objects: number; drawn: number; draws: number; triangles: number; points: number; lines: number }
 
 /** Every visible drawable under the scene, by name without digits (how many objects, how many things drawn), and three's last frame. */
 function census(scene: SceneHandle): Census {

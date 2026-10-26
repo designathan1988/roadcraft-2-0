@@ -181,7 +181,7 @@ export class SearchScratch {
  * never a stall. Inside a micro window a route takes a few hundred; the cap only stops a search from walking a whole map (a goal
  * reached only round the far side of the city).
  */
-export const SEARCH_EXPANSIONS = 6000;
+const SEARCH_EXPANSIONS = 6000;
 /** Trip searches a tick may start for requests that can wait (a car to make, a driver reconsidering): the rest wait for the next tick, as Cities: Skylines 2's pending path queue taught (pending queries dominate a big city's tick). */
 export const SEARCHES_PER_TICK = 16;
 

@@ -213,7 +213,7 @@ export const TREE_POSE: SlotFormat = {
 const TREE_SCRATCH: number[] = new Array<number>(8).fill(0);
 
 /** A tree's matrix, into `m` at `o`: its pose (`treePoseInto`) written out */
-export function treeMatrixInto(item: TreePlacement, crowd: number, openX: number, openY: number, m: { [i: number]: number }, o: number): void {
+function treeMatrixInto(item: TreePlacement, crowd: number, openX: number, openY: number, m: { [i: number]: number }, o: number): void {
   const pose = TREE_SCRATCH;
   treePoseInto(item, crowd, openX, openY, pose, 0);
   leaningMatrixInto(m, o, pose[0]!, pose[1]!, pose[2]!, pose[3]!, pose[4]!, pose[5]!, pose[6]!, pose[7]!);

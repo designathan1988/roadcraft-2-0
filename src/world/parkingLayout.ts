@@ -8,7 +8,7 @@ import type { Network, SegmentRibbon } from './network';
 import { CROSSWALK_DEPTH } from './approach';
 import { entrancesOf } from './buildingGates';
 // Where they were first: the far roads and the tests read them from here too.
-export { entrancesOf, gatesOf } from './buildingGates';
+export { entrancesOf } from './buildingGates';
 import { CORNER_CLEAR, CROSSING_CLEAR, PARKING_PITCH, type ParkingKind } from './parking';
 import { m, stepsIn } from './units';
 
@@ -86,19 +86,6 @@ export function parkingLinesOf(net: Network, ribbon: SegmentRibbon, entrances: r
   const lines: ParkingLine[] = [];
   parkingOf(net, ribbon, entrances, [], lines);
   return lines;
-}
-
-/** The entrances of `gates` (`gatesOf`) a street of half width `half` along `line` may read: those `entrancesNear` would hand it, for a road bake without the buildings (`render/nearRoadTiles.ts`). */
-export function gatesNear(gates: ArrayLike<number>, line: Polyline, half: number): [Vec2, Vec2][] {
-  const reach = half + m(8);
-  const bb = line.bbox;
-  const out: [Vec2, Vec2][] = [];
-  for (let k = 0; k + 3 < gates.length; k += 4) {
-    const x0 = gates[k]!, y0 = gates[k + 1]!, x1 = gates[k + 2]!, y1 = gates[k + 3]!;
-    if (Math.max(x0, x1) < bb.minX - reach || Math.min(x0, x1) > bb.maxX + reach || Math.max(y0, y1) < bb.minY - reach || Math.min(y0, y1) > bb.maxY + reach) continue;
-    out.push([{ x: x0, y: y0 }, { x: x1, y: y1 }]);
-  }
-  return out;
 }
 
 /** Whether a street has parking laid out at all (`parkingOf`): only then do the buildings near it move its paint. */

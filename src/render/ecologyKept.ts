@@ -10,8 +10,8 @@ declare const __FAR_WOODS_HASH__: string | undefined;
 /** The fingerprints of the code they are worked out by (`cook-plugin.ts`): kept under them; none (tests): nothing kept. */
 export const ECOLOGY_HASH = typeof __ECOLOGY_HASH__ !== 'undefined' && __ECOLOGY_HASH__ ? __ECOLOGY_HASH__ : null;
 export const WOODS_HASH = typeof __FAR_WOODS_HASH__ !== 'undefined' && __FAR_WOODS_HASH__ ? __FAR_WOODS_HASH__ : null;
-export const ECOLOGY_PREFIX = ECOLOGY_HASH ? `ecology:${ECOLOGY_HASH}:` : null;
-export const WOODS_PREFIX = WOODS_HASH ? `farWoods:${WOODS_HASH}:` : null;
+const ECOLOGY_PREFIX = ECOLOGY_HASH ? `ecology:${ECOLOGY_HASH}:` : null;
+const WOODS_PREFIX = WOODS_HASH ? `farWoods:${WOODS_HASH}:` : null;
 
 /** Where they are kept: one entry a plate (by its centre), its land's digest beside it, written over when the land changes (the store never grows with the edits). */
 export interface EcologyCache {
