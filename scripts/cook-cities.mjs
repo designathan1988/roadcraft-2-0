@@ -22,7 +22,15 @@ try {
     const data = `${kind}-${seed}.json.gz`, table = `${kind}-${seed}.table.gz`;
     writeFileSync(join(dir, data), gzipSync(JSON.stringify(made.data), { level: 9 }));
     writeFileSync(join(dir, table), gzipSync(new Uint8Array(tableBytes(made.buildings)), { level: 9 }));
-    cities[kind] = { seed, data, table };
+    const entry = { seed, data, table };
+    // The landscaping's and the lots' tables beside the buildings' (`prepareCity`): the page reads their records from them when asked, never holding them as objects.
+    for (const [name, buffer] of [['landscape', made.landscape], ['lots', made.lots]]) {
+      if (!buffer) continue;
+      const file = `${kind}-${seed}.${name}.gz`;
+      writeFileSync(join(dir, file), gzipSync(new Uint8Array(tableBytes(buffer)), { level: 9 }));
+      entry[name] = file;
+    }
+    cities[kind] = entry;
     console.log(`${kind} city of seed ${seed}: grown and prepared in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   }
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ hash, cities }, null, 2));

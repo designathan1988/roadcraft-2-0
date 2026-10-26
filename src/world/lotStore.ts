@@ -1,12 +1,14 @@
-import { RecordMap } from '@core/recordMap';
 import type { Vec2 } from '@core/vec2';
 import { ForkMap, forkWork } from '@core/forkMap';
 import { ChangeJournal, isStreaming, rectAround, rectsAround, type ChangeRect } from './changes';
-import { CellFiling } from './cells';
 import { JournalCursor } from './derived';
 import { IdAllocator } from './ids';
 import { insideLot, type Lot } from './lotRecord';
 import { lotCentre } from './lotRings';
+import { PointFiling } from './pointFiling';
+import { TableItems } from './buildings/items';
+import { encodeRecords } from './buildings/recordTable';
+import { type TableSections, itemsOfSections, sectionsOf } from './buildings/sections';
 import { m } from './units';
 
 /** Where a lot lies: the box round its corners. */
@@ -14,8 +16,10 @@ export function lotBox(lot: Pick<Lot, 'corners'>): ChangeRect {
   return rectAround(lot.corners) ?? [0, 0, 0, 0];
 }
 
-/** Side of the cells the lots are filed in, world units: a few lots wide */
+/** Side of the cells the lots are filed in by their centres, world units: a few lots wide */
 const LOT_CELL = m(50);
+/** How far a lot reaches from its centre at most (`lots.ts` LOT_DEPTH 32 m, a frontage of some tens of metres): a question about a place asks the centres this far round it. */
+const LOT_REACH = m(80);
 
 /** One change of some lots as the store applies it (`LotStore.apply`). */
 export interface LotEdit {
@@ -29,18 +33,28 @@ export interface LotEdit {
   readonly also?: readonly ChangeRect[];
 }
 
-/** DO NOT hand the lots out as an array the callers write into, nor search one by id or by place */
+/** Where a lot stands for its table's columns and its filing: its centre. */
+const placeOf = (lot: Lot): Vec2 => lotCentre(lot);
+
+/**
+ * THE LOTS OF THE MAP IN A TABLE (`TableItems`: the table the map was opened from, a record decoded when it is read, the records written since
+ * over it) and by their centres in cells (`PointFiling`, from the table's columns, no record decoded). DO NOT hand the lots out as an array the
+ * callers write into, nor search one by id or by place, nor hold them as objects: 111,000 lots of a 10 km city stood as objects on the page
+ * (2026-10-26).
+ */
 export class LotStore {
-  /** @mapWide Every lot of the map, in the lots' order. */
-  private items: Map<number, Lot> = new RecordMap();
-  /** Each lot's place in the order: grows with every lot put last. */
+  /** @mapWide Every lot of the map, in the lots' order: the table's rows, then the records written after them. A working copy's (`forkFrom`) lies over the original's. */
+  private items: Map<number, Lot> = new TableItems<number, Lot>();
+  /** The table the lots stand in, this store's or the one below a working copy's (`forkFrom`): a table lot's place in the order is its row (`orderOf`). */
+  private tableItems: TableItems<number, Lot> | null = this.items as TableItems<number, Lot>;
+  /** The place in the order of each lot written after the table's rows (`append`): grows with every lot put last. */
   private order = new Map<number, number>();
   private nextOrder = 0;
   private ids = new IdAllocator(1);
   /** The id a lot made at a place takes from its loaded tile's range (`RoadDoc.tileIdAt`); null: this store's allocator. */
   idAt: ((at: { readonly x: number; readonly y: number }) => number | null) | null = null;
-  /** The lots by place, kept by the writers below; null after a whole-store change (a load, a copy), filed again when first asked. */
-  private filing: CellFiling<number, Lot> | null = null;
+  /** The lots by their centres, kept by the writers below; null after a whole-store change (a load, a copy), filed again from the columns when first asked. */
+  private filing: PointFiling<number> | null = null;
   /** The land already cut into lots (`lots.ts` `planLots`), in the order it was cut, and the same as a set. */
   private keyList: string[] = [];
   private keySet = new Set<string>();
@@ -59,15 +73,14 @@ export class LotStore {
   /** Told each lot before it is written, and before the keys are (an edit being recorded, `RoadDoc.beginEdit`); null: nobody. */
   watch(before: ((id: number, was: Lot | undefined) => void) | null, keys: (() => void) | null): void {
     this.beforeKeys = keys;
-    if (this.items instanceof RecordMap) this.items.before = before;
+    if (this.items instanceof TableItems) this.items.before = before;
   }
   private beforeKeys: (() => void) | null = null;
 
   /** A map of the lots that tells its writes to whoever listens now (a whole-store change keeps the listener). */
-  private recordingMap(from?: ReadonlyMap<number, Lot>): RecordMap<number, Lot> {
-    const map = new RecordMap<number, Lot>(from);
-    if (this.items instanceof RecordMap) map.before = this.items.before;
-    return map;
+  private withWatch(items: TableItems<number, Lot>): TableItems<number, Lot> {
+    if (this.items instanceof TableItems) items.before = this.items.before;
+    return items;
   }
 
   /** The serial of the latest change of the lots in the diary. */
@@ -92,9 +105,12 @@ export class LotStore {
     return this.items.values();
   }
 
-  /** A lot's place in the order (`ORDER` above): a lot put last gets a number greater than any before. */
+  /** A lot's place in the order (`ORDER` above): a table lot's row, a lot put last a number greater than any before. */
   orderOf(id: number): number | undefined {
-    return this.order.get(id);
+    const own = this.order.get(id);
+    if (own !== undefined) return own;
+    const row = this.tableItems?.rowOrder(id) ?? -1;
+    return row >= 0 ? row : undefined;
   }
 
   /** @rebuild The lots as an array, in their order, made again only after a change: for the readers that still take an array */
@@ -122,17 +138,31 @@ export class LotStore {
     return this.keySet.has(key);
   }
 
+  /** Where a lot's centre stands: the table's columns for a lot of the table, its corners else. */
+  private readonly centreOf = (id: number): Vec2 => {
+    const items = this.items;
+    return (items instanceof TableItems ? items.placeOf(id) : undefined) ?? placeOf(items.get(id)!);
+  };
+
   /** The lots whose box meets `rect`, in increasing id order: a superset of those whose shape reaches it */
   in(rect: ChangeRect): Lot[] {
     if (this.below) return this.below.in(rect);
-    return this.cells().idsMeeting(rect).map((id) => this.items.get(id)!);
+    // The lots whose centre lies within a lot's reach of the rectangle, then only those whose box meets it.
+    const near: ChangeRect = [rect[0] - LOT_REACH, rect[1] - LOT_REACH, rect[2] + LOT_REACH, rect[3] + LOT_REACH];
+    const out: Lot[] = [];
+    for (const id of this.cells().idsMeeting(near, this.centreOf)) {
+      const lot = this.items.get(id)!;
+      const box = lotBox(lot);
+      if (box[0] <= rect[2] && box[2] >= rect[0] && box[1] <= rect[3] && box[3] >= rect[1]) out.push(lot);
+    }
+    return out;
   }
 
   /** The lot whose shape holds `p` (the first in the lots' order when lots overlap), or undefined. */
   at(p: Vec2): Lot | undefined {
     let best: Lot | undefined, bestOrder = Infinity;
     for (const lot of this.in([p.x, p.y, p.x, p.y])) {
-      const order = this.order.get(lot.id)!;
+      const order = this.orderOf(lot.id)!;
       if (order < bestOrder && insideLot(p, lot)) { best = lot; bestOrder = order; }
     }
     return best;
@@ -171,10 +201,7 @@ export class LotStore {
       const was = this.items.get(lot.id);
       if (!was) throw new Error(`LotStore: lot ${lot.id} put but not stored`);
       if (was === lot) continue;
-      this.leaveBelow();
-      this.items.set(lot.id, lot);
-      this.filing?.file(lot.id, lot, lotBox(lot));
-      this.listed = null;
+      this.replace(was, lot);
       ids.push(lot.id);
       rects.push(lotBox(was), lotBox(lot));
     }
@@ -249,12 +276,8 @@ export class LotStore {
       if (!was && value === undefined) continue;
       if (was) rects.push(lotBox(was));
       if (value === undefined) this.drop(id);
-      else if (was) {
-        this.leaveBelow();
-        this.items.set(id, value);
-        this.filing?.file(id, value, lotBox(value));
-        this.listed = null;
-      } else {
+      else if (was) this.replace(was, value);
+      else {
         this.append(value);
         this.ids.reserve(id);
       }
@@ -266,23 +289,58 @@ export class LotStore {
     if (ids.length) this.journal.record('lots', where, { ids, cause });
   }
 
-  /** The lots and keys of a map read (`RoadDoc.fromJSON`): the whole store, entries without ids. */
+  /** The lots and keys of a map read (`RoadDoc.fromJSON`), as records: the whole store, entries without ids. */
   load(lots: readonly Lot[], keys: readonly string[]): void {
     this.reset();
     for (const lot of lots) {
       this.append(lot);
       this.ids.reserve(lot.id);
     }
-    for (const key of keys) if (!this.keySet.has(key)) { this.keySet.add(key); this.keyList.push(key); }
+    this.loadKeys(keys);
     if (lots.length) this.journal.record('lots', null, { cause: 'map loaded' });
     if (keys.length) this.journal.record('lotKeys', null, { cause: 'map loaded' });
   }
 
-  /** The same records as another store (they are never changed in place) */
+  /** The lots of a map read from their table (a city made off the page, `editor/preparedCity.ts`; a map's image): the table the store's own, a record decoded when it is read; `also`: records of the file over it (none, as a rule). DO NOT decode the table's records here. */
+  loadSections(sections: TableSections, keys: readonly string[], also: readonly Lot[] = []): void {
+    this.reset();
+    const items = this.withWatch(itemsOfSections<number, Lot>(sections, null));
+    this.items = items;
+    this.tableItems = items;
+    // The records written after the table's rows (an image's added), in their order; the ids from the columns, nothing decoded.
+    this.nextOrder = items.table?.size ?? 0;
+    let top = 0;
+    const { added } = items.writes();
+    for (const id of added.keys()) this.order.set(id, this.nextOrder++);
+    for (const id of items.keys()) if (id > top) top = id;
+    if (top > 0) this.ids.reserve(top);
+    for (const lot of also) if (!items.has(lot.id)) { this.append(lot); this.ids.reserve(lot.id); }
+    this.loadKeys(keys);
+    if (items.size) this.journal.record('lots', null, { cause: 'map loaded' });
+    if (keys.length) this.journal.record('lotKeys', null, { cause: 'map loaded' });
+  }
+
+  private loadKeys(keys: readonly string[]): void {
+    for (const key of keys) if (!this.keySet.has(key)) { this.keySet.add(key); this.keyList.push(key); }
+  }
+
+  /** The lots as buffers (`TableSections`): the table shared, the records written encoded - the save's, the simulation's, a whole map's undo. */
+  sections(): TableSections {
+    return sectionsOf(this.items, placeOf);
+  }
+
+  /** Every lot as one table in the lots' order, its columns their centres (a city made off the page, `editor/smallCityMap.ts`); null: none. */
+  tableOf(): ArrayBufferLike | null {
+    const list = [...this.items.values()];
+    return list.length ? encodeRecords(list, placeOf).buffer : null;
+  }
+
+  /** The same records as another store (they are never changed in place): its table shared, the records written copied, never a record of the table decoded. */
   shareFrom(source: LotStore): void {
     this.below = null;
     this.keysShared = false;
-    this.items = this.recordingMap(source.items);
+    this.items = this.withWatch(source.items instanceof TableItems ? source.items.copy() : TableItems.over<number, Lot>(null, [], [], source.items.values()));
+    this.tableItems = this.items as TableItems<number, Lot>;
     this.order = new Map(source.order);
     this.nextOrder = source.nextOrder;
     this.ids = new IdAllocator(Math.max(this.ids.peek, source.ids.peek));
@@ -319,13 +377,10 @@ export class LotStore {
       for (const id of new Set(changed)) {
         const was = this.items.get(id), now = source.items.get(id);
         if (!was && !now) continue;
-        if (was && now && this.order.get(id) === source.order.get(id)) {
+        if (was && now && this.orderOf(id) === source.orderOf(id)) {
           // Changed where it stands: replaced in place (a `Map`'s `set` keeps the key's place).
           if (was === now) continue;
-          this.leaveBelow();
-          this.items.set(id, now);
-          this.filing?.file(id, now, lotBox(now));
-          this.listed = null;
+          this.replace(was, now);
           rects.push(lotBox(was), lotBox(now));
           ids.push(id);
           continue;
@@ -335,16 +390,24 @@ export class LotStore {
         ids.push(id);
       }
       // In the copy's order: each with the copy's place number (kept, or given there when it went last).
-      last.sort((a, b) => source.order.get(a)! - source.order.get(b)!);
-      for (const id of last) this.append(source.items.get(id)!, source.order.get(id)!);
+      last.sort((a, b) => source.orderOf(a)! - source.orderOf(b)!);
+      for (const id of last) this.append(source.items.get(id)!, source.orderOf(id)!);
       this.nextOrder = Math.max(this.nextOrder, source.nextOrder);
       if (ids.length) this.journal.record('lots', rects, { ids, cause });
       return ids.length > 0 || keysMoved;
     }
+    // Two tables, one record under both not written by either: the same, known without decoding (`sameUnwritten`).
     let same = this.items.size === source.items.size;
     if (same) {
-      const theirs = source.items.values();
-      for (const mine of this.items.values()) if (mine !== theirs.next().value) { same = false; break; }
+      const mine = this.items, theirs = source.items;
+      const shared = mine instanceof TableItems && theirs instanceof TableItems && mine.table !== null && mine.table === theirs.table;
+      const theirKeys = theirs.keys();
+      for (const id of mine.keys()) {
+        const other = theirKeys.next().value;
+        if (other !== id) { same = false; break; }
+        if (shared && mine.sameUnwritten(theirs as TableItems<number, Lot>, id)) continue;
+        if (mine.get(id) !== theirs.get(id)) { same = false; break; }
+      }
     }
     if (same) return keysMoved;
     const keyList = this.keyList, keySet = this.keySet, keysShared = this.keysShared;
@@ -352,7 +415,10 @@ export class LotStore {
     this.keyList = keyList;
     this.keySet = keySet;
     this.keysShared = keysShared;
-    for (const lot of source.items.values()) this.append(lot);
+    this.items = this.withWatch(source.items instanceof TableItems ? source.items.copy() : TableItems.over<number, Lot>(null, [], [], source.items.values()));
+    this.tableItems = this.items as TableItems<number, Lot>;
+    this.order = new Map(source.order);
+    this.nextOrder = source.nextOrder;
     this.journal.record('lots', null, { cause });
     return true;
   }
@@ -360,6 +426,7 @@ export class LotStore {
   /** A working copy over another store (`RoadDoc.fork`) */
   forkFrom(source: LotStore): void {
     this.items = new ForkMap(source.items);
+    this.tableItems = source.tableItems;
     this.order = new ForkMap(source.order);
     this.nextOrder = source.nextOrder;
     this.ids = new IdAllocator(source.ids.peek);
@@ -375,9 +442,9 @@ export class LotStore {
   takeFork(copy: LotStore): void {
     const { gone, replaced, added } = (copy.items as ForkMap<number, Lot>).changes();
     if (gone.size || replaced.size || added.size) this.listed = null;
-    for (const id of gone) { this.items.delete(id); this.filing?.remove(id); }
-    for (const [id, lot] of replaced) { this.items.set(id, lot); this.filing?.file(id, lot, lotBox(lot)); }
-    for (const [id, lot] of added) { this.items.set(id, lot); this.filing?.file(id, lot, lotBox(lot)); }
+    for (const id of gone) { const was = this.items.get(id); this.items.delete(id); if (was) this.filing?.remove(id, placeOf(was).x, placeOf(was).y); }
+    for (const [id, lot] of replaced) { const was = this.items.get(id); this.items.set(id, lot); if (was) this.filing?.remove(id, placeOf(was).x, placeOf(was).y); this.filing?.file(id, placeOf(lot).x, placeOf(lot).y); }
+    for (const [id, lot] of added) { this.items.set(id, lot); this.filing?.file(id, placeOf(lot).x, placeOf(lot).y); }
     (copy.order as ForkMap<number, number>).applyTo(this.order);
     this.nextOrder = copy.nextOrder;
     this.ids = new IdAllocator(copy.ids.peek);
@@ -410,13 +477,36 @@ export class LotStore {
     return [...this.items.values()].map((lot) => ({ ...lot, corners: lot.corners.map((q) => ({ x: q.x, y: q.y })) }));
   }
 
-  /** @rebuild The whole store filed by place only on the first question after it was taken whole (a load, a copy). */
-  private cells(): CellFiling<number, Lot> {
+  /** @rebuild The whole store filed by the lots' centres only on the first question after it was taken whole (a load, a copy): a table's rows from its columns (no record decoded), the records written from themselves. */
+  private cells(): PointFiling<number> {
     if (!this.filing) {
-      this.filing = new CellFiling<number, Lot>(LOT_CELL);
-      for (const [id, lot] of this.items) this.filing.file(id, lot, lotBox(lot));
+      const filing = new PointFiling<number>(LOT_CELL);
+      const items = this.items;
+      if (items instanceof TableItems) {
+        const table = items.table;
+        const { gone, replaced, added } = items.writes();
+        if (table) {
+          for (let row = 0; row < table.size; row++) {
+            const id = table.idAt(row);
+            if (gone.has(id) || replaced.has(id)) continue;
+            const at = table.placeAt(row);
+            filing.file(id, at.x, at.y);
+          }
+        }
+        for (const lot of replaced.values()) { const at = placeOf(lot); filing.file(lot.id, at.x, at.y); }
+        for (const lot of added.values()) { const at = placeOf(lot); filing.file(lot.id, at.x, at.y); }
+      } else for (const lot of items.values()) { const at = placeOf(lot); filing.file(lot.id, at.x, at.y); }
+      this.filing = filing;
     }
     return this.filing;
+  }
+
+  /** A lot's record replaced in place (its place in the order kept). */
+  private replace(was: Lot, lot: Lot): void {
+    this.leaveBelow();
+    this.items.set(lot.id, lot);
+    if (this.filing) { const a = placeOf(was), b = placeOf(lot); this.filing.remove(lot.id, a.x, a.y); this.filing.file(lot.id, b.x, b.y); }
+    this.listed = null;
   }
 
   /** A lot stored last in the order (`at`: the place number it keeps from a copy). */
@@ -424,15 +514,16 @@ export class LotStore {
     this.leaveBelow();
     this.items.set(lot.id, lot);
     this.order.set(lot.id, at ?? this.nextOrder++);
-    this.filing?.file(lot.id, lot, lotBox(lot));
+    if (this.filing) { const c = placeOf(lot); this.filing.file(lot.id, c.x, c.y); }
     this.listed = null;
   }
 
   private drop(id: number): void {
     this.leaveBelow();
+    const was = this.items.get(id);
     this.items.delete(id);
     this.order.delete(id);
-    this.filing?.remove(id);
+    if (was && this.filing) { const c = placeOf(was); this.filing.remove(id, c.x, c.y); }
     this.listed = null;
   }
 
@@ -440,7 +531,8 @@ export class LotStore {
     this.keysRewritten++;
     this.below = null;
     this.keysShared = false;
-    this.items = this.recordingMap();
+    this.items = this.withWatch(new TableItems<number, Lot>());
+    this.tableItems = this.items as TableItems<number, Lot>;
     this.order = new Map();
     this.nextOrder = 0;
     this.keyList = [];

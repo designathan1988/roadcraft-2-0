@@ -42,8 +42,8 @@ describe('a road edited far from the view', () => {
   beforeAll(async () => {
     page = installNullPage(WIDTH, HEIGHT, process.cwd());
     primeCookedSurfaces(process.cwd());
-    const { data, buildings } = prepareCity(buildLargeCityMap(7));
-    const { city } = await openCityMap(data, buildings, { large: true, view: OPEN });
+    const made = prepareCity(buildLargeCityMap(7));
+    const { city } = await openCityMap(made.data, made, { large: true, view: OPEN });
     try {
       // The roads past the opening solved, the view's cells built.
       for (let i = 0; i < 600 && (city.scene.openingState().solvePending || city.scene.openingState().roadsWanted > 0 || city.scene.worldBusy); i++) await frame(city);

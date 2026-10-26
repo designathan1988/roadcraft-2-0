@@ -5,6 +5,7 @@ import { Network } from '@world/network';
 import { m } from '@world/units';
 import { applyLots, planLots, zoneLots } from '@world/lots';
 import type { Building, BuildingId } from '@world/buildings/types';
+import { sectionsSize } from '@world/buildings/sections';
 import { growOnLot } from '@world/growth/zoning';
 import { SimWorld } from '@sim/world';
 import { collectBays } from '@sim/agents/parking';
@@ -55,7 +56,8 @@ describe('the map the simulation\'s worker is sent', () => {
     for (const key of Object.keys(map.doc)) expect(['version', 'unit', 'nodes', 'segments', 'transit'], key).toContain(key);
     expect(map.doc.nodes.length).toBe(doc.nodes.size);
     expect(map.doc.segments.length).toBe(doc.segments.size);
-    expect(map.lots.length).toBe(doc.lotStore.size);
+    // The lots go as their table and the records written over it, as the buildings do.
+    expect(sectionsSize(map.lots)).toBe(doc.lotStore.size);
     // The buildings go as where their records are read; the worker works out what traffic reads of each (`takeTrafficMap`), never the page.
     const table = new TrafficBuildingTable(new RoadDoc().changes);
     takeTrafficMap(new RoadDoc(), table, structuredClone(map));

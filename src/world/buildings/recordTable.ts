@@ -1,5 +1,11 @@
 import type { Building } from './types';
 
+/** A ROW ANY TABLE HOLDS (the buildings, the lots, the landscaping: `TableWriter` takes any plain keyed record): its id, and where it stands - the
+ *  columns read without the record; a record without a place has NaN there unless the writer's `place` gives one (a lot's centre). */
+export interface TableRow { readonly id: number; readonly x?: number; readonly y?: number; readonly rotation?: number }
+/** Where a row stands, for its columns (`TableWriter` place). */
+export type RowPlace<T> = (row: T) => { readonly x: number; readonly y: number };
+
 /** A TILE'S BUILDINGS AS ONE TYPED TABLE IN SHARED MEMORY (CLAUDE.md "Architecture": per-tile typed tables read by stateless jobs): columns for what is read without the record (id, place, rotation), each record's members in a binary stream, every string, object shape and shared member (`intern.ts`) written once for the tile; a SharedArrayBuffer is posted as a handle, never copied (MDN "SharedArrayBuffer"), and each reader decodes only the rows it is asked for */
 
 const MAGIC = 0x52435442;
@@ -104,9 +110,9 @@ function sharedObjects(rows: readonly object[]): Set<object> {
   return shared;
 }
 
-/** The rows written as one table: their values as JSON would keep them (undefined members left out, in arrays null), numbers exact. */
-export function encodeRecords(rows: readonly Building[]): RecordTable {
-  const writer = new TableWriter();
+/** The rows written as one table: their values as JSON would keep them (undefined members left out, in arrays null), numbers exact. `place`: where a record without a place of its own stands (its columns). */
+export function encodeRecords<T extends TableRow = Building>(rows: readonly T[], place: RowPlace<T> | null = null): RecordTable {
+  const writer = new TableWriter<T>(false, place);
   writer.add(rows);
   return writer.finish();
 }
@@ -118,7 +124,7 @@ export function encodeRecords(rows: readonly Building[]): RecordTable {
  * city's records as objects to encode them at the end: ~20 KB of JS heap a building, and the city of 160,000 buildings took its worker
  * to 5.6 GB, past the V8 cage it shares with its page (2026-10-22); the table holds ~1 KB a building, outside the JS heap.
  */
-export class TableWriter {
+export class TableWriter<T extends TableRow = Building> {
   private readonly strings = new Map<string, number>();
   private readonly stringList: string[] = [];
   private readonly shapes = new Map<string, number>();
@@ -137,8 +143,8 @@ export class TableWriter {
   /** The shared members written as nodes, kept across batches (`keepShared`): a member met again in a later batch written as its mark. */
   private readonly keptNodes = new Map<object, number>();
 
-  /** `keepShared`: a member written as a node in one batch is that node in the batches after (the members shared across batches, `intern.ts` SharedMembers); without it each batch writes its own. */
-  constructor(private readonly keepShared = false) {}
+  /** `keepShared`: a member written as a node in one batch is that node in the batches after (the members shared across batches, `intern.ts` SharedMembers); without it each batch writes its own. `place`: where a row stands, for its columns (a record with no x, y of its own). */
+  constructor(private readonly keepShared = false, private readonly place: RowPlace<T> | null = null) {}
 
   get rows(): number {
     return this.rootAt.length;
@@ -172,7 +178,7 @@ export class TableWriter {
   }
 
   /** Rows written after those before; a member shared between rows of this batch written once, as a node. */
-  add(rows: readonly Building[]): void {
+  add(rows: readonly T[]): void {
     const shared = sharedObjects(rows);
     const nodes = this.keepShared ? this.keptNodes : new Map<object, number>();
     const stream = this.stream, nodeAt = this.nodeAt;
@@ -216,16 +222,17 @@ export class TableWriter {
     };
     for (const row of rows) {
       this.rootAt.push(stream.length);
-      this.ids.push(row.id); this.xs.push(row.x); this.ys.push(row.y); this.turns.push(row.rotation);
+      const at = this.place ? this.place(row) : row;
+      this.ids.push(row.id); this.xs.push(at.x ?? Number.NaN); this.ys.push(at.y ?? Number.NaN); this.turns.push(row.rotation ?? Number.NaN);
       body(row);
     }
   }
 
   /** A row written, decoded: a fresh object of its own, its shared members its own too. */
-  read(row: number): Building {
+  read(row: number): T {
     if (row < 0 || row >= this.rows) throw new Error(`[buildings] no row ${row} in the table being written`);
     this.pos = this.rootAt[row]!;
-    return this.value(this.stream.view) as Building;
+    return this.value(this.stream.view) as T;
   }
 
   private value(view: DataView): unknown {
@@ -327,13 +334,13 @@ export class RecordTable {
   }
 
   /** A reader of this table: what it decodes (strings, shapes, shared members) is kept for its own life only (a job's). `weak`: its shared members kept only while a record read holds them (`TableReader`). */
-  reader(weak = false): TableReader {
-    return new TableReader(this, weak);
+  reader<T extends TableRow = Building>(weak = false): TableReader<T> {
+    return new TableReader<T>(this, weak);
   }
 }
 
 /** DO NOT keep a reader past the job it was made for: a stateless job decodes what it reads and lets it go; the shared members it decoded are one object for all its rows (as `intern.ts` on the page) */
-export class TableReader {
+export class TableReader<T extends TableRow = Building> {
   private readonly view: DataView;
   private readonly rootAt: Uint32Array;
   private readonly nodeAt: Uint32Array;
@@ -374,10 +381,10 @@ export class TableReader {
   }
 
   /** A row's record: a fresh object of its own, its shared members the reader's. */
-  record(row: number): Building {
+  record(row: number): T {
     if (row < 0 || row >= this.table.rows) throw new Error(`[buildings] no row ${row} in the record table`);
     this.pos = this.rootAt[row]!;
-    return this.value() as Building;
+    return this.value() as T;
   }
 
   private string(id: number): string {
@@ -474,17 +481,17 @@ export interface RecordRef {
 const refs = new WeakMap<object, RecordRef>();
 
 /** A row's record read on the page, knowing its row: a job is handed the row, never the record (`refOf`). */
-export function readRow(reader: TableReader, row: number): Building {
+export function readRow<T extends TableRow = Building>(reader: TableReader<T>, row: number): T {
   const b = reader.record(row);
   refs.set(b, { buffer: reader.table.buffer, row });
   return b;
 }
 
 /** DO NOT read a whole city's table this way on the page (`world/buildings/tableRows.ts` reads a row when asked): every record decoded and kept is ~8 KB of heap a building. A tile's buildings read from its table, each knowing its row. */
-export function tableRecords(buffer: ArrayBufferLike): Building[] {
+export function tableRecords<T extends TableRow = Building>(buffer: ArrayBufferLike): T[] {
   const table = new RecordTable(buffer);
-  const reader = table.reader();
-  const out: Building[] = [];
+  const reader = table.reader<T>();
+  const out: T[] = [];
   for (let row = 0; row < table.rows; row++) out.push(readRow(reader, row));
   return out;
 }

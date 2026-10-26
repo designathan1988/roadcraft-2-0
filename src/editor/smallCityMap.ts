@@ -61,10 +61,12 @@ function buildCityTable(city: CityPlan, phase?: (name: string) => void): Prepare
     page.endBatch();
     phase?.('spilled');
   }, phase);
-  // The growth's network and elevation let go with `growCity`'s scope: only the document lives on to be written out.
-  const data = doc.toJSONBuildingsApart();
+  // The growth's network and elevation let go with `growCity`'s scope: only the document lives on to be written out. Its landscaping and
+  // its lots as tables of their own (`RoadDoc.landscapeTable`, `LotStore.tableOf`): DO NOT post them as objects for the page to hold.
+  const data = doc.toJSONTablesApart();
+  const landscape = doc.landscapeTable(), lots = doc.lotStore.tableOf();
   phase?.('written');
-  return { data, buildings: page.finish() };
+  return { data, buildings: page.finish(), landscape, lots };
 }
 
 /** A planned city laid out and grown on one document. `spill`: told after each building grown and once at the end (`last`), with the store's items spilled to a table (`BuildingStore.spillToTable`, its members shared by `shared`); null: every record kept as an object. */

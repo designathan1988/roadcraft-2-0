@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { buildCityTableOf } from '@editor/smallCityMap';
 import type { PreparedCity } from '@editor/preparedCity';
-import { RecordTable } from '@world/buildings/recordTable';
+import { RecordTable, tableRecords } from '@world/buildings/recordTable';
 import { m } from '@world/units';
 
 setFlagsFromString('--expose_gc');
@@ -16,9 +16,10 @@ function hashText(text: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-/** A prepared city as the page reads it: its data's text and every record of its table decoded, one number. */
+/** A prepared city as the page reads it: its data's text (the landscaping and the lots read back from their tables into their places, as the data held them before 2026-10-26) and every record of its buildings' table decoded, one number. */
 function cityHash(city: PreparedCity): number {
-  let h = hashText(JSON.stringify(city.data));
+  const data = { ...city.data, ...(city.landscape ? { landscape: tableRecords(city.landscape) } : {}), ...(city.lots ? { lots: tableRecords(city.lots) } : {}) };
+  let h = hashText(JSON.stringify(data));
   const table = new RecordTable(city.buildings), reader = table.reader();
   for (let row = 0; row < table.rows; row++) h = hashText(JSON.stringify(reader.record(row)), h);
   return h;

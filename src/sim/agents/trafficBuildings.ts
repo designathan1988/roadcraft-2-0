@@ -5,7 +5,6 @@ import { type RoadDoc, type SerializedDoc, savedNode, savedSegment } from '@worl
 import type { ChangeJournal, ChangeRect } from '@world/changes';
 import { CELL } from '@world/cells';
 import { hasTransit } from '@world/transit';
-import type { Lot } from '@world/lots';
 import { METERS_PER_UNIT, m } from '@world/units';
 import { solidFootprints, storedBounds } from '@world/buildings/geometry';
 import { streetDoors, type StreetDoor } from '@world/buildings/streetDoors';
@@ -13,7 +12,7 @@ import { lorryDocks, type LorryDock } from '@world/buildings/docks';
 import { entrancesOf } from '@world/buildingGates';
 import type { Building, BuildingElement, BuildingFunction, BuildingId, BuildingUse, Volume } from '@world/buildings/types';
 import { type RecordRef, RecordTable, type TableReader, eachRecord, refOf } from '@world/buildings/recordTable';
-import { type BuildingSections, eachSectionRef, sectionsSize } from '@world/buildings/sections';
+import { type BuildingSections, type TableSections, eachSectionRef, sectionsSize } from '@world/buildings/sections';
 import { type Mix, kindOf } from '../ambient/demand';
 import type { LotPart } from './lotNav';
 import { LANE_REACH, gatedProperty, personGates } from './lotBays';
@@ -694,15 +693,15 @@ export interface BuildingSent {
   readonly ref: RecordRef | null;
 }
 
-/** What the worker's copy of the map is made of: the roads and the transit, the lots and their keys, the buildings as the document's own buffers (`BuildingSections`: its table, shared, and the records written over it). */
+/** What the worker's copy of the map is made of: the roads and the transit, the lots (as their table, shared, and the records written over it, `TableSections`) and their keys, the buildings as the document's own buffers likewise. */
 export interface TrafficMap {
   readonly doc: SerializedDoc;
-  readonly lots: readonly Lot[];
+  readonly lots: TableSections;
   readonly lotKeys: readonly string[];
   readonly buildings: BuildingSections;
 }
 
-/** The page's map as the worker is sent it whole (a map opened, generated, new): no terrain, paint or scenery, no building's record - the buildings' table posted as a handle (shared memory), never copied record by record. */
+/** The page's map as the worker is sent it whole (a map opened, generated, new): no terrain, paint or scenery, no building's or lot's record - the tables posted as handles (shared memory), never copied record by record. */
 export function trafficMapOf(doc: RoadDoc): TrafficMap {
   return {
     doc: {
@@ -711,7 +710,8 @@ export function trafficMapOf(doc: RoadDoc): TrafficMap {
       segments: [...doc.segments.values()].map(savedSegment),
       ...(hasTransit(doc.transit) ? { transit: doc.transit } : {}),
     },
-    lots: doc.lotStore.toJSON(),
+    // DO NOT copy every lot as text for the worker (111,000 of a 10 km city): the table itself, and the few records written over it.
+    lots: doc.lotStore.sections(),
     lotKeys: [...doc.lotStore.keys],
     // DO NOT decode every building to send where it is read (`refOf` of each record): the table itself, and the few records written over it.
     buildings: doc.buildings.sections(),
@@ -740,7 +740,7 @@ export function trafficChangesOf(sent: readonly BuildingSent[]): BuildingChange[
 /** The worker's copy made from a map sent whole (`trafficMapOf`), each building read from its row and worked out here. */
 export function takeTrafficMap(doc: RoadDoc, buildings: TrafficBuildingTable, map: TrafficMap): void {
   doc.replaceFromJSON(map.doc, { repair: false });
-  // DO NOT leave the lots to `fromJSON`: it keeps a lot's building only when the document holds it, and this one holds none.
-  doc.lotStore.load(map.lots, map.lotKeys);
+  // DO NOT leave the lots to `fromJSON`: it keeps a lot's building only when the document holds it, and this one holds none. Their records as they were sent, read when asked.
+  doc.lotStore.loadSections(map.lots, map.lotKeys);
   buildings.load(map.buildings);
 }

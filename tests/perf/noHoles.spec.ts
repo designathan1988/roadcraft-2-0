@@ -118,8 +118,8 @@ interface Stop {
 
 async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number; cellFrames: number; roadCells: number }> {
   primeCookedSurfaces(process.cwd());
-  const { data, buildings } = prepareCity(buildLargeCityMap(7, REACH));
-  const { city, frames: opened } = await openCityMap(data, buildings, { large: true, view: OPEN, quality: tier });
+  const made = prepareCity(buildLargeCityMap(7, REACH));
+  const { city, frames: opened } = await openCityMap(made.data, made, { large: true, view: OPEN, quality: tier });
   const roads = roadCells(city);
   const stops: Stop[] = [];
   const stop = (name: string): void => {

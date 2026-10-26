@@ -4,6 +4,7 @@ import { RoadDoc, wholeBytes, type SerializedDoc } from '@world/doc';
 import { sideOf, type DocPatch } from '@world/docImage';
 import type { Network } from '@world/network';
 import { RELIEF_FLAT } from '@world/terrain';
+import { type OpenedTables, isOpenedTables } from './preparedCity';
 import { repairNearConnections } from './repair';
 
 /** Undo and redo by the records an edit changed. */
@@ -173,9 +174,17 @@ export function openedGenerated(data: SerializedDoc, table: ArrayBufferLike | nu
   return buildings > 10_000 && (data.terrain?.length ?? 0) === 0 && data.relief === RELIEF_FLAT;
 }
 
-export function restoreInto(target: RoadDoc, data: SerializedDoc, net: Network, table: ArrayBufferLike | null = null): void {
-  const generated = openedGenerated(data, table);
-  target.replaceFromJSON(data, { ...(generated ? { repair: false } : {}), ...(table ? { buildingTable: table } : {}), whole: true });
+/** `tables`: the city's tables (`OpenedTables`: its buildings', landscaping's and lots'), or its buildings' table alone, or none (every record in `data`). */
+export function restoreInto(target: RoadDoc, data: SerializedDoc, net: Network, tables: OpenedTables | ArrayBufferLike | null = null): void {
+  const t: OpenedTables = tables === null ? { buildings: null, landscape: null, lots: null } : isOpenedTables(tables) ? tables : { buildings: tables, landscape: null, lots: null };
+  const generated = openedGenerated(data, t.buildings);
+  target.replaceFromJSON(data, {
+    ...(generated ? { repair: false } : {}),
+    ...(t.buildings ? { buildingTable: t.buildings } : {}),
+    ...(t.landscape ? { landscapeTable: t.landscape } : {}),
+    ...(t.lots ? { lotTable: t.lots } : {}),
+    whole: true,
+  });
   performance.mark('restore:replaced');
   // A map opened is built whole, nothing taken from the map before it (`Network.rebuild`)
   net.rebuild({ full: true });

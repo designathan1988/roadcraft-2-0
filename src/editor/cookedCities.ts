@@ -10,16 +10,18 @@ export type CookedKind = keyof typeof COOKED_CITY_SEEDS;
  *  @public */
 export const COOKED_CITIES_DIR = 'cities';
 
-/** What `cook-cities.mjs` writes: the generator's fingerprint it grew them with (`__CITY_GEN_HASH__`), each city's two files. */
+/** What `cook-cities.mjs` writes: the generator's fingerprint it grew them with (`__CITY_GEN_HASH__`), each city's files: its data, its buildings' table, and its landscaping's and its lots' (cities cooked before 2026-10-26 have those records in their data). */
 interface CookedCitiesManifest {
   readonly hash: string;
-  readonly cities: Partial<Record<CookedKind, { readonly seed: number; readonly data: string; readonly table: string }>>;
+  readonly cities: Partial<Record<CookedKind, { readonly seed: number; readonly data: string; readonly table: string; readonly landscape?: string; readonly lots?: string }>>;
 }
 
-/** A shipped city as the page opens it: its document without buildings, its buildings' table (`prepareCity`). */
+/** A shipped city as the page opens it: its document without buildings, its buildings' table (`prepareCity`), and its landscaping's and lots' tables where cooked (null: those records in its data). */
 export interface CookedCity {
   readonly data: SerializedDoc;
   readonly buildings: ArrayBuffer;
+  readonly landscape: ArrayBuffer | null;
+  readonly lots: ArrayBuffer | null;
 }
 
 /** A gzip file's bytes undone (DecompressionStream, every browser the game runs in). */
@@ -41,11 +43,9 @@ export async function readCookedCity(base: string, hash: string | null, kind: Co
   // DO NOT open a city grown by another generator: the same seed grows another city now, and what the game grows later would not match it.
   if (!known || known.hash !== hash || !entry || entry.seed !== seed) return null;
   try {
-    const [data, table] = await Promise.all([
-      fetch(`${folder}${entry.data}?v=${hash}`).then(gunzipped),
-      fetch(`${folder}${entry.table}?v=${hash}`).then(gunzipped),
-    ]);
-    return { data: JSON.parse(new TextDecoder().decode(data)) as SerializedDoc, buildings: table };
+    const file = (name: string | undefined): Promise<ArrayBuffer | null> => (name ? fetch(`${folder}${name}?v=${hash}`).then(gunzipped) : Promise.resolve(null));
+    const [data, table, landscape, lots] = await Promise.all([file(entry.data), file(entry.table), file(entry.landscape), file(entry.lots)]);
+    return { data: JSON.parse(new TextDecoder().decode(data!)) as SerializedDoc, buildings: table!, landscape, lots };
   } catch (error) {
     console.warn('[cities] the shipped city could not be read; it is grown here', error);
     return null;

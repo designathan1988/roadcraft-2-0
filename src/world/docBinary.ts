@@ -1,4 +1,4 @@
-import { type BuildingSections, sectionsBytes } from './buildings/sections';
+import { EMPTY_SECTIONS, type TableSections, sectionsBytes } from './buildings/sections';
 
 /** THE MAP AS BINARY SECTIONS, NEVER ONE TEXT (report "Arquitetura para cidades grandes", "A conta de memória": V8 strings stop near 512 MiB; region files of offsets and lengths, each section read on its own): each part of the map's JSON one short UTF-8 section (a long list cut in runs), the buildings their table and what was written over it (`BuildingSections`). An undo of a whole map keeps the same image unpacked (`DocImage`), the buildings' table shared with the map it was, never copied. */
 
@@ -10,10 +10,12 @@ interface DocPart {
   readonly bytes: Uint8Array;
 }
 
-/** The map unpacked: its parts in `toJSON`'s order, its buildings as buffers. */
+/** The map unpacked: its parts in `toJSON`'s order, its buildings, its landscaping and its lots as buffers (`TableSections`: their tables shared, the records written over them encoded). */
 export interface DocImage {
   readonly parts: readonly DocPart[];
-  readonly buildings: BuildingSections;
+  readonly buildings: TableSections;
+  readonly landscape: TableSections;
+  readonly lots: TableSections;
 }
 
 /** The items of a list written in one section: a run's text stays far below the string ceiling whatever the map's size. */
@@ -22,8 +24,8 @@ const RUN = 20_000;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/** The map's JSON (no buildings) and its buildings as an image: each key's JSON on its own, a long list in runs. */
-export function imageOf(data: object, buildings: BuildingSections): DocImage {
+/** The map's JSON (no buildings; the landscaping and the lots as empty lists where they go as tables) and its tables as an image: each key's JSON on its own, a long list in runs. */
+export function imageOf(data: object, buildings: TableSections, landscape: TableSections = EMPTY_SECTIONS, lots: TableSections = EMPTY_SECTIONS): DocImage {
   const parts: DocPart[] = [];
   for (const [name, value] of Object.entries(data)) {
     if (value === undefined || name === 'buildings') continue;
@@ -33,7 +35,7 @@ export function imageOf(data: object, buildings: BuildingSections): DocImage {
       parts.push({ name, run: false, bytes: encoder.encode(JSON.stringify(value)) });
     }
   }
-  return { parts, buildings };
+  return { parts, buildings, landscape, lots };
 }
 
 /** The map's JSON (no buildings) read back from an image: the keys in their order, the runs of a list joined. */
@@ -49,7 +51,7 @@ export function dataOf(image: DocImage): Record<string, unknown> {
 
 /** What an image holds, bytes. */
 export function imageBytes(image: DocImage): number {
-  let bytes = sectionsBytes(image.buildings);
+  let bytes = sectionsBytes(image.buildings) + sectionsBytes(image.landscape) + sectionsBytes(image.lots);
   for (const part of image.parts) bytes += part.bytes.byteLength;
   return bytes;
 }
@@ -58,8 +60,9 @@ export function imageBytes(image: DocImage): number {
 
 const MAGIC = 0x42444352; // 'RCDB'
 const FORMAT = 1;
-/** Section kinds. */
-const S_PART = 1, S_RUN = 2, S_BASE = 3, S_GONE = 4, S_REPLACED = 5, S_ADDED = 6;
+/** Section kinds: the parts, then each table's four (base, gone, replaced, added) from its first kind on: the buildings' from 3, the landscaping's from 7, the lots' from 11 (a map opened with them in tables, 2026-10-26; a file without them holds those records in its parts). */
+const S_PART = 1, S_RUN = 2, S_BASE = 3, S_LAND = 7, S_LOTS = 11;
+const K_BASE = 0, K_GONE = 1, K_REPLACED = 2, K_ADDED = 3;
 /** Header words: magic, format, sections; then per section: kind, name length, offset, length. */
 const HEAD = 3, ENTRY = 4;
 const align8 = (n: number): number => Math.ceil(n / 8) * 8;
@@ -76,12 +79,16 @@ export function packImage(image: DocImage): ArrayBuffer {
   const sections: { kind: number; name: Uint8Array; bytes: Uint8Array }[] = [];
   const none = new Uint8Array(0);
   for (const part of image.parts) sections.push({ kind: part.run ? S_RUN : S_PART, name: encoder.encode(part.name), bytes: part.bytes });
-  const b = image.buildings;
   const add = (kind: number, buffer: ArrayBufferLike | null): void => { if (buffer) sections.push({ kind, name: none, bytes: new Uint8Array(buffer) }); };
-  add(S_BASE, b.base);
-  if (b.gone.length) sections.push({ kind: S_GONE, name: none, bytes: new Uint8Array(b.gone.buffer, b.gone.byteOffset, b.gone.byteLength) });
-  add(S_REPLACED, b.replaced);
-  add(S_ADDED, b.added);
+  const addSections = (first: number, s: TableSections): void => {
+    add(first + K_BASE, s.base);
+    if (s.gone.length) sections.push({ kind: first + K_GONE, name: none, bytes: new Uint8Array(s.gone.buffer, s.gone.byteOffset, s.gone.byteLength) });
+    add(first + K_REPLACED, s.replaced);
+    add(first + K_ADDED, s.added);
+  };
+  addSections(S_BASE, image.buildings);
+  addSections(S_LAND, image.landscape);
+  addSections(S_LOTS, image.lots);
   let at = align8((HEAD + sections.length * ENTRY) * 4);
   const places = sections.map((s) => {
     const name = at; at = align8(at + s.name.byteLength);
@@ -108,23 +115,27 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
   const count = words[2]!;
   const dir = new Uint32Array(buffer, 0, HEAD + count * ENTRY);
   const parts: DocPart[] = [];
-  let base: ArrayBufferLike | null = null, replaced: ArrayBufferLike | null = null, added: ArrayBufferLike | null = null;
-  let gone = new Float64Array(0);
+  interface Read { base: ArrayBufferLike | null; gone: Float64Array; replaced: ArrayBufferLike | null; added: ArrayBufferLike | null }
+  const fresh = (): Read => ({ base: null, gone: new Float64Array(0), replaced: null, added: null });
+  const tables: Record<number, Read> = { [S_BASE]: fresh(), [S_LAND]: fresh(), [S_LOTS]: fresh() };
   for (let i = 0; i < count; i++) {
     const w = HEAD + i * ENTRY;
     const kind = dir[w]!, nameLength = dir[w + 1]!, nameAt = dir[w + 2]!, length = dir[w + 3]!;
     const bodyAt = align8(nameAt + nameLength);
     const body = new Uint8Array(buffer, bodyAt, length);
-    switch (kind) {
-      case S_PART: case S_RUN:
-        parts.push({ name: decoder.decode(new Uint8Array(buffer, nameAt, nameLength).slice()), run: kind === S_RUN, bytes: body.slice() });
-        break;
-      case S_BASE: base = own(body); break;
-      case S_GONE: gone = new Float64Array(body.slice().buffer); break;
-      case S_REPLACED: replaced = own(body); break;
-      case S_ADDED: added = own(body); break;
+    if (kind === S_PART || kind === S_RUN) {
+      parts.push({ name: decoder.decode(new Uint8Array(buffer, nameAt, nameLength).slice()), run: kind === S_RUN, bytes: body.slice() });
+      continue;
+    }
+    const first = kind >= S_LOTS ? S_LOTS : kind >= S_LAND ? S_LAND : S_BASE;
+    const table = tables[first]!;
+    switch (kind - first) {
+      case K_BASE: table.base = own(body); break;
+      case K_GONE: table.gone = new Float64Array(body.slice().buffer); break;
+      case K_REPLACED: table.replaced = own(body); break;
+      case K_ADDED: table.added = own(body); break;
       default: throw new Error(`[save] a map in binary sections holds an unknown section ${kind}`);
     }
   }
-  return { parts, buildings: { base, gone, replaced, added } };
+  return { parts, buildings: tables[S_BASE]!, landscape: tables[S_LAND]!, lots: tables[S_LOTS]! };
 }

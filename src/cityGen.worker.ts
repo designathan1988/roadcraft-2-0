@@ -13,17 +13,18 @@ export interface CityGenAsk {
   readonly radius?: number;
 }
 
-/** `buildings`: the city's buildings as one table (`buildCityTable`, as `prepareCity` makes it), its `data` holding none: the page reads them from it (`preparedCity`). */
-export type CityGenReply = { readonly id: number; readonly data?: SerializedDoc; readonly buildings?: ArrayBufferLike; readonly error?: string };
+/** `buildings`, `landscape`, `lots`: the city's buildings, landscaping and lots each as one table (`buildCityTable`, as `prepareCity` makes them), its `data` holding none: the page reads them from the tables (`preparedCity`). */
+export type CityGenReply = { readonly id: number; readonly data?: SerializedDoc; readonly buildings?: ArrayBufferLike; readonly landscape?: ArrayBufferLike | null; readonly lots?: ArrayBufferLike | null; readonly error?: string };
 
 export function serve(scope: JobScope): void {
   scope.onmessage = (event: MessageEvent<CityGenAsk>) => {
     const ask = event.data;
     try {
       // DO NOT grow the whole city as objects and prepare it after (`prepareCity`): `buildCityTable` spills its buildings into tables as they grow.
-      const { data, buildings } = buildCityTableOf(ask.kind, ask.seed ?? 7, ask.radius);
-      // The table moved, not copied, where it is a plain buffer (in shared memory it is posted as a handle, MDN "SharedArrayBuffer").
-      scope.postMessage({ id: ask.id, data, buildings } satisfies CityGenReply, buildings instanceof ArrayBuffer ? [buildings] : []);
+      const { data, buildings, landscape, lots } = buildCityTableOf(ask.kind, ask.seed ?? 7, ask.radius);
+      // The tables moved, not copied, where they are plain buffers (in shared memory they are posted as handles, MDN "SharedArrayBuffer").
+      const transfer = [buildings, landscape, lots].filter((b): b is ArrayBuffer => b instanceof ArrayBuffer);
+      scope.postMessage({ id: ask.id, data, buildings, landscape, lots } satisfies CityGenReply, transfer);
     } catch (error) {
       scope.postMessage({ id: ask.id, error: String((error as Error)?.stack ?? error) } satisfies CityGenReply);
     }

@@ -69,8 +69,8 @@ interface Opened { readonly frames: number; readonly districtDetail: number; rea
 async function open(quality: QualityLevel, radius?: number): Promise<Opened> {
   // The baked textures again: the scene before let them go with it (`SceneHandle.dispose`).
   primeCookedSurfaces(process.cwd());
-  const { data, buildings } = prepareCity(buildLargeCityMap(7, radius));
-  const { city, frames: opened } = await openCityMap(data, buildings, { large: true, view: OPEN, quality });
+  const made = prepareCity(buildLargeCityMap(7, radius));
+  const { city, frames: opened } = await openCityMap(made.data, made, { large: true, view: OPEN, quality });
   try {
     const wanted = roadCells(city);
     const missing: Record<string, string[]> = {};

@@ -2,6 +2,7 @@ import { Box3, Matrix4, type BatchedMesh, type InstancedMesh, type Mesh, type Ob
 
 import { Engine } from '@core/engine';
 import { restoreInto } from '@editor/history';
+import type { OpenedTables } from '@editor/preparedCity';
 import { buildSmallCityMap } from '@editor/smallCityMap';
 import type { QualityLevel } from '@render/quality';
 import { createSceneRenderer, type SceneHandle } from '@render/renderer';
@@ -115,11 +116,11 @@ export async function openSmallCity(quality: QualityLevel = 'ultra'): Promise<Ci
 export type OpeningFrame = { readonly frame: number } & ReturnType<SceneHandle['openingState']>;
 
 /**
- * A city opened as the menu opens it (`main.ts` openCity): `table`, its buildings' table as the city's worker prepares it (`prepareCity`);
- * `large`, scoped to its opening view (`scopeOpening`, a city of over 5,000 buildings). Frames until the curtain comes down, each frame's
- * wait given to `onFrame`; `frames`, how many it took.
+ * A city opened as the menu opens it (`main.ts` openCity): `tables`, its buildings', landscaping's and lots' tables as the city's worker
+ * prepares them (`prepareCity`, a `PreparedCity` is one), or its buildings' alone; `large`, scoped to its opening view (`scopeOpening`,
+ * a city of over 5,000 buildings). Frames until the curtain comes down, each frame's wait given to `onFrame`; `frames`, how many it took.
  */
-export async function openCityMap(data: SerializedDoc, table: ArrayBufferLike | null, options: { quality?: QualityLevel; large?: boolean; view?: View; onFrame?: (state: OpeningFrame, scene: SceneHandle) => void } = {}): Promise<{ city: City; frames: number }> {
+export async function openCityMap(data: SerializedDoc, tables: OpenedTables | ArrayBufferLike | null, options: { quality?: QualityLevel; large?: boolean; view?: View; onFrame?: (state: OpeningFrame, scene: SceneHandle) => void } = {}): Promise<{ city: City; frames: number }> {
   const doc = new RoadDoc();
   doc.terrainRelief = RELIEF_FLAT;
   const net = new Network(doc);
@@ -132,7 +133,7 @@ export async function openCityMap(data: SerializedDoc, table: ArrayBufferLike | 
   // The empty map the game starts on, drawn once.
   await frame(city);
   if (options.large) scene.scopeOpening(true);
-  restoreInto(doc, { ...data, relief: RELIEF_FLAT, markingStyle: 'br' }, net, table);
+  restoreInto(doc, { ...data, relief: RELIEF_FLAT, markingStyle: 'br' }, net, tables);
   sim.load();
   scene.beginLoad();
   setView(scene, view);

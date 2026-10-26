@@ -98,8 +98,8 @@ interface Stop { readonly name: string; readonly geometryMB: number; readonly vi
 
 async function tour(budgeted: boolean): Promise<Stop[]> {
   primeCookedSurfaces(process.cwd());
-  const { data, buildings } = prepareCity(buildLargeCityMap(7, m(2800)));
-  const { city } = await openCityMap(data, buildings, { large: true, view: OPEN, quality: TIER });
+  const made = prepareCity(buildLargeCityMap(7, m(2800)));
+  const { city } = await openCityMap(made.data, made, { large: true, view: OPEN, quality: TIER });
   try {
     city.scene.setGeometryBudget(budgeted ? null : UNBOUNDED);
     const stops: Stop[] = [];

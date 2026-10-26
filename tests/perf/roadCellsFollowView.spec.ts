@@ -65,8 +65,8 @@ describe('the roads\' cells follow the view', () => {
   beforeAll(async () => {
     page = installNullPage(WIDTH, HEIGHT, process.cwd());
     primeCookedSurfaces(process.cwd());
-    const { data, buildings } = prepareCity(buildLargeCityMap(7, REACH));
-    const { city } = await openCityMap(data, buildings, { large: true, view: [0, 0, 1.8, 45, 79], quality: 'low' });
+    const made = prepareCity(buildLargeCityMap(7, REACH));
+    const { city } = await openCityMap(made.data, made, { large: true, view: [0, 0, 1.8, 45, 79], quality: 'low' });
     try {
       mapCells = roadCells(city).size;
       // The view's cells are taken once the roads past the opening are solved (`completeSolve`).
