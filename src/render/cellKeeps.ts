@@ -20,9 +20,30 @@ export function keepCellsOver(rect: ChangeRect, pad: number, out: Set<number>): 
   return out;
 }
 
-/** The places of a kind kept cell by cell: a `CandidateKeep` per keep cell, filled again on its own */
+/** Keep cells to a side of the blocks the waiting cells are ranked by (`CellKeeps.settle`): ten, half a kilometre. */
+const RANK_CELLS = 10;
+/** The block holding a keep cell. */
+const blockOf = (key: number): number => {
+  const [i, j] = keepCellOf(key);
+  return keepCellKey(Math.floor(i / RANK_CELLS), Math.floor(j / RANK_CELLS));
+};
+
+/**
+ * THE PLACES OF A KIND KEPT CELL BY CELL, EACH CELL TESTED IN ITS TURN, NEAREST THE VIEW FIRST: a `CandidateKeep` per keep cell, filled on
+ * its own. A cell filled (`fill`) waits untested; `settle` tests the waiting cells, the blocks nearest the view's focus first, until the
+ * frame's deadline, and a cell is drawn once tested (`cellKeys`, `standingIn`). A cell whose places are all to be tested again (`refreshAll`)
+ * keeps standing as it was until its turn. DO NOT test a kind's every cell in the frame that fills it: a 10 km city's trees and covers, each
+ * tested against the roads and the buildings' covers (every building's footprint decoded from its table), held the page for minutes while
+ * the saved map reopened (2026-10-26).
+ */
 export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   private readonly keeps = new Map<number, CandidateKeep<C>>();
+  /** The cells filled and not tested yet, with their places; one also in `keeps` stands as it was until its turn. */
+  private readonly waiting = new Map<number, readonly C[]>();
+  /** The tested cells whose places are all to be tested again (`refreshAll`), standing as they were until their turn. */
+  private readonly stale = new Set<number>();
+  /** The waiting and the stale cells by the block holding them (`RANK_CELLS`): the blocks are ranked by their distance to the focus. */
+  private readonly queued = new Map<number, Set<number>>();
   /** The cells whose places, or their standing, changed since the last `takeChangedCells`; null: every cell. */
   private changed: Set<number> | null = null;
   /** Places tested since the keeps were made: the work, for the specs. */
@@ -35,34 +56,59 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   /** `test`: the ground under a place where it may stand, null where it may not (`CandidateKeep`). */
   constructor(private readonly test: (c: C) => number | null) {}
 
-  /** Cells holding places. */
+  /** Cells holding tested places. */
   get size(): number {
     return this.keeps.size;
   }
 
-  /** The places of cell `key` from now on (each standing in it), tested; an empty list lets the cell go. */
+  /** Whether cells wait for their test (`settle`). */
+  get waits(): boolean {
+    return this.queued.size > 0;
+  }
+
+  private enqueue(key: number): void {
+    const block = blockOf(key);
+    const cells = this.queued.get(block);
+    if (cells) cells.add(key); else this.queued.set(block, new Set([key]));
+  }
+
+  private dequeue(key: number): void {
+    const block = blockOf(key);
+    const cells = this.queued.get(block);
+    if (!cells) return;
+    cells.delete(key);
+    if (!cells.size) this.queued.delete(block);
+  }
+
+  /** The places of cell `key` from now on (each standing in it), tested in their turn (`settle`); an empty list lets the cell go. */
   fill(key: number, list: readonly C[], same?: (a: C, b: C) => boolean): void {
     const was = this.keeps.get(key);
     if (!list.length) {
+      this.waiting.delete(key);
+      this.stale.delete(key);
+      this.dequeue(key);
       if (was) { this.keeps.delete(key); this.changed?.add(key); }
       return;
     }
     // The same places as before (a dab that changed nothing here): kept as they stand, not tested nor drawn again.
-    if (was && same && was.list.length === list.length && was.list.every((c, k) => same(c, list[k]!))) return;
-    const keep = new CandidateKeep(list, this.counted);
-    keep.refresh(null, 0);
-    keep.takeChangedCells();
-    this.keeps.set(key, keep);
-    this.changed?.add(key);
+    if (was && same && was.list.length === list.length && was.list.every((c, k) => same(c, list[k]!))) {
+      if (this.waiting.delete(key) && !this.stale.has(key)) this.dequeue(key);
+      return;
+    }
+    this.waiting.set(key, list);
+    this.enqueue(key);
   }
 
   /** @rebuild Every cell let go (the map opened, or the diary cannot say what changed): the next look draws every cell. */
   clear(): void {
     this.keeps.clear();
+    this.waiting.clear();
+    this.stale.clear();
+    this.queued.clear();
     this.changed = null;
   }
 
-  /** The places a change reached tested again, in the cells the change reaches only (`CandidateKeep.refresh`). */
+  /** The places a change reached tested again, in the tested cells the change reaches only (`CandidateKeep.refresh`): a waiting cell is tested whole in its turn. */
   refresh(rects: readonly ChangeRect[], pad: number): void {
     // Each cell is asked only of the rectangles that reach it, cut to it: a wide change reads each cell once.
     const reaching = new Map<number, ChangeRect[]>();
@@ -70,7 +116,7 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     for (const r of rects) {
       cells.clear();
       for (const key of keepCellsOver(r, pad, cells)) {
-        if (!this.keeps.has(key)) continue;
+        if (!this.keeps.has(key) || this.waiting.has(key)) continue;
         const [x0, y0, x1, y1] = keepCellRect(key);
         const cut: ChangeRect = [Math.max(r[0], x0 - pad), Math.max(r[1], y0 - pad), Math.min(r[2], x1 + pad), Math.min(r[3], y1 + pad)];
         const list = reaching.get(key);
@@ -82,9 +128,46 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     }
   }
 
-  /** @rebuild Every place tested again: a change the diary cannot place. */
+  /** @rebuild Every place to be tested again, each cell in its turn (`settle`): a change the diary cannot place. */
   refreshAll(): void {
-    for (const [key, keep] of this.keeps) if (keep.refresh(null, 0)) this.changed?.add(key);
+    for (const key of this.keeps.keys()) {
+      if (this.stale.has(key) || this.waiting.has(key)) continue;
+      this.stale.add(key);
+      this.enqueue(key);
+    }
+  }
+
+  /** The waiting and stale cells tested, those of the blocks nearest (`x`, `y`) first, until `deadline` (`performance.now()`), one cell at least: each cell tested whole, then drawn. Whether cells still wait. */
+  settle(x: number, y: number, deadline: number): boolean {
+    if (!this.queued.size) return false;
+    const span = RANK_CELLS * KEEP_CELL;
+    const blocks = [...this.queued.keys()].map((block) => {
+      const [i, j] = keepCellOf(block);
+      return { block, d: Math.hypot((i + 0.5) * span - x, (j + 0.5) * span - y) };
+    }).sort((a, b) => a.d - b.d);
+    let first = true;
+    for (const { block } of blocks) {
+      const cells = this.queued.get(block)!;
+      for (const key of cells) {
+        if (!first && performance.now() >= deadline) return true;
+        first = false;
+        cells.delete(key);
+        const list = this.waiting.get(key);
+        if (list) {
+          this.waiting.delete(key);
+          this.stale.delete(key);
+          const keep = new CandidateKeep(list, this.counted);
+          keep.refresh(null, 0);
+          keep.takeChangedCells();
+          this.keeps.set(key, keep);
+          this.changed?.add(key);
+        } else if (this.stale.delete(key)) {
+          if (this.keeps.get(key)?.refresh(null, 0)) this.changed?.add(key);
+        }
+      }
+      this.queued.delete(block);
+    }
+    return false;
   }
 
   /** The cells whose places changed since the last call, and the call itself the new start; null: every cell. */
@@ -94,7 +177,7 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     return out;
   }
 
-  /** Every cell with a place in it. */
+  /** Every cell with tested places. */
   cellKeys(): IterableIterator<number> {
     return this.keeps.keys();
   }

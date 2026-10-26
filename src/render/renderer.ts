@@ -1524,6 +1524,8 @@ export function createSceneRenderer(
   let paintedForest: PlantCells | null = null;
   let plantedForest: PlantCells | null = null;
   let natureTreesPending = true;
+  /** Cells of the plants and stones still waiting for their test (`CellKeeps.settle`): drawn on until none is. */
+  let keepsWaiting = false;
   /** Whether the camera's pull in front of a building is still moving (`isoViewport.ts` `settle`): draw again. */
   let cameraEasing = false;
   /** The town's solids as filed for the camera, for the light shut out of the streets (`canyonLight.ts`). */
@@ -2893,6 +2895,8 @@ export function createSceneRenderer(
   };
   /** How far round a place its test reads (the slope's samples, a margin): a change within it tests the place again. */
   const KEEP_REACH = m(4);
+  /** The page's time a frame for testing the plants' and stones' waiting cells (`CellKeeps.settle`), ms: the rest wait for the next frame. */
+  const KEEP_SETTLE_MS = 4;
   /** A tree of the ecosystem stands on open ground, out of the clearings: its ground, or null. */
   const natureStands = (c: Candidate): number | null => {
     const net = keepNet!;
@@ -2947,7 +2951,7 @@ export function createSceneRenderer(
     }),
   };
   /** The four kinds as the draw walks them: refreshed, and their changed cells taken, alike. */
-  const coverKinds: readonly Pick<CellKeeps<Candidate>, 'refresh' | 'refreshAll' | 'takeChangedCells'>[] = [coverKeeps.forest, coverKeeps.scrub, coverKeeps.rocks, coverKeeps.shore];
+  const coverKinds: readonly Pick<CellKeeps<Candidate>, 'refresh' | 'refreshAll' | 'settle' | 'takeChangedCells'>[] = [coverKeeps.forest, coverKeeps.scrub, coverKeeps.rocks, coverKeeps.shore];
   /** @rebuild Every cell of every kind: only when every cell is drawn again. */
   const allCoverCells = (): Set<number> => new Set([...coverKeeps.forest.cellKeys(), ...coverKeeps.scrub.cellKeys(), ...coverKeeps.rocks.cellKeys(), ...coverKeeps.shore.cellKeys()]);
   /** Which of the trees the player planted stand: off the roads, out of the buildings. */
@@ -3237,7 +3241,7 @@ export function createSceneRenderer(
     onStrike(listener) { strikeListeners.push(listener); },
     cloudDrift: () => cloudDrift,
     // A plate of the ground still on its way to the view (`flatAtlas.ts` waiting): drawn on until it is in, a still camera too.
-    busy: () => (fx?.busy() ?? false) || natureTreesPending || cameraEasing || (terrain.waiting?.() ?? false),
+    busy: () => (fx?.busy() ?? false) || natureTreesPending || keepsWaiting || cameraEasing || (terrain.waiting?.() ?? false),
     targetBytes: () => renderTargetsBytes([...post.targets(), ...environment.shadowMaps()]),
     buildingDetailBytes: () => buildings.residentBytes,
     drifting: () => ((fogMoving || placedCloudsShown) && post.enabled && (quality.cloudShadows || quality.skyClouds)) || weatherActive,
@@ -3412,6 +3416,10 @@ export function createSceneRenderer(
       // THE PLANTS AND STONES (`coverSweep.ts`/`coverKeeps`, `natureSweep`/`natureKeeps`, the planted trees)
       if (!stroking && !worldJob) {
         keepNet = net;
+        // The cells waiting for their test tested nearest the view first, in this frame's share of time (`CellKeeps.settle`).
+        const settleBy = performance.now() + KEEP_SETTLE_MS;
+        const focusX = rig.target.x, focusY = -rig.target.z;
+        let waits = false;
         // What the tests read that changed since the last look, and where (null: the diary cannot say).
         const entries = vegetationRead.read(net.doc.changes);
         let rects: ChangeRect[] | null = entries === null ? null : [];
@@ -3449,6 +3457,7 @@ export function createSceneRenderer(
           const at = performance.now();
           if (rects === null) for (const keep of coverKinds) keep.refreshAll();
           else if (rects.length) for (const keep of coverKinds) keep.refresh(rects, KEEP_REACH);
+          for (const keep of coverKinds) if (keep.settle(focusX, focusY, settleBy)) waits = true;
           for (const keep of coverKinds) {
             const cells = keep.takeChangedCells();
             if (cells === null) coverWhole = true; else for (const cell of cells) changed.add(cell);
@@ -3483,6 +3492,7 @@ export function createSceneRenderer(
           }
           if (rects === null) natureKeeps.refreshAll();
           else if (rects.length) natureKeeps.refresh(rects, KEEP_REACH);
+          if (natureKeeps.settle(focusX, focusY, settleBy)) waits = true;
           const cells = natureKeeps.takeChangedCells();
           const whole = cells === null || vegetationRedraw;
           if (whole || cells!.size) {
@@ -3522,6 +3532,7 @@ export function createSceneRenderer(
           }
           // DO NOT test every tree again right after `plantAll` tested them on the same roads and buildings: a map just opened reads no rectangle (`rects` null), and every tree of a city of 70,000 buildings was tested twice in one frame, the buildings' cover cells made twice (the first ones let go for their budget): a page task of 3.8 s behind the curtain (trace of step-70k, 2026-10-22).
           if (rects === null) { if (!plantedWhole) plantedKeeps.refreshAll(); } else if (rects.length) plantedKeeps.refresh(rects, KEEP_REACH);
+          if (plantedKeeps.settle(focusX, focusY, settleBy)) waits = true;
           const cells = plantedKeeps.takeChangedCells();
           if (cells === null || cells.size || vegetationRedraw) {
             const forest = plantedForestOf()!;
@@ -3530,6 +3541,7 @@ export function createSceneRenderer(
           }
         }
         vegetationRedraw = false;
+        keepsWaiting = waits;
       }
       frameMark('frame:vegetation');
       // The perspective camera kept out of the buildings (`IsoRig.setSolids`). Level ground moves under nothing: DO NOT follow every floor again.
