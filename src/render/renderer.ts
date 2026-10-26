@@ -2155,7 +2155,8 @@ export function createSceneRenderer(
     refresh: (): number => {
       if (!placedOn || !elevation) return 0;
       if (!signs.group.parent) world.add(signs.group);
-      return signs.sync(placedOn, elevation);
+      // The signs' cells round where the camera looks (`signLayer.ts`): a few a frame.
+      return signs.sync(placedOn, elevation, roadFocus);
     },
   }, 'draw');
 
@@ -3660,8 +3661,9 @@ export function createSceneRenderer(
       // The props held round the view (`propCells.ts`): the near square's cells and the far blocks the view reaches placed within the frame's time, the poles' blocks too; none of a layer not drawn at this zoom.
       {
         const view = propView(cullCamera, crowdFrustum, screenHalf(), rig.target.y);
-        const props = [...(gardens && detailed ? [gardens.layer] : []), ...(quality.detailProps && detailed ? [furniture.layer] : [])];
-        if (props.length) lookProps(props, view);
+        // The long grass at every zoom (its cells cut the tufts a pixel does not show), the furniture and the gardens where the view is detailed.
+        const props = [...(gardens && detailed ? [gardens.layer] : []), ...(quality.detailProps && detailed ? [furniture.layer] : []), furniture.grassLayer];
+        lookProps(props, view);
         utilities?.look(view, performance.now() + POLE_FRAME_MS);
       }
       furniture.cull(crowdFrustum, crowdProjection);

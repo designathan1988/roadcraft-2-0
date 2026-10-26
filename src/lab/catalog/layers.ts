@@ -78,7 +78,12 @@ export function signItems(add: Add, cache: BatchCache): void {
   const one = (name: string, variation: string, extra: (doc: RoadDoc, net: Network) => void, junction = false): void => {
     const { net } = oneRoad(extra, junction);
     const layer = createSignLayer();
-    layer.sync(net, buildRoadElevation(net, flat));
+    // The signs' cells round the origin (the one road's), every one stood (a few a sync).
+    const elevation = buildRoadElevation(net, flat);
+    for (let i = 0; i < 20; i++) {
+      layer.sync(net, elevation, { x: 0, y: 0 });
+      if (layer.cells.wantedKeys.every((key) => layer.cells.has(key))) break;
+    }
     cullClose(layer);
     add({ group: 'Signs', name, variation, origin: 'kit', source: 'src/render/signLayer.ts (createSignLayer, sync)', build: 'instanced',
       pieces: piecesOf(layer.group), object: shown(layer.group, cache), countKey: `sign:${name}`,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Frustum, Matrix4, OrthographicCamera, type Camera, type InstancedMesh, type Object3D } from 'three';
+import { Frustum, Matrix4, OrthographicCamera, type Camera, type Object3D } from 'three';
 
 import { Rng } from '@core/rng';
 import { RoadDoc } from '@world/doc';
@@ -11,7 +11,7 @@ import type { SegmentId } from '@world/ids';
 import { m } from '@world/units';
 import { drawnMatrices, posesOf } from '@render/cellInstances';
 import { createSceneryKit } from '@render/scenery';
-import { createStreetFurniture, furnitureProduct, meadowProduct } from '@render/streetFurnitureLayer';
+import { createStreetFurniture, furnitureProduct } from '@render/streetFurnitureLayer';
 import { lookProps, propView } from '@render/propCells';
 import { proveIncremental } from '../support/derivedEquivalence';
 
@@ -87,13 +87,13 @@ function over(half: number): Camera {
   return camera;
 }
 
-/** The layer brought to a camera's view (`lookProps`, every cell and block it wants placed) and culled to it. */
+/** The layer brought to a camera's view (`lookProps`, every cell and block it wants placed, the furniture's and the grass's) and culled to it. */
 function seen(layer: ReturnType<typeof createStreetFurniture>, camera: Camera): void {
   const view = new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
   const frustum = new Frustum().setFromProjectionMatrix(view);
   for (let i = 0; i < 100; i++) {
-    lookProps([layer.layer], propView(camera, frustum, 540, 0));
-    if (!layer.layer.busy) break;
+    lookProps([layer.layer, layer.grassLayer], propView(camera, frustum, 540, 0));
+    if (!layer.layer.busy && !layer.grassLayer.busy) break;
   }
   layer.cull(frustum, view);
 }
@@ -106,7 +106,7 @@ function drawn(layer: ReturnType<typeof createStreetFurniture>): Map<string, str
   const out = new Map<string, string[]>();
   for (const [view, camera] of [['whole', over(m(4000))], ['close', over(m(150))]] as const) {
     seen(layer, camera);
-    for (const mesh of [...layer.meshes, ...(layer.grass.children as InstancedMesh[])]) {
+    for (const mesh of [...layer.meshes, ...layer.grassLayer.meshes]) {
       // A far block the view does not want is hidden (its group): it draws nothing.
       let shown = true;
       for (let o: Object3D | null = mesh; o; o = o.parent) shown &&= o.visible;
@@ -128,11 +128,7 @@ describe('the street furniture kept from the diary', () => {
     proveIncremental({ source: new Town(), make: () => furnitureProduct(kit), edits, steps: 80, seed: 0xf0e1 });
   });
 
-  it('lays the long grass item by item as it is laid from nothing', () => {
-    proveIncremental({ source: new Town(), make: () => meadowProduct(kit), edits, steps: 60, seed: 0x6a55 });
-  });
-
-  it('draws the instances a layer made from nothing draws, as the plants grow', () => {
+  it('draws the instances a layer made from nothing draws, the long grass with the furniture, as the plants grow', () => {
     const town = new Town();
     const rng = new Rng(0xbe7c);
     for (let i = 0; i < 150; i++) edits[0]!(town, rng);
@@ -171,7 +167,6 @@ describe('the street furniture kept from the diary', () => {
       town.settle();
     };
     proveIncremental({ source: new Town(), make: () => furnitureProduct(kit), edits: [...edits, batch, batch], steps: 60, seed: 0xba7c });
-    proveIncremental({ source: new Town(), make: () => meadowProduct(kit), edits: [...edits, batch, batch], steps: 40, seed: 0xba7d });
   });
 
   it('compiles ahead every store as the layer draws it', () => {
@@ -185,7 +180,7 @@ describe('the street furniture kept from the diary', () => {
     seen(layer, over(m(150)));
     const warmed = layer.warm();
     const warm = new Map(warmed.map((mesh) => [mesh.name, mesh]));
-    const drawn = [...layer.meshes, ...(layer.grass.children as InstancedMesh[])];
+    const drawn = [...layer.meshes, ...layer.grassLayer.meshes];
     expect(drawn.length).toBeGreaterThan(8);
     expect(drawn.some((mesh) => mesh.name.endsWith('-far-cells'))).toBe(true);
     // What three keys a program by: the geometry's attributes (the model's and the poses'), the material, the instancing and its colours, the shadow's depth material.

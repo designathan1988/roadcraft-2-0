@@ -1,7 +1,7 @@
 import { BufferAttribute, BufferGeometry, DataTexture, DynamicDrawUsage, Group, Matrix4, Mesh, SRGBColorSpace, Vector3, type Frustum } from 'three';
-import type { Change, ChangeJournal, ChangeKind, ChangeRect } from '@world/changes';
-import { CellFiling } from '@world/cells';
-import { Derived, type DerivedSpec } from '@world/derived';
+import type { ChangeKind, ChangeRect } from '@world/changes';
+import { CELL, CellFiling } from '@world/cells';
+import { JournalCursor } from '@world/derived';
 import type { RoadElevation } from '@world/elevation';
 import type { NodeId, SegmentId } from '@world/ids';
 import { footwayAt, type LandscapeItem, type SignType } from '@world/landscape';
@@ -10,13 +10,21 @@ import { signsAtNode } from '@world/roads/derivedSigns';
 import { footwayRiseAt } from '@world/roads/footwayRise';
 import { sectionOf, LAMP_ZONE } from '@world/section';
 import { m } from '@world/units';
+import { ViewCells, type CellKey } from '@world/viewCells';
 import { createInstanceRuns, RunBuilder, warmMeshes, type Run, type RunStore } from './instanceRuns';
 import { PLATE, POST, QUAD, QUAD_ORDER, SignSheets, cellUv, onTopOfPost, plateFaces, plateMaterial, streetChain, type Placed, type Sheet, type SheetCopier } from './signs';
 
-/** DO NOT build every sign of the map again */
+/**
+ * THE SIGNS HELD ROUND THE VIEW, NEVER FOR THE MAP (`viewCells.ts`): each cell of the world's grid stands the signs of the junctions
+ * whose node lies in it and of the placed signs and street names whose item does, derived from the document when the view wants the
+ * cell (within `SIGN_REACH`: past it a plate is under a pixel) and let go past the budget, least recently used first. A change of the
+ * roads, the land, the landscaping or the heights drops the cells whose signs read there (`reads`, filed by cell), and no other.
+ * DO NOT stand every sign of the map again, nor stand them all at a map's opening: 11,760 junctions of a 10 km city were walked on the
+ * page before its first frame (2026-10-26).
+ */
 
 /** One plate standing: where, on what ground, what it says, which way it faces. */
-interface Stand {
+export interface Stand {
   readonly x: number;
   readonly y: number;
   readonly ground: number;
@@ -32,18 +40,28 @@ export interface SignValue {
 }
 
 export interface SignSource {
-  readonly changes: ChangeJournal;
   readonly net: Network;
   readonly elevation: RoadElevation;
 }
 
 /** How far round a placed sign or a street's name the footway it stands on is looked for (`streetChain`'s reach). */
 const ITEM_READS = m(30);
+/** How far round the eye the signs' cells are held: a plate of 0.6 m is under a pixel past it at 1080p. */
+const SIGN_REACH = m(700);
+/** The most the cells' stands may hold on the CPU, bytes. */
+const SIGN_CPU_BUDGET = 8 * 1048576;
+/** What a stand costs on the CPU besides its plates' slots, bytes (an estimate). */
+const STAND_BYTES = 160;
+/** Cells derived a frame at most (`sync`): each a few junctions' signs. */
+const CELLS_A_FRAME = 4;
+/** The diary's kinds the signs read. DO NOT leave `markingStyle` out: the plates of the old standard stood after the style changed. */
+const SIGN_KINDS: readonly ChangeKind[] = ['roads', 'terrain', 'landscape', 'elevation', 'markingStyle'];
 
 const unite = (a: ChangeRect | null, b: ChangeRect): ChangeRect =>
   a === null ? b : [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
 const around = (x: number, y: number, r: number): ChangeRect => [x - r, y - r, x + r, y + r];
 const grow = (r: ChangeRect, pad: number): ChangeRect => [r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad];
+const inRect = (x: number, y: number, r: ChangeRect): boolean => x >= r[0] && x < r[2] && y >= r[1] && y < r[3];
 
 /** The box a segment's ribbon covers, with its casing and footways. */
 function ribbonBox(net: Network, id: SegmentId): ChangeRect | null {
@@ -55,86 +73,8 @@ function ribbonBox(net: Network, id: SegmentId): ChangeRect | null {
 
 const isSignItem = (item: LandscapeItem): boolean => item.kind === 'sign' || (item.kind === 'streetname' && !!item.text);
 
-/** A junction's key and a sign item's: one number (`CellFiling` files numbers), even and odd. */
-const nodeKey = (id: number): number => id * 2;
-const itemKey = (id: number): number => id * 2 + 1;
-
-/** The signs as a product of the diary, key by key: a junction's (`nodeKey`), a placed sign's or a street name's (`itemKey`). */
-class SignProduct implements DerivedSpec<SignSource, number, SignValue> {
-  readonly name = 'signs';
-  /** DO NOT leave it out: the plates of the old standard stood after the style changed. */
-  readonly kinds: readonly ChangeKind[] = ['roads', 'terrain', 'landscape', 'elevation', 'markingStyle'];
-  readonly byId = false;
-  /** Each key holding signs, by the ground it reads. */
-  private readonly filing = new CellFiling<number, SignValue>();
-
-
-  /** @rebuild Every junction and every sign item of the map: read only when everything changed (a load, the diary forgotten). */
-  allKeys(source: SignSource): Iterable<number> {
-    const out: number[] = [];
-    for (const id of source.net.doc.nodes.keys()) out.push(nodeKey(id));
-    for (const item of source.net.doc.landscape.values()) if (isSignItem(item)) out.push(itemKey(item.id));
-    for (const key of this.filing.ids()) out.push(key);
-    return out;
-  }
-
-  dirty(change: Change, out: Set<number>, source: SignSource): void {
-    if (change.rects === null) {
-      for (const key of this.allKeys(source)) out.add(key);
-      return;
-    }
-    const { net } = source;
-    // DO NOT stand the junctions round a landscaping entry again
-    if (change.kind === 'landscape') {
-      // The entry names its items (`RoadDoc.addLandscapeMany`): those, an item's plates reading only its own record.
-      if (change.ids) {
-        for (const id of change.ids) {
-          const item = net.doc.landscape.get(id);
-          if (!item || isSignItem(item)) out.add(itemKey(id));
-        }
-        return;
-      }
-      // Every rectangle in one look (`idsMeetingAny`, `landscapeInAny`): one at a time read the cells they share again.
-      for (const key of this.filing.idsMeetingAny(change.rects)) if (key % 2 === 1) out.add(key);
-      for (const item of net.doc.landscapeInAny(change.rects.map((rect) => grow(rect, ITEM_READS)))) if (isSignItem(item)) out.add(itemKey(item.id));
-      return;
-    }
-    // Every rectangle in one look (`idsMeetingAny`, `landscapeInAny`): one at a time read the cells they share again.
-    for (const key of this.filing.idsMeetingAny(change.rects)) out.add(key);
-    // What may stand now: the junctions at the ends of the segments here, the sign items near.
-    for (const id of net.segmentCells.idsMeetingAny(change.rects)) {
-      const seg = net.doc.segment(id);
-      if (seg) { out.add(nodeKey(seg.a)); out.add(nodeKey(seg.b)); }
-    }
-    for (const item of net.doc.landscapeInAny(change.rects.map((rect) => grow(rect, ITEM_READS)))) if (isSignItem(item)) out.add(itemKey(item.id));
-  }
-
-  compute(key: number, source: SignSource): SignValue | undefined {
-    const id = Math.floor(key / 2);
-    return key % 2 === 0 ? junctionSigns(source, id as NodeId) : itemSigns(source, id);
-  }
-
-  equals(a: SignValue, b: SignValue): boolean {
-    if (a.stands.length !== b.stands.length || a.reads.some((v, i) => v !== b.reads[i])) return false;
-    return a.stands.every((s, i) => {
-      const t = b.stands[i]!;
-      return s.x === t.x && s.y === t.y && s.ground === t.ground && s.type === t.type && s.text === t.text && s.yaw === t.yaw;
-    });
-  }
-
-  changed(key: number, _before: SignValue | undefined, after: SignValue | undefined): void {
-    if (after === undefined) this.filing.remove(key);
-    else this.filing.file(key, after, after.reads);
-  }
-}
-
-/** The signs' product, made from nothing at its first refresh. */
-export function signProduct(): Derived<SignSource, number, SignValue> {
-  return new Derived(new SignProduct());
-}
-
 /** A junction's signs (`signsAtNode`), reading its segments' ground. */
-function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue | undefined {
+export function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue | undefined {
   const at = net.doc.node(node);
   if (!at) return undefined;
   const stands: Stand[] = [];
@@ -152,7 +92,7 @@ function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue 
 }
 
 /** A placed sign's plate, or a street name's plates at both ends of every segment of its street. */
-function itemSigns({ net, elevation }: SignSource, id: number): SignValue | undefined {
+export function itemSigns({ net, elevation }: SignSource, id: number): SignValue | undefined {
   const item = net.doc.landscape.get(id);
   if (!item || !isSignItem(item)) return undefined;
   const stands: Stand[] = [];
@@ -195,6 +135,23 @@ function itemSigns({ net, elevation }: SignSource, id: number): SignValue | unde
   return { stands, reads };
 }
 
+/** A cell's signs: the junctions whose node lies in its square and the placed signs and street names whose item does (`cellSigns`). */
+export function cellSigns(source: SignSource, rect: ChangeRect): SignValue {
+  const { net } = source;
+  const stands: Stand[] = [];
+  let reads: ChangeRect | null = null;
+  const take = (value: SignValue | undefined): void => {
+    if (!value) return;
+    stands.push(...value.stands);
+    reads = unite(reads, value.reads);
+  };
+  // The junctions filed over the square whose node lies in it (a node with no junction stands no sign: `signsAtNode` reads the junction's mouths).
+  const nodes = net.junctionCells.idsMeeting(rect).filter((id) => { const n = net.doc.node(id); return !!n && inRect(n.x, n.y, rect); }).sort((p, q) => p - q);
+  for (const node of nodes) take(junctionSigns(source, node));
+  for (const item of net.doc.landscapeIn(rect)) if (isSignItem(item) && inRect(item.x, item.y, rect)) take(itemSigns(source, item.id));
+  return { stands, reads: reads ?? rect };
+}
+
 /** Floats a quad takes: six corners of three (position, normal) or two (uv). */
 const QUAD_3 = 18, QUAD_2 = 12;
 
@@ -210,16 +167,21 @@ interface PlateStore {
   readonly cells: (Placed | null)[];
 }
 
-/** What one key stands in the layer: its posts' run and its plates' slots. */
+/** What one cell stands in the layer: its signs, its posts' run and its plates' slots. */
 interface Standing {
+  readonly stands: readonly Stand[];
   readonly run: Run | null;
   readonly plates: readonly { readonly store: PlateStore; readonly slot: number; readonly type: SignType; readonly text: string }[];
 }
 
 export interface SignLayerKept {
   readonly group: Group;
-  /** Brings the signs up to the diary; the keys stood again. */
-  sync(net: Network, elevation: RoadElevation): number;
+  /** The signs' cells held round the view (`viewCells.ts`). */
+  readonly cells: ViewCells<Standing>;
+  /** Brings the signs up to the diary and to the view: the cells a change reached dropped, the cells the view wants round `eye` stood (a few a frame); the cells stood. */
+  sync(net: Network, elevation: RoadElevation, eye: { readonly x: number; readonly y: number }): number;
+  /** Every plate standing now, in the cells' order (the specs read them). */
+  standing(): Stand[];
   /** A post and a plate as the layer draws them, for their programs to be compiled before the first sign stands */
   warm(): Mesh[];
   /** The posts the camera can see (`InstanceRuns.cull`), every frame. */
@@ -253,13 +215,11 @@ export function createSignLayer(): SignLayerKept {
       stores.delete(sheet);
     },
   });
-  const product = signProduct();
   /** The plate the programs are compiled ahead with (`warm`), made with the layer and kept while it is */
   const warmPicture = new DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
   warmPicture.colorSpace = SRGBColorSpace;
   warmPicture.needsUpdate = true;
   const warmMaterial = plateMaterial(warmPicture);
-  const standing = new Map<number, Standing>();
   // Scratch, one for the layer (never one per post or per plate).
   const matrix = new Matrix4(), corner = new Vector3(), scale = new Vector3();
 
@@ -351,29 +311,19 @@ export function createSignLayer(): SignLayerKept {
     store.free.push(slot);
     touch(store, slot);
   };
-  /** A key's plates let go; its posts' run, for the caller to take away. */
-  const letGo = (was: Standing): Run | null => {
+  /** A cell's plates let go and its posts' run taken out. */
+  const letGo = (was: Standing): void => {
     for (const plate of was.plates) {
       if (stores.get(plate.store.sheet) === plate.store) freeQuad(plate.store, plate.slot);
       sheets.drop(plate.type, plate.text);
     }
-    return was.run;
+    if (was.run) posts.update({ removed: [was.run], added: [] });
   };
-  const take = (key: number): Run | null => {
-    const was = standing.get(key);
-    if (!was) return null;
-    standing.delete(key);
-    return letGo(was);
-  };
-  const stand = (key: number, value: Pick<SignValue, 'stands'>): Run | null => {
-    const made = standOf(value);
-    standing.set(key, made);
-    return made.run;
-  };
-  const standOf = (value: Pick<SignValue, 'stands'>): Standing => {
+  /** A cell's signs stood: its posts' run put in, its plates on their sheets. */
+  const standOf = (stands: readonly Stand[]): Standing => {
     const builder = new RunBuilder(POST_STORES);
     const plates: Standing['plates'][number][] = [];
-    for (const s of value.stands) {
+    for (const s of stands) {
       const size = PLATE[s.type];
       // Up to the plate's top behind it; up to its bottom under a plate on top of it.
       const top = m(size.z + (onTopOfPost(s.type) ? -size.h / 2 : size.h / 2));
@@ -385,26 +335,75 @@ export function createSignLayer(): SignLayerKept {
         plates.push({ store, slot, type: s.type, text: s.text });
       }
     }
-    const run = value.stands.length ? builder.build() : null;
-    return { run, plates };
+    const run = stands.length ? builder.build() : null;
+    if (run) posts.update({ removed: [], added: [run] });
+    return { stands, run, plates };
+  };
+
+  let source: SignSource | null = null;
+  /** The cells by the box their signs read: what a change there reaches. */
+  const reads = new CellFiling<CellKey, Standing>();
+  const cells = new ViewCells<Standing>({
+    name: 'signs', version: 1, side: CELL, reach: SIGN_REACH, cpuBudget: SIGN_CPU_BUDGET,
+    derive(key, rect) {
+      const value = cellSigns(source!, rect);
+      const standing = standOf(value.stands);
+      reads.file(key, standing, value.reads);
+      return { value: standing, cpuBytes: value.stands.length * STAND_BYTES + 64 };
+    },
+    release(key, standing) {
+      reads.remove(key);
+      letGo(standing);
+    },
+  });
+  const cursor = new JournalCursor(SIGN_KINDS);
+  /** The diary's changes since the last sync: the cells whose signs read there dropped (`reads`), and those where a sign may stand now. */
+  const follow = (net: Network): void => {
+    const entries = cursor.read(net.doc.changes);
+    if (entries === null) { cells.clear(); return; }
+    const dropped = new Set<CellKey>();
+    const rects: ChangeRect[] = [];
+    for (const e of entries) {
+      if (e.rects === null || e.kind === 'markingStyle') { cells.clear(); return; }
+      // A landscaping entry names its items (`RoadDoc.addLandscapeMany`): the cells of the signs and names among them, and of the items gone (their kind unknown: the entry's own rectangles). DO NOT stand the junctions round a bench again.
+      if (e.kind === 'landscape' && e.ids) {
+        let gone = false;
+        for (const id of e.ids) {
+          const item = net.doc.landscape.get(id);
+          if (!item) gone = true;
+          else if (isSignItem(item)) dropped.add(cells.cellAt(item.x, item.y));
+        }
+        if (gone) rects.push(...e.rects);
+        continue;
+      }
+      for (const key of reads.idsMeetingAny(e.rects)) dropped.add(key);
+      // A sign may stand now where none did: the cells of the change.
+      for (const r of e.rects) rects.push(grow(r, ITEM_READS));
+    }
+    cells.forget(dropped);
+    if (rects.length) cells.invalidate(rects);
   };
 
   return {
     group,
-    sync(net, elevation) {
+    cells,
+    sync(net, elevation, eye) {
       if (typeof document === 'undefined') return 0;
-      const source: SignSource = { changes: net.doc.changes, net, elevation };
-      const removed: Run[] = [], added: Run[] = [];
-      for (const key of product.refresh(source)) {
-        const gone = take(key);
-        if (gone) removed.push(gone);
-        const value = product.get(key);
-        if (value) { const run = stand(key, value); if (run) added.push(run); }
-      }
-      if (removed.length || added.length) posts.update({ removed, added });
+      // Another document, or another solve of the heights: every cell stood again from it.
+      if (source && source.net.doc !== net.doc) cells.clear();
+      source = { net, elevation };
+      follow(net);
+      cells.look(eye);
+      const stood = cells.pump(CELLS_A_FRAME);
       // The sheets with new plates painted and sent, before the frame draws them.
       sheets.flush();
-      return product.work.last;
+      return stood;
+    },
+    standing() {
+      const out: Stand[] = [];
+      // The keys taken first: a `peek` makes its cell the most recently used, moving it in the cells' order.
+      for (const key of [...cells.keys()]) { const standing = cells.peek(key); if (standing) out.push(...standing.stands); }
+      return out;
     },
     refill() {
       sheets.refill();
@@ -429,11 +428,11 @@ export function createSignLayer(): SignLayerKept {
     dispose() {
       warmMaterial.dispose();
       warmPicture.dispose();
+      cells.clear();
       posts.dispose();
       for (const store of stores.values()) store.mesh.geometry.dispose();
       stores.clear();
       sheets.dispose();
-      standing.clear();
       group.clear();
     },
   };

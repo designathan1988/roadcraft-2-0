@@ -9,10 +9,9 @@ import { SIGN_TYPES, snapLandscape } from '@world/landscape';
 import type { ChangeRect } from '@world/changes';
 import type { NodeId, SegmentId } from '@world/ids';
 import { m } from '@world/units';
-import { createSignLayer, signProduct } from '@render/signLayer';
-import { proveIncremental } from '../support/derivedEquivalence';
+import { createSignLayer, type SignLayerKept } from '@render/signLayer';
 
-/** THE SIGNS ON THE SPINE (`signLayer.ts`): the signs kept from the diary are, at every step of random edits */
+/** THE SIGNS HELD ROUND THE VIEW, CELL BY CELL (`signLayer.ts`): the signs the layer keeps from the diary are, at every step of random edits, the signs stood from nothing */
 
 const span = m(400);
 
@@ -86,33 +85,6 @@ const edits = [
   (town: Town, rng: Rng) => { town.doc.setMarkingStyle(rng.float() < 0.5 ? 'br' : 'classic'); town.settle(); },
 ];
 
-describe('the signs kept from the diary', () => {
-  it('are, key by key, the signs made from nothing at every step', () => {
-    proveIncremental({ source: new Town(), make: signProduct, edits, steps: 120, seed: 0x5167 });
-  });
-
-  it('stand no junction again for a landscaping entry: only the signs and names it placed', () => {
-    const town = new Town();
-    const rng = new Rng(0x51);
-    for (let i = 0; i < 20; i++) edits[3]!(town, rng);
-    const product = signProduct();
-    product.refresh(town);
-    let junctions = 0;
-    for (const [key] of product.entries()) if (key % 2 === 0) junctions++;
-    expect(junctions).toBeGreaterThan(3);
-    // Benches everywhere: nothing of the signs to stand.
-    town.doc.addLandscapeMany(Array.from({ length: 40 }, () => ({ kind: 'bench' as const, at: town.spot(rng) })));
-    town.settle();
-    product.refresh(town);
-    expect(product.work.last).toBe(0);
-    // Three names: those three, and no junction.
-    town.doc.addLandscapeMany([0, 1, 2].map((i) => ({ kind: 'streetname' as const, at: town.spot(rng), extra: { text: `Rua ${i}` } })));
-    town.settle();
-    product.refresh(town);
-    expect(product.work.last).toBe(3);
-  });
-});
-
 /** A canvas without a page: the sizes it is given, and a 2D context that draws nothing. */
 function fakeCanvas(): { width: number; height: number; getContext: () => unknown } {
   const context: unknown = new Proxy({}, {
@@ -122,16 +94,74 @@ function fakeCanvas(): { width: number; height: number; getContext: () => unknow
   return { width: 0, height: 0, getContext: () => context };
 }
 
-describe('the signs compiled ahead', () => {
+/** The eye over the town's middle: the whole town within the layer's reach. */
+const EYE = { x: span / 2, y: span / 2 };
+
+/** The layer brought up to the town, every cell the view wants stood; the plates standing, as text, sorted. */
+function stood(layer: SignLayerKept, town: Town): string[] {
+  for (let i = 0; i < 200; i++) {
+    layer.sync(town.net, town.elevation, EYE);
+    if (layer.cells.wantedKeys.every((key) => layer.cells.has(key))) break;
+  }
+  const r = (v: number): number => Math.round(v * 1000) / 1000;
+  return layer.standing().map((s) => JSON.stringify([r(s.x), r(s.y), r(s.ground), s.type, s.text, r(s.yaw)])).sort();
+}
+
+describe('the signs kept from the diary, cell by cell', () => {
   beforeAll(() => { vi.stubGlobal('document', { createElement: () => fakeCanvas() }); });
   afterAll(() => { vi.unstubAllGlobals(); });
 
-  it('a post and a plate drawn with the programs of the posts and plates the layer stands', () => {
+  it('are, at every step, the signs stood from nothing, and an idle sync stands no cell again', () => {
+    const town = new Town();
+    const rng = new Rng(0x5167);
+    const kept = createSignLayer();
+    stood(kept, town);
+    let compared = 0;
+    for (let step = 0; step < 120; step++) {
+      edits[Math.floor(rng.float() * edits.length)]!(town, rng);
+      const mine = stood(kept, town);
+      const fresh = createSignLayer();
+      const want = stood(fresh, town);
+      expect(mine, `step ${step}`).toEqual(want);
+      compared += want.length;
+      fresh.dispose();
+      // Nothing new: nothing stood again.
+      const before = kept.cells.work.derived;
+      kept.sync(town.net, town.elevation, EYE);
+      expect(kept.cells.work.derived, `step ${step}: an idle sync stands nothing`).toBe(before);
+    }
+    expect(compared).toBeGreaterThan(500);
+    kept.dispose();
+  });
+
+  it('stand no junction again for a landscaping entry: only the cells of the signs and names it placed', () => {
+    const town = new Town();
+    const rng = new Rng(0x51);
+    for (let i = 0; i < 20; i++) edits[3]!(town, rng);
+    const layer = createSignLayer();
+    stood(layer, town);
+    expect(layer.standing().length).toBeGreaterThan(3);
+    // Benches everywhere: nothing of the signs to stand.
+    town.doc.addLandscapeMany(Array.from({ length: 40 }, () => ({ kind: 'bench' as const, at: town.spot(rng) })));
+    town.settle();
+    let before = layer.cells.work.derived;
+    stood(layer, town);
+    expect(layer.cells.work.derived - before).toBe(0);
+    // Three names: their cells, three at most, and no junction's cell elsewhere.
+    town.doc.addLandscapeMany([0, 1, 2].map((i) => ({ kind: 'streetname' as const, at: town.spot(rng), extra: { text: `Rua ${i}` } })));
+    town.settle();
+    before = layer.cells.work.derived;
+    stood(layer, town);
+    expect(layer.cells.work.derived - before).toBeLessThanOrEqual(3);
+    layer.dispose();
+  });
+
+  it('a post and a plate drawn with the programs of the posts and plates the layer stands (compiled ahead)', () => {
     const town = new Town();
     const rng = new Rng(0x9a);
     for (let i = 0; i < 20; i++) edits[0]!(town, rng);
     const layer = createSignLayer();
-    layer.sync(town.net, town.elevation);
+    stood(layer, town);
     const drawn = new Map<string, Mesh>();
     layer.group.traverse((o) => { if ((o as Mesh).isMesh) drawn.set(o.name, o as Mesh); });
     const warm = layer.warm();
