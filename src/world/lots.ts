@@ -469,6 +469,8 @@ class LotPlanner {
     const entries = this.seen < 0 ? null : this.doc.changes.since(this.seen, ['lots', 'lotKeys']);
     this.seen = this.doc.changes.version;
     if (delta === null || entries === null || entries.some((e) => e.rects === null || (e.kind === 'lots' && !e.ids))) this.planAll();
+    // The roads held moved, no edit (`NetworkDelta.scopeOnly`: the page's network holding the tiles near the view): the land did not change, nothing planned again for it. DO NOT plan a tile's blocks for its coming into view.
+    else if (delta.scopeOnly) { if (entries.length) this.planChanged({ segments: new Set(), nodes: new Set(), rects: [] }, entries); }
     else if (delta.segments.size || delta.nodes.size || delta.rects.length || entries.length) this.planChanged(delta, entries);
     return this.result();
   }

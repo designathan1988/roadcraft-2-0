@@ -292,9 +292,9 @@ function countFar(net: Network): { plate: number; casing: number; carriageway: n
       kind = FAR_FAN; sizes = [geom.ring.length / 2, 0];
     } else return;
     const input: FarRoadInput = {
-      cell: 1000, exclude: null, owners: Int32Array.of(0, 0), layers: Uint8Array.of(layer), colors: Float32Array.of(1, 1, 1),
+      cell: 1000, owners: Int32Array.of(0, 0), layers: Uint8Array.of(layer), colors: Float32Array.of(1, 1, 1),
       kinds: Uint8Array.of(kind), sizes: Uint32Array.of(...sizes), points: Float64Array.from(points),
-      across: new Float32Array(points.length / 4), slots: Float32Array.of(-1),
+      across: new Float32Array(points.length / 4), slots: Float64Array.of(-1),
     };
     const cells = buildFarRoadCells(input);
     const n = cells.reduce((sum, c) => sum + c.indices.length / 3, 0);

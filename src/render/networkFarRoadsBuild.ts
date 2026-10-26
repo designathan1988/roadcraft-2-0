@@ -25,8 +25,6 @@ export const FAR_STRIP = 0, FAR_FAN = 1;
 export interface FarRoadInput {
   /** The blocks' side, world units (the road blocks', `roadSurfaceEntries.ts` CELL; their lines from the origin). */
   readonly cell: number;
-  /** The blocks whose pieces are drawn by their detailed surfaces already (the opening's view): none of their pieces is here. Null: none. */
-  readonly exclude: readonly [number, number, number, number] | null;
   /** Each shape's owner block, column and row. */
   readonly owners: Int32Array;
   readonly layers: Uint8Array;
@@ -38,13 +36,15 @@ export interface FarRoadInput {
   readonly points: Float64Array;
   /** A carriageway's paint as the detail's carriageway carries it (`roadSurfaceReads.ts` asphaltSection, asphaltPlate), so the far level inks the
    *  same lines and marks (`mesh/roadEdges.ts` applyRoadFarPaint): one a point, its offset across its road (left of the road's way positive; a
-   *  plate's 0), and one a shape, its slot in the paint's table (`roadPaint.ts`: a road's, a plate's `-2 - slot` of its node; -1 none). */
+   *  plate's 0), and one a shape, its slot in the paint's table (`roadPaint.ts`: a road's, a plate's `-2 - slot` of its node; -1 none) - or, made
+   *  off the page, the piece's own id in the slot's place (`networkFarInput.ts` PIECE_IDS), an exact double. */
   readonly across: Float32Array;
-  readonly slots: Float32Array;
+  readonly slots: Float64Array;
 }
 
 /** One block's layer: positions in the scene (x, height, -y), a colour a vertex, the carriageway's section a vertex (`FAR_SECTION` numbers: across,
- *  along, the paint's slot, the surface's code, as the detail's `roadSection`; none on the casing), the triangles. */
+ *  along, the paint's slot, the surface's code, as the detail's `roadSection`; none on the casing), the triangles; `pieces`: a carriageway vertex's
+ *  shape's slot as the input gave it (`FarRoadInput.slots`), exact, for the page to resolve a piece's id to its table slot (`networkFarRoads.ts` resolveFarPieces). */
 export interface FarRoadCell {
   readonly key: string;
   readonly layer: number;
@@ -52,6 +52,7 @@ export interface FarRoadCell {
   readonly colors: Float32Array;
   readonly sections: Float32Array;
   readonly indices: Uint32Array;
+  readonly pieces: Float64Array;
 }
 
 /** Numbers a vertex of a carriageway's section (`mesh/surfaceTiles.ts` SECTION_SIZE): across, along, slot, code (the carriageway's, 0). */
@@ -59,7 +60,7 @@ export const FAR_SECTION = 4;
 /** The layer of the carriageway, whose vertices carry its section. */
 export const FAR_CARRIAGEWAY = 1;
 
-interface Builder { positions: number[]; colors: number[]; sections: number[]; indices: number[] }
+interface Builder { positions: number[]; colors: number[]; sections: number[]; indices: number[]; pieces: number[] }
 
 /** A junction's plate's triangles (a fan's outline, the vertices 1 to `count`; its middle, vertex 0, unused): its outline alone, cut by ear clipping
  *  and refined to Delaunay quality by edge flips (earcut 3.2 and its `refine`, https://github.com/mapbox/earcut), no point added, as the detail cuts
@@ -112,14 +113,14 @@ export function buildFarRoadCells(input: FarRoadInput): FarRoadCell[] {
     const flip = twice < 0;
     const name = `${key}|${layer}`;
     let b = builders.get(name);
-    if (!b) builders.set(name, b = { positions: [], colors: [], sections: [], indices: [] });
+    if (!b) builders.set(name, b = { positions: [], colors: [], sections: [], indices: [], pieces: [] });
     const base = b.positions.length / 3;
     for (let i = 0; i < count; i++) {
       const p = first + i * 4;
       b.positions.push(points[p]!, points[p + 2]!, -points[p + 1]!);
       b.colors.push(colors[k * 3]!, colors[k * 3 + 1]!, colors[k * 3 + 2]!);
       // A road's point its place along it; a plate's none (`roadSurfaceReads.ts` asphaltPlate: 0 across, -1 along).
-      if (layer === FAR_CARRIAGEWAY) b.sections.push(across[p / 4]!, kind === FAR_STRIP ? points[p + 3]! : -1, slots[k]!, 0);
+      if (layer === FAR_CARRIAGEWAY) { b.sections.push(across[p / 4]!, kind === FAR_STRIP ? points[p + 3]! : -1, slots[k]!, 0); b.pieces.push(slots[k]!); }
     }
     for (let t = 0; t + 2 < tris.length; t += 3) {
       if (flip) b.indices.push(base + tris[t]!, base + tris[t + 2]!, base + tris[t + 1]!);
@@ -131,7 +132,7 @@ export function buildFarRoadCells(input: FarRoadInput): FarRoadCell[] {
     const [key, layer] = name.split('|') as [string, string];
     out.push({
       key, layer: Number(layer), positions: new Float32Array(b.positions), colors: new Float32Array(b.colors), sections: new Float32Array(b.sections),
-      indices: new Uint32Array(b.indices),
+      indices: new Uint32Array(b.indices), pieces: new Float64Array(b.pieces),
     });
   }
   return out;

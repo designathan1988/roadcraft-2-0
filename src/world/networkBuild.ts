@@ -25,6 +25,7 @@ export type { NetworkBake } from './networkBake';
 interface Network {
   readonly doc: RoadDoc;
   readonly scope: ReadonlySet<SegmentId> | null;
+  readonly scopeOf: (() => ReadonlySet<SegmentId>) | null;
   holds(segment: SegmentId): boolean;
   complete(nodeId: NodeId): boolean;
   readonly polylines: PolylineCache;
@@ -212,7 +213,7 @@ export class NetworkBuild {
   rebuild(): NetworkDelta | null {
     const net = this.net, doc = net.doc;
     const fromNothing = this.seen < 0;
-    const { segments: changedSegs, nodes: changedNodes, records } = this.findChanges();
+    const { segments: changedSegs, nodes: changedNodes, records, scopeOnly } = this.findChanges();
     this.seen = doc.changes.version;
 
     const oldRects: ChangeRect[] = [];
@@ -408,13 +409,14 @@ export class NetworkBuild {
       const b = after ? junctionBounds(after) : null;
       if (b) rects.push(b);
     }
-    return { segments, nodes, rects };
+    return { segments, nodes, rects, scopeOnly };
   }
 
-  /** The segments and nodes whose sources differ from what the last rebuild recorded, and the nodes whose record does */
-  private findChanges(): { segments: Set<SegmentId>; nodes: Set<NodeId>; records: Set<NodeId> } {
+  /** The segments and nodes whose sources differ from what the last rebuild recorded, and the nodes whose record does; `scopeOnly`: the document's roads did not change since the last rebuild (no entry of the diary), whatever differs is the roads held moving (`Network.rescope`). */
+  private findChanges(): { segments: Set<SegmentId>; nodes: Set<NodeId>; records: Set<NodeId>; scopeOnly: boolean } {
     const doc = this.net.doc;
     const entries = this.seen < 0 ? null : doc.changes.since(this.seen, ['roads', 'traffic']);
+    const scopeOnly = entries !== null && entries.length === 0;
     const candSegs = new Set<SegmentId>();
     const candNodes = new Set<NodeId>();
     let everything = entries === null;
@@ -424,6 +426,8 @@ export class NetworkBuild {
       for (const id of this.nodePlaces.idsMeetingAny(entry.rects)) candNodes.add(id);
     }
     if (everything) {
+      // The whole map may be another's (a map opened): the roads held found again over it (`Network.scopeOf`).
+      if (this.net.scope && this.net.scopeOf) (this.net as { scope: ReadonlySet<SegmentId> | null }).scope = this.net.scopeOf();
       // In increasing id order: a build from nothing files in one order whatever order the document holds them in (no reader depends on it).
       for (const id of [...new Set([...this.net.scope ?? doc.segments.keys(), ...this.segmentSource.keys()])].sort((p, q) => p - q)) candSegs.add(id);
       for (const id of [...new Set([...this.net.scope ? [] : doc.nodes.keys(), ...this.nodeSource.keys()])].sort((p, q) => p - q)) candNodes.add(id);
@@ -492,7 +496,7 @@ export class NetworkBuild {
         this.nodePlaces.remove(id);
       }
     }
-    return { segments, nodes, records };
+    return { segments, nodes, records, scopeOnly };
   }
 
   private addEnds(into: Set<NodeId>, id: SegmentId): void {

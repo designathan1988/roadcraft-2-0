@@ -26,11 +26,17 @@ const LOADERS: Readonly<Record<JobService, () => Promise<{ serve: Serve }>>> = {
   cityGen: () => import('./cityGen.worker'),
   // A city's network solved while its curtain is up, taken by the page's build (`networkBake.worker.ts`).
   networkBake: () => import('./networkBake.worker'),
+  // A tile's junctions and ribbons solved as the view comes to it (`world/networkWindow.ts`).
+  roadBake: () => import('./roadBake.worker'),
+  // A tile's roads at the far level, the map's far level made tile by tile (`render/networkFarTile.ts`).
+  roadFarTile: () => import('./render/networkFarTile.worker'),
   terrainLight: () => import('./render/terrainLight.worker'),
   // A dab's work on a plate: its levels, its woods, its shore (`render/landStroke.ts`).
   landStroke: () => import('./render/landStroke.worker'),
   derivedWriter: () => import('./render/derivedWriter.worker'),
   save: () => import('./editor/save.worker'),
+  // A saved map's squares decoded and its tables joined, off the page (`editor/squaresDecode.ts`).
+  saveRead: () => import('./editor/squaresRead.worker'),
 };
 
 const host = self as unknown as { onmessage: ((e: MessageEvent<ToJob | AdoptLane | CloseLane>) => void) | null; postMessage(message: FromJob, transfer?: Transferable[]): void };

@@ -7,9 +7,9 @@ import { DerivedWriterLane } from '@/render/derivedWriterLane';
 const MB = 2 ** 20;
 
 describe("the page's writes to the derived cache", () => {
-  it('never hold more than the ceiling in flight while the writer is slow, the rest not kept, room again as commits come', () => {
-    const posted: { id: number }[] = [];
-    const port = { onmessage: null as ((e: MessageEvent) => void) | null, postMessage: (m: { id: number }) => { posted.push(m); } };
+  it('never hold more than the ceiling in flight while the writer is slow, the rest not kept, room again as commits come', async () => {
+    const posted: { id: number; entries: [string, unknown][] }[] = [];
+    const port = { onmessage: null as ((e: MessageEvent) => void) | null, postMessage: (m: { id: number; entries: [string, unknown][] }) => { posted.push(m); } };
     const lane = new DerivedWriterLane(port as unknown as Worker, 48 * MB);
     let kept = 0, most = 0;
     // Thirty road tiles of 10 MB each, the writer committing none.
@@ -19,13 +19,18 @@ describe("the page's writes to the derived cache", () => {
     }
     expect(most).toBeLessThanOrEqual(48 * MB);
     expect(kept).toBe(4);
-    // Two commits answered: room for two more.
+    // The writes of one task go as one: a commit for them all, not a transaction each.
+    await Promise.resolve();
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.entries.map(([key]) => key)).toEqual(['t0', 't1', 't2', 't3']);
+    // Their commit answered: room for four more, the fifth not kept.
     port.onmessage!({ data: { done: posted[0]!.id } } as MessageEvent);
-    port.onmessage!({ data: { done: posted[1]!.id } } as MessageEvent);
-    expect(lane.bytes).toBe(20 * MB);
-    expect(lane.post('roads:', [['u1', 1]], [], 10 * MB)).toBe(true);
-    expect(lane.post('roads:', [['u2', 2]], [], 10 * MB)).toBe(true);
-    expect(lane.post('roads:', [['u3', 3]], [], 10 * MB)).toBe(false);
+    expect(lane.bytes).toBe(0);
+    for (let k = 1; k <= 4; k++) expect(lane.post('roads:', [[`u${k}`, k]], [], 10 * MB)).toBe(true);
+    expect(lane.post('roads:', [['u5', 5]], [], 10 * MB)).toBe(false);
+    await Promise.resolve();
+    expect(posted).toHaveLength(2);
+    expect(lane.bytes).toBe(40 * MB);
   });
 });
 

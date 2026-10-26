@@ -177,7 +177,12 @@ export class Persistence {
     // The newest of the three copies: the small key, a large map in parts, the large store.
     let best = local, bestAt = localAt;
     this.loadedParts = null;
-    const parted = this.parted ? await this.parted.read().catch((error: unknown) => { console.warn('[save] the parts of the map could not be read', error); return null; }) : null;
+    // A map in parts that is there and cannot be read is set aside, never deleted, before this session saves anything over it (`TiledSaves.read`, `setAside`): the session opens on the other copies.
+    const parted = this.parted ? await this.parted.read().catch(async (error: unknown) => {
+      console.error('[save] the parts of the map could not be read; they are set aside, kept whole', error);
+      await this.parted!.setAside(Date.now());
+      return null;
+    }) : null;
     let bestParts: SavedLayout | null = null;
     if (parted && parted.savedAt > bestAt) {
       const session = { version: 2, document: parted.document, settings: parted.settings };

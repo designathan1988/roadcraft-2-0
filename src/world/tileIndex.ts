@@ -42,6 +42,11 @@ class Filing {
     return this.members.get(key) ?? this.none;
   }
 
+  /** The tiles holding one at least. */
+  tiles(): IterableIterator<number> {
+    return this.members.keys();
+  }
+
   clear(): void {
     this.tileOf.clear();
     this.members.clear();
@@ -62,6 +67,12 @@ export class TileIndex {
   roadsOf(key: number): { readonly nodes: ReadonlySet<number>; readonly segments: ReadonlySet<number> } {
     this.followRoads();
     return { nodes: this.nodeFiling.of(key), segments: this.segmentFiling.of(key) };
+  }
+
+  /** The tiles holding a road (filed by `OWNER`, as `roadsOf`). */
+  roadTiles(): number[] {
+    this.followRoads();
+    return [...this.segmentFiling.tiles()];
   }
 
   /** Tile `key`'s land keys, in the store's order. */

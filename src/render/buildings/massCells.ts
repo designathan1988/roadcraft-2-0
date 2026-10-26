@@ -195,8 +195,10 @@ export interface MassCells {
   shadowMasses(on: boolean): string[];
   /** A base's prisms come (`massLevels.ts` landBase; null: none of its buildings stands from afar). */
   landBase(key: string, base: BaseMass | null): void;
-  /** Bases planned whose prisms have not come: the town has holes until they do (`layer.ts` coarsePending). */
+  /** Bases planned whose prisms have not come: the town has holes until they do. */
   readonly basesWaiting: number;
+  /** Of `basesWaiting`, those whose plate meets the view's frustum at the last `choose` (every one before a `choose` with a frustum): what the opening's picture waits for (`layer.ts` coarsePending); the others come after the curtain, nearest first. */
+  readonly basesWaitingInView: number;
   /** The bases drawn under exactly the cells nothing finer draws (three's geometry groups): asked before each frame is drawn (`layer.ts` cullDetails). */
   syncBases(): void;
   /** What draws each cell of buildings now, by key (the census of holes, `tests/perf/massBase.spec.ts`). */
@@ -419,6 +421,8 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
   const exposedTiles = new Set<string>();
   let waiting = 0;
   let waitingInView = 0;
+  /** The view's frustum at the last `choose` (null: none, every level seen): the bases the opening waits for are those it meets (`basesWaitingInView`). */
+  let chosenView: Frustum | null = null;
   /** The `choose` calls so far: when each level last met the view (`Level.seenAt`). */
   let chooseSerial = 0;
   /** The plates, and the tiles of the plates refined, in the view's frustum (grown by `VIEW_KEEP`) at the last `choose` (`levelSeen`); `allSeen`, a `choose` with no frustum. None before the first `choose`. */
@@ -752,6 +756,18 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       for (const base of bases.values()) if (!base.landed) n++;
       return n;
     },
+    get basesWaitingInView() {
+      let n = 0;
+      for (const base of bases.values()) {
+        if (base.landed) continue;
+        if (!chosenView) { n++; continue; }
+        const { i0, j0, n: side } = levelCells(base.key);
+        levelBox.min.set(i0 * cellSize, LEVEL_FLOOR, -((j0 + side) * cellSize));
+        levelBox.max.set((i0 + side) * cellSize, LEVEL_CEILING, -(j0 * cellSize));
+        if (chosenView.intersectsBox(levelBox)) n++;
+      }
+      return n;
+    },
     syncBases() {
       if (!basesStale) return;
       basesStale = false;
@@ -807,6 +823,7 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       // Field by field, no literal each frame (PRD-30).
       lastEye.x = eyeX; lastEye.y = eyeY; lastEye.z = eyeZ; lastEye.pxAtMetre = pxAtMetre; lastEye.orthoPx = orthoPx; lastEye.known = true;
       if (import.meta.env.DEV) lastReach = reach;
+      chosenView = view;
       followView(view);
       // THE LEVELS FIRST, from the plates down (Cesium `selectTiles`): a level is drawn in place of its children while what it leaves out spans under the pixels the cells' masses are drawn for
       forcedLevels.clear();

@@ -708,8 +708,8 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     get coarsePending() {
       // The levels in the view's frustum only: DO NOT hold the opening for every plate of the map (a city of 25,000 buildings waited for nine plates of 2 km, 16 s of the workers, when its view drew none of them, step-25k 2026-10-21); those out of view come after the curtain, nearest first.
-      // And every base of the map (`massBase.ts`): the town has no hole once they are in, whatever the view does after the curtain (the map pulled back to at once showed its corners empty for seconds, step-25k 2026-10-21). Their floors are the masses' that follow.
-      return requests.massing > 0 || massCells.waitingInView > 0 || massCells.basesWaiting > 0;
+      // And the bases of the plates in the view (`massBase.ts`): the picture has no hole once they are in. DO NOT hold the opening for every base of the map: a 10 km city's opening waited for all its plates' bases, its whole town massed behind the curtain (2026-10-26); those out of the view come after it, nearest first (`levels.away`).
+      return requests.massing > 0 || massCells.waitingInView > 0 || massCells.basesWaitingInView > 0;
     },
     get viewPending() {
       // The cells the view wants in detail (near, in its frustum, `massCells.nearKeys`) whose detail has not landed.
