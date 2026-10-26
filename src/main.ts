@@ -255,13 +255,17 @@ function restoreBootSave(loaded: Awaited<ReturnType<Persistence['loadSessionAsyn
   try {
     doc.changes.causeNext('saved map loaded');
     performance.mark('boot:restore');
-    // A large map's buildings made one table, as a generated city's are (`prepareCity`), and filed from it: DO NOT load them one object at a time - each was migrated and interned again (0.83 s of the large city's boot), and each written to a row of its own for the traffic's worker after (`refOf`, 0.5 s more).
-    const asTable = (map.buildings?.length ?? 0) >= TABLE_RESTORE_BUILDINGS ? (() => { const made = prepareCity(map, !openedGenerated(map, null)); return preparedCity(made.data, made.buildings, made); })() : null;
-    restoreInto(doc, asTable?.data ?? map, net, asTable ? openedTables(asTable) : null);
+    // A map saved by squares comes with its tables (`chunkedSave.ts` SavedTables), joined from the squares without decoding: taken as they are. A whole-map copy or an older save holds its records in the data: a large map's buildings made one table, as a generated city's are (`prepareCity`), and filed from it. DO NOT load them one object at a time - each was migrated and interned again (0.83 s of the large city's boot), and each written to a row of its own for the traffic's worker after (`refOf`, 0.5 s more).
+    const saved = loaded?.tables?.buildings ? loaded.tables : null;
+    const asTable = !saved && (map.buildings?.length ?? 0) >= TABLE_RESTORE_BUILDINGS ? (() => { const made = prepareCity(map, !openedGenerated(map, null)); return preparedCity(made.data, made.buildings, made); })() : null;
+    const tables: OpenedTables | null = saved
+      ? { buildings: saved.buildings ?? null, landscape: saved.landscape ?? null, lots: saved.lots ?? null, poles: saved.poles ?? null, spans: saved.spans ?? null }
+      : asTable ? openedTables(asTable) : null;
+    const restored = restoreInto(doc, asTable?.data ?? map, net, tables);
     performance.mark('boot:restored');
     doc.changes.causeNext('game');
-    // Opened from the map's parts: those parts are this document, the next save writes only what changes.
-    persistence.adoptLoaded(doc);
+    // Opened from the map's parts: those parts are this document, the next save writes only what changes (and what the restore repaired after the map stood).
+    persistence.adoptLoaded(doc, restored.replacedAt);
     return { settings, hadMap: true, failed: false };
   } catch (error) {
     console.error('The saved map could not be loaded; it was set aside.', error);

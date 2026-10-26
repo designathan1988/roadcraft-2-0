@@ -228,6 +228,86 @@ export class TableWriter<T extends TableRow = Building> {
     }
   }
 
+  /** The tables rows were copied from (`copyRows`), each with what of it this table already holds. */
+  private readonly sources = new Map<ArrayBufferLike, CopySource>();
+
+  /**
+   * ROWS OF ANOTHER TABLE WRITTEN AFTER THOSE BEFORE WITHOUT DECODING A RECORD (the save's squares cut from the map's table, a map's table
+   * joined from its squares, `editor/chunkedSave.ts`): each record's bytes copied from the source's stream with its strings, shapes and
+   * shared members renumbered to this table's; a shared member of the source written once here however many copied rows reach it. The
+   * columns copied as they are. DO NOT decode a record to write it again (`tableRecords` then `add`): a whole city's records as objects.
+   */
+  copyRows(from: RecordTable, rows: readonly number[]): void {
+    let source = this.sources.get(from.buffer);
+    if (!source) this.sources.set(from.buffer, source = new CopySource(from));
+    const stream = this.stream, nodeAt = this.nodeAt;
+    const src = source.view;
+    let pos = 0;
+    const strings = (id: number): number => {
+      let own = source!.strings.get(id);
+      if (own === undefined) source!.strings.set(id, own = this.stringId(source!.string(id)));
+      return own;
+    };
+    const shapes = (id: number): number => {
+      let own = source!.shapes.get(id);
+      if (own === undefined) source!.shapes.set(id, own = this.shapeId(source!.shape(id)));
+      return own;
+    };
+    // The value at `pos` copied, as `TableReader.value` reads it.
+    const copy = (): void => {
+      const tag = src.getUint8(pos++);
+      switch (tag) {
+        case T_NULL: case T_FALSE: case T_TRUE: stream.u8(tag); return;
+        case T_U8: stream.u8(tag); stream.u8(src.getUint8(pos++)); return;
+        case T_I32: stream.u8(tag); stream.i32(src.getInt32(pos, true)); pos += 4; return;
+        case T_F64: stream.u8(tag); stream.f64(src.getFloat64(pos, true)); pos += 8; return;
+        case T_STR: { const id = src.getUint32(pos, true); pos += 4; stream.u8(tag); stream.u32(strings(id)); return; }
+        case T_ARR: {
+          const n = src.getUint32(pos, true); pos += 4;
+          stream.u8(tag); stream.u32(n);
+          for (let i = 0; i < n; i++) copy();
+          return;
+        }
+        case T_OBJ: {
+          const shape = src.getUint32(pos, true); pos += 4;
+          const keys = source!.shape(shape).length;
+          stream.u8(tag); stream.u32(shapes(shape));
+          for (let i = 0; i < keys; i++) copy();
+          return;
+        }
+        case T_NODE: {
+          const id = src.getUint32(pos, true); pos += 4;
+          // The source writes a member's body behind its mark where it is first met; elsewhere the mark alone.
+          const bodyHere = pos === source!.nodeAt[id];
+          const known = source!.nodes.get(id);
+          if (known !== undefined) {
+            stream.u8(tag); stream.u32(known);
+            if (bodyHere) source!.skip(pos, (end) => { pos = end; });
+            return;
+          }
+          const own = nodeAt.length;
+          source!.nodes.set(id, own);
+          nodeAt.push(stream.length + 5);
+          stream.u8(tag); stream.u32(own);
+          if (bodyHere) { copy(); return; }
+          const back = pos;
+          pos = source!.nodeAt[id]!;
+          copy();
+          pos = back;
+          return;
+        }
+        default: throw new Error(`[buildings] a record table holds an unknown tag ${tag}`);
+      }
+    };
+    for (const row of rows) {
+      if (row < 0 || row >= from.rows) throw new Error(`[buildings] no row ${row} in the record table copied from`);
+      this.rootAt.push(stream.length);
+      this.ids.push(from.ids[row]!); this.xs.push(from.xs[row]!); this.ys.push(from.ys[row]!); this.turns.push(from.rotations[row]!);
+      pos = source.rootAt[row]!;
+      copy();
+    }
+  }
+
   /** A row written, decoded: a fresh object of its own, its shared members its own too. */
   read(row: number): T {
     if (row < 0 || row >= this.rows) throw new Error(`[buildings] no row ${row} in the table being written`);
@@ -295,6 +375,77 @@ export class TableWriter<T extends TableRow = Building> {
     shapeStart[at.shapes] = k;
     new Uint8Array(buffer, at.streamAt, at.stream).set(stream.bytes.subarray(0, stream.length));
     return new RecordTable(buffer);
+  }
+}
+
+/** A table rows are copied from (`TableWriter.copyRows`): its stream, its strings and shapes decoded as met, and what of it the copying table already holds (its strings', shapes' and shared members' ids there). */
+class CopySource {
+  readonly view: DataView;
+  readonly rootAt: Uint32Array;
+  readonly nodeAt: Uint32Array;
+  private readonly strStart: Uint32Array;
+  private readonly strUnits: Uint16Array;
+  private readonly shapeStart: Uint32Array;
+  private readonly shapeKeys: Uint32Array;
+  private readonly stringList: (string | undefined)[];
+  private readonly shapeList: (string[] | undefined)[];
+  /** This source's id of each kind to the copying table's. */
+  readonly strings = new Map<number, number>();
+  readonly shapes = new Map<number, number>();
+  readonly nodes = new Map<number, number>();
+
+  constructor(table: RecordTable) {
+    const { buffer, at } = table;
+    this.view = new DataView(buffer, at.streamAt, at.stream);
+    this.rootAt = new Uint32Array(buffer, at.rootAt, at.rows);
+    this.nodeAt = new Uint32Array(buffer, at.nodeAt, at.nodes);
+    this.strStart = new Uint32Array(buffer, at.strStart, at.strings + 1);
+    this.strUnits = new Uint16Array(buffer, at.strUnits, at.units);
+    this.shapeStart = new Uint32Array(buffer, at.shapeStart, at.shapes + 1);
+    this.shapeKeys = new Uint32Array(buffer, at.shapeKeys, at.keys);
+    this.stringList = new Array<string | undefined>(at.strings).fill(undefined);
+    this.shapeList = new Array<string[] | undefined>(at.shapes).fill(undefined);
+  }
+
+  string(id: number): string {
+    let s = this.stringList[id];
+    if (s === undefined) {
+      const a = this.strStart[id]!, b = this.strStart[id + 1]!;
+      s = '';
+      for (let i = a; i < b; i += 4096) s += String.fromCharCode(...this.strUnits.subarray(i, Math.min(b, i + 4096)));
+      this.stringList[id] = s;
+    }
+    return s;
+  }
+
+  shape(id: number): string[] {
+    let keys = this.shapeList[id];
+    if (!keys) {
+      keys = [];
+      for (let i = this.shapeStart[id]!; i < this.shapeStart[id + 1]!; i++) keys.push(this.string(this.shapeKeys[i]!));
+      this.shapeList[id] = keys;
+    }
+    return keys;
+  }
+
+  /** The value at `pos` passed over (as `TableReader.skip`), `end` told where it ends. */
+  skip(pos: number, end: (at: number) => void): void {
+    const view = this.view;
+    const step = (): void => {
+      const tag = view.getUint8(pos++);
+      switch (tag) {
+        case T_NULL: case T_FALSE: case T_TRUE: return;
+        case T_U8: pos += 1; return;
+        case T_I32: case T_STR: pos += 4; return;
+        case T_NODE: { const id = view.getUint32(pos, true); pos += 4; if (pos === this.nodeAt[id]) step(); return; }
+        case T_F64: pos += 8; return;
+        case T_ARR: { const n = view.getUint32(pos, true); pos += 4; for (let i = 0; i < n; i++) step(); return; }
+        case T_OBJ: { const keys = this.shape(view.getUint32(pos, true)).length; pos += 4; for (let i = 0; i < keys; i++) step(); return; }
+        default: throw new Error(`[buildings] a record table holds an unknown tag ${tag}`);
+      }
+    };
+    step();
+    end(pos);
   }
 }
 
@@ -385,6 +536,20 @@ export class TableReader<T extends TableRow = Building> {
     if (row < 0 || row >= this.table.rows) throw new Error(`[buildings] no row ${row} in the record table`);
     this.pos = this.rootAt[row]!;
     return this.value() as T;
+  }
+
+  /** One field of a row's record, the others passed over, nothing else made (a building's wear for the save, `editor/chunkedSave.ts`); undefined when the record has no such field. */
+  field(row: number, key: string): unknown {
+    if (row < 0 || row >= this.table.rows) throw new Error(`[buildings] no row ${row} in the record table`);
+    const view = this.view;
+    this.pos = this.rootAt[row]!;
+    if (view.getUint8(this.pos++) !== T_OBJ) return undefined;
+    const keys = this.shape(view.getUint32(this.pos, true)); this.pos += 4;
+    for (const k of keys) {
+      if (k === key) return this.value();
+      this.skip();
+    }
+    return undefined;
   }
 
   private string(id: number): string {

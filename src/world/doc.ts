@@ -42,7 +42,7 @@ import { BuildingStore } from './buildings/store';
 import { type BuildingSections, type TableSections, itemsOfSections, sectionsOf } from './buildings/sections';
 import { TableItems } from './buildings/items';
 import { type DocImage, type DocTable, type DocTables, dataOf, imageBytes, imageOf, packImage, unpackImage } from './docBinary';
-import { type RowPlace, type TableRow, allocate, encodeRecords } from './buildings/recordTable';
+import { type RecordRef, type RowPlace, type TableRow, allocate, encodeRecords } from './buildings/recordTable';
 import type { SerializedBuilding } from './buildings/serialize';
 import type { Building, BuildingId } from './buildings/types';
 import { isZoneDensity, isZoneMark, isZoneUse, type Zone, type ZoneMark } from './zones';
@@ -795,6 +795,31 @@ export class RoadDoc {
       poles: sectionsOf(this.poleMap),
       spans: sectionsOf(this.spanMap, spanPlace),
     };
+  }
+
+  /** Where a record of a kind kept in a table stands, nothing decoded for one of the table: the landscaping's and the poles' their place, a wire's its pole `a`'s (where the save files it); undefined when there is none. The buildings' and the lots' are their stores' (`BuildingStore.placeOf`, `LotStore.placeOf`). */
+  recordPlace(kind: 'landscape' | 'poles' | 'spans', id: number): { readonly x: number; readonly y: number } | undefined {
+    const place = <K extends number, V extends TableRow>(map: Map<K, V>, key: K): { readonly x: number; readonly y: number } | undefined => {
+      if (map instanceof TableItems) return map.placeOf(key);
+      const v = map.get(key);
+      return v && v.x !== undefined && v.y !== undefined ? { x: v.x, y: v.y } : undefined;
+    };
+    switch (kind) {
+      case 'landscape': return place(this.landscapeMap, id);
+      case 'poles': return place(this.poleMap, id as PoleId);
+      case 'spans': {
+        // A wire of the table: its place columns are its poles' ids (`spanPlace`), nothing decoded; one written on the page: its record's ends.
+        const row = this.spanMap instanceof TableItems ? this.spanMap.tableRef(id as SpanId) : null;
+        const ends = row ? (this.spanMap as TableItems<SpanId, UtilitySpan>).placeOf(id as SpanId) : (() => { const s = this.spanMap.get(id as SpanId); return s ? { x: s.a, y: s.b } : undefined; })();
+        return ends ? place(this.poleMap, asPoleId(ends.x)) : undefined;
+      }
+    }
+  }
+
+  /** Where a record of a kind kept in a table is read without decoding (`TableItems.tableRef`: its table's buffer and row) while it is the table's own; null for one written on the page, or not here. */
+  recordRef(kind: 'landscape' | 'poles' | 'spans', id: number): RecordRef | null {
+    const map = kind === 'landscape' ? this.landscapeMap : kind === 'poles' ? this.poleMap : this.spanMap;
+    return map instanceof TableItems ? (map as TableItems<number, TableRow>).tableRef(id) : null;
   }
 
   /** The records of one kind as one table, in the kind's order, as `fromJSON` would read them from the file (a city made off the page, `editor/smallCityMap.ts` buildCityTable); null: none. The buildings' go through their own writer (`PreparedCityWriter`). */
@@ -2187,11 +2212,7 @@ export class RoadDoc {
   replaceFromJSON(data: SerializedDoc, options: { readonly repair?: boolean; readonly preparedBuildings?: boolean; readonly buildingTable?: ArrayBufferLike;
     readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>>; readonly whole?: boolean } = {}): void {
     const { buildingTable, tables, whole, ...rest } = options;
-    const sections: Partial<Record<DocTable, TableSections>> = {};
-    const base = (buffer: ArrayBufferLike): TableSections => ({ base: buffer, gone: new Float64Array(0), replaced: null, added: null });
-    for (const [name, buffer] of Object.entries(tables ?? {}) as [DocTable, ArrayBufferLike | null | undefined][]) if (buffer) sections[name] = base(buffer);
-    if (buildingTable) sections.buildings = base(buildingTable);
-    const restored = RoadDoc.fromJSON(data, { ...rest, sections });
+    const restored = RoadDoc.fromJSON(data, { ...rest, tables: { ...tables, ...(buildingTable ? { buildings: buildingTable } : {}) } });
     if (whole) this.replaceWhole(restored); else this.replaceWith(restored);
   }
 
@@ -2837,10 +2858,13 @@ export class RoadDoc {
   }
 
   /** Builds a document from its serialized form. */
-  /** `sections`: the records of each kind kept in a table (`DOC_TABLES`) as their tables (a city made off the page, a map's image): read when asked, never decoded whole; the file's records of the kind, if any, stand over the table. `buildingSections` is the buildings' alone. */
+  /** `sections`: the records of each kind kept in a table (`DOC_TABLES`) as their tables (a city made off the page, a map's image): read when asked, never decoded whole; the file's records of the kind, if any, stand over the table. `tables`: the same as whole tables (a city prepared, a map read from its squares). `buildingSections` is the buildings' alone. */
   static fromJSON(saved: SerializedDoc, options: { readonly repair?: boolean; readonly shareBuildings?: BuildingStore; readonly preparedBuildings?: boolean; readonly buildingSections?: BuildingSections;
-    readonly sections?: Partial<DocTables> } = {}): RoadDoc {
-    const sections = options.sections ?? {};
+    readonly sections?: Partial<DocTables>; readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>> | undefined } = {}): RoadDoc {
+    const sections: Partial<Record<DocTable, TableSections>> = { ...options.sections };
+    for (const [name, buffer] of Object.entries(options.tables ?? {}) as [DocTable, ArrayBufferLike | null | undefined][]) {
+      if (buffer) sections[name] = { base: buffer, gone: new Float64Array(0), replaced: null, added: null };
+    }
     const buildingSections = options.buildingSections ?? sections.buildings;
     // A map saved in another world unit (every map before 2026-10-10: 0.4 m) in this build's.
     const data = rescaleSerializedDoc(saved);

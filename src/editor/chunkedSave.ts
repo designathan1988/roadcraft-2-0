@@ -1,25 +1,22 @@
-import type { Building, BuildingId } from '@world/buildings/types';
-import { type Change, type ChangeKind, type ChangeRect, DOC_CHANGE_KINDS } from '@world/changes';
+import type { Building } from '@world/buildings/types';
+import { RecordTable, type TableReader, TableWriter, type RowPlace, type TableRow, tableRecords } from '@world/buildings/recordTable';
+import { type Change, type ChangeRect, DOC_CHANGE_KINDS } from '@world/changes';
 import { JournalCursor } from '@world/derived';
-import { CELL } from '@world/cells';
-import { TILE } from '@world/tiles';
-import type { PoleId, SpanId } from '@world/ids';
-import type { Lot } from '@world/lotRecord';
-import type { UtilityPole, UtilitySpan } from '@world/utilities';
-import type { LandscapeItem } from '@world/landscape';
-import type { Barrier } from '@world/barriers';
-import {
-  GLOBAL_PARTS, type GlobalPart, type RoadDoc, type RoadNode, type RoadSegment, type SavedGlobals, type SerializedDoc,
-  savedBarrier, savedLandscape, savedNode, savedPole, savedSegment, savedSpan,
-} from '@world/doc';
+import type { DocTable } from '@world/docBinary';
+import { GLOBAL_PARTS, type GlobalPart, type RoadDoc, type SavedGlobals, type SerializedDoc } from '@world/doc';
 import { type PartStore, type SaveEntry, type SaveWriter, gunzip, storeWriter } from './saveStore';
-import { GLOBAL_MAGIC, MANIFEST_MAGIC, REGION_CODEC, readValueFrame, squareFrame, valueFrame, wearFrame } from './regionFrames';
+import { GLOBAL_MAGIC, MANIFEST_MAGIC, REGION_CODEC, type SquareSections, readValueFrame, squareFrame, valueFrame, wearFrame } from './regionFrames';
 import { JSON_CODEC, type SquareBlob, type SquareCodec, readWears, withWear } from './tileCodec';
+import {
+  GLOBAL_KINDS, KEYED, KEYED_NAMES, type KeyedName, LAYER_NAMES, LISTS, LIST_NAMES, type LayerName, type ListName,
+  SAVE_TILE, freshKeyed, freshLists, meets, placeInOrder, squareAt, squareRect,
+} from './saveLayers';
 
 /** How many saved squares are decompressed at once when a map is read (`readTiles`). */
 const GUNZIP_BATCH = 32;
 
-/** THE MAP SAVED BY TILES: each record in the square of the map it stands in, and a save writes only the squares the diary says changed */
+/** THE MAP SAVED BY TILES: each record in the square of the map it stands in, and a save writes only the squares the diary says changed. The layers themselves (each kind of record, where it stands, its square's table): `saveLayers.ts`. */
+export { SAVE_TILE };
 
 /** THE SQUARES AS BINARY REGIONS (manifest 6, 2026-10-21): each square one frame (`saveBinary.ts`) - the buildings their record table (`encodeRecords`), the other layers their records' JSON, the order as doubles - compressed by the save worker; the saves by tiles in JSON (manifest 5) and before them (manifest 3) still open, and are written as regions by the next save */
 
@@ -27,220 +24,30 @@ const GUNZIP_BATCH = 32;
  *  GRID_CELL their measure), under keys of their own. A map saved as regions of the tiles of 1,024 m (manifest 6) opens whole as it was (each
  *  record carries its own place) and its next save files every record again in the squares of now; the manifest 6 and its blobs stay for an older build. */
 
+/**
+ * THE SQUARES CUT FROM THE MAP'S TABLES (manifest 8, 2026-10-26): every kind the document keeps in a table (`DOC_TABLES`: the buildings, the
+ * landscaping, the lots, the poles and the wires) has its squares as record tables, each row copied from the map's table without decoding
+ * (`TableWriter.copyRows`), and a map opened joins its squares' tables into the map's the same way - no record of those kinds is ever an
+ * object on the page for the save. The lots stand in the square of their centre (their table's place columns), as their store files them.
+ * The page keeps no record's square either: a square's records are found from the tables' place columns when it is written. A map saved as
+ * regions before (manifests 6 and 7) opens as it was and is written whole as manifest 8 by its next save; its own blobs stay for an older build.
+ */
+
 /** DO NOT walk the map to find what changed, nor write what did not: an edit in one tile writes that tile, whatever the map's size */
 
-/** The side of the squares the map is saved by: the world's tile (CLAUDE.md, "One grid"; `world/tiles.ts` TILE, 1,000 m). */
-export const SAVE_TILE = TILE;
-/** Buildings and lots by the world's cell: a dense tile holds thousands of buildings of ~7 KB, one edit would write megabytes. */
-const DENSE_SQUARE = CELL;
+/** DO NOT decode a kind kept in a table to save it (every record of the map an object, `tableRecords`), nor keep each record's square on the page (one map entry a record of the map, 600,000 of a 10 km city): a square to write finds its records from the place columns (`membersOf`), and copies their rows (`copyRows`). */
 
-/** The keyed layers (records with ids, any order) and the ordered lists (the order is meaning: stamps and dabs are laid in turn). */
-type KeyedName = 'nodes' | 'segments' | 'poles' | 'spans' | 'landscape' | 'barriers' | 'buildings' | 'lots';
-type ListName = 'stamps' | 'paint' | 'fog' | 'gullies' | 'clouds' | 'trees' | 'clearings' | 'elements' | 'zones' | 'zoneMarks';
-type LayerName = KeyedName | ListName;
-const KEYED_NAMES: readonly KeyedName[] = ['nodes', 'segments', 'poles', 'spans', 'landscape', 'barriers', 'buildings', 'lots'];
-const LIST_NAMES: readonly ListName[] = ['stamps', 'paint', 'fog', 'gullies', 'clouds', 'trees', 'clearings', 'elements', 'zones', 'zoneMarks'];
-const LAYER_NAMES: readonly LayerName[] = [...KEYED_NAMES, ...LIST_NAMES];
-
-interface Place { readonly x: number; readonly y: number }
-interface Keyed { readonly id: number }
-
-/** A keyed layer: its records by id, the point that files each one (one square per record, so it is stored once) and its form in the file. */
-interface KeyedSpec<T extends Keyed = Keyed> {
-  readonly side: number;
-  readonly kinds: readonly ChangeKind[];
-  get(doc: RoadDoc, id: number): T | undefined;
-  all(doc: RoadDoc): Iterable<T>;
-  at(doc: RoadDoc, record: T): Place | undefined;
-  saved(record: T): unknown;
-  /** The record's place in its store's order, where the order means something (the lots: the first one holds a point). */
-  order?(doc: RoadDoc, id: number): number;
-  /** Records of other layers whose square or file form follows this one's (a node's roads: their curves are fitted to it). */
-  reaches?(doc: RoadDoc, record: T): Iterable<readonly [KeyedName, number]>;
-}
-const keyed = <T extends Keyed>(spec: KeyedSpec<T>): KeyedSpec => spec as unknown as KeyedSpec;
-const nodeOf = (doc: RoadDoc, id: number): RoadNode | undefined => (doc.nodes as ReadonlyMap<number, RoadNode>).get(id);
-
-/** DO NOT file a road in every tile it crosses: a road is filed by its end `a`, a span by its pole `a`, a barrier by its first point. */
-const KEYED: Readonly<Record<KeyedName, KeyedSpec>> = {
-  nodes: keyed<RoadNode>({
-    side: SAVE_TILE, kinds: ['roads', 'traffic'], get: nodeOf, all: (doc) => doc.nodes.values(), at: (_doc, n) => n, saved: savedNode,
-    reaches: (_doc, n) => n.incident.map((s) => ['segments', s] as const),
-  }),
-  segments: keyed<RoadSegment>({
-    side: SAVE_TILE, kinds: ['roads', 'traffic'], get: (doc, id) => (doc.segments as ReadonlyMap<number, RoadSegment>).get(id),
-    all: (doc) => doc.segments.values(), at: (doc, s) => nodeOf(doc, s.a), saved: savedSegment,
-  }),
-  poles: keyed<UtilityPole>({
-    side: SAVE_TILE, kinds: ['utilities'], get: (doc, id) => doc.poles.get(id as PoleId), all: (doc) => doc.poles.values(), at: (_doc, p) => p,
-    saved: savedPole, reaches: (doc, p) => doc.spansAt(p.id).map((s) => ['spans', s.id] as const),
-  }),
-  spans: keyed<UtilitySpan>({
-    side: SAVE_TILE, kinds: ['utilities'], get: (doc, id) => doc.poleSpans.get(id as SpanId), all: (doc) => doc.poleSpans.values(),
-    at: (doc, s) => doc.poles.get(s.a), saved: savedSpan,
-  }),
-  landscape: keyed<LandscapeItem>({
-    side: SAVE_TILE, kinds: ['landscape'], get: (doc, id) => doc.landscape.get(id), all: (doc) => doc.landscape.values(), at: (_doc, item) => item,
-    saved: savedLandscape,
-  }),
-  barriers: keyed<Barrier>({
-    side: SAVE_TILE, kinds: ['barriers'], get: (doc, id) => doc.barriers.get(id), all: (doc) => doc.barriers.values(), at: (_doc, b) => b.points[0],
-    saved: savedBarrier,
-  }),
-  // `JSON.stringify` of a record is the text of its copy (`cloneBuilding` is a JSON round trip): the record itself is handed on.
-  buildings: keyed<Building>({
-    side: DENSE_SQUARE, kinds: ['buildings'], get: (doc, id) => doc.buildings.get(id as BuildingId), all: (doc) => doc.buildings.all(),
-    at: (_doc, b) => b, saved: (b) => b,
-  }),
-  lots: keyed<Lot>({
-    side: DENSE_SQUARE, kinds: ['lots'], get: (doc, id) => doc.lotStore.get(id), all: (doc) => doc.lotStore.all(), at: (_doc, lot) => lot.corners[0],
-    saved: (lot) => lot, order: (doc, id) => doc.lotStore.orderOf(id) ?? 0,
-  }),
-};
-
-/** An ordered list: its items and the point that files each one. */
-interface ListSpec<T extends object = object> {
-  readonly side: number;
-  readonly kinds: readonly ChangeKind[];
-  list(doc: RoadDoc): readonly T[];
-  at(item: T): Place;
-}
-const listed = <T extends object>(spec: ListSpec<T>): ListSpec => spec as unknown as ListSpec;
-const itself = (item: Place): Place => item;
-const LISTS: Readonly<Record<ListName, ListSpec>> = {
-  stamps: listed<Place>({ side: SAVE_TILE, kinds: ['terrain'], list: (doc) => doc.terrainStamps, at: itself }),
-  paint: listed<Place>({ side: SAVE_TILE, kinds: ['paint'], list: (doc) => doc.terrainPaint, at: itself }),
-  fog: listed<Place>({ side: SAVE_TILE, kinds: ['fog'], list: (doc) => doc.fogDabs, at: itself }),
-  gullies: listed<Place>({ side: SAVE_TILE, kinds: ['gullies'], list: (doc) => doc.gullyDabs, at: itself }),
-  clouds: listed<Place>({ side: SAVE_TILE, kinds: ['clouds'], list: (doc) => doc.clouds, at: itself }),
-  trees: listed<Place>({ side: SAVE_TILE, kinds: ['trees'], list: (doc) => doc.trees, at: itself }),
-  clearings: listed<Place>({ side: SAVE_TILE, kinds: ['clearings'], list: (doc) => doc.treeClearings, at: itself }),
-  elements: listed<Place>({ side: SAVE_TILE, kinds: ['elements'], list: (doc) => doc.elements, at: itself }),
-  zones: listed<{ readonly x0: number; readonly y0: number }>({ side: SAVE_TILE, kinds: ['zones'], list: (doc) => doc.zones, at: (z) => ({ x: z.x0, y: z.y0 }) }),
-  zoneMarks: listed<Place>({ side: SAVE_TILE, kinds: ['zones'], list: (doc) => doc.zoneMarks, at: itself }),
-};
-
-/** The kinds each part kept outside the tiles is written again for. */
-const GLOBAL_KINDS: Readonly<Record<GlobalPart, readonly ChangeKind[]>> = {
-  values: ['terrain', 'fog', 'gullies', 'nature', 'weather', 'economy', 'markingStyle'],
-  lotKeys: ['lotKeys'],
-  people: ['people'],
-  transit: ['transit'],
-};
-
-/** A record with no place (a road whose end is gone) is filed in the square at the origin. */
-const NOWHERE = '0,0';
-const squareAt = (at: Place | undefined, side: number): string => (at ? `${Math.floor(at.x / side)},${Math.floor(at.y / side)}` : NOWHERE);
-function squareRect(square: string, side: number): ChangeRect {
-  const comma = square.indexOf(',');
-  const cx = Number(square.slice(0, comma)), cy = Number(square.slice(comma + 1));
-  return [cx * side, cy * side, (cx + 1) * side, (cy + 1) * side];
-}
-const meets = (a: ChangeRect, b: ChangeRect): boolean => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
-
-/** Where a keyed layer's records are filed and which squares are stored and which are not the map's any more. */
-class KeyedState {
-  /** Each record's square as the map stood at the last look. */
-  readonly where = new Map<number, string>();
-  readonly members = new Map<string, Set<number>>();
-  /** The squares with a blob stored. */
-  stored = new Set<string>();
-  /** The squares whose blob is not the map's: written by the next save. */
-  dirty = new Set<string>();
-  /** The buildings' squares whose wears alone changed. */
-  wear = new Set<string>();
-
-  private readonly names = new Map<string, string>();
-  /** A record now in `square` (null: gone): where it was and where it is are both written again. Each square's name kept once (`names`): DO NOT keep a string of its own for every record's square in `where` (~30 B a record of the map). */
-  place(id: number, square: string | null): void {
-    const now = square === null ? null : this.names.get(square) ?? this.names.set(square, square).get(square)!;
-    const was = this.where.get(id);
-    if (was !== undefined) this.dirty.add(was);
-    if (now !== null) this.dirty.add(now);
-    if (was === now) return;
-    if (was !== undefined) {
-      const set = this.members.get(was);
-      set?.delete(id);
-      if (set?.size === 0) this.members.delete(was);
-    }
-    if (now === null) { this.where.delete(id); return; }
-    this.where.set(id, now);
-    let set = this.members.get(now);
-    if (!set) this.members.set(now, set = new Set());
-    set.add(id);
-  }
-
-  /** The squares a change reaches (null: all of them), among those that hold records or a blob. */
-  dirtyOver(rects: readonly ChangeRect[] | null, side: number): void {
-    const visit = (square: string): void => {
-      if (rects === null || rects.some((r) => meets(r, squareRect(square, side)))) this.dirty.add(square);
-    };
-    for (const square of this.members.keys()) visit(square);
-    for (const square of this.stored) visit(square);
-  }
-}
-
-/** An ordered list's items by reference: each one's place in the order (a fraction between its neighbours') and its square. */
-class ListState {
-  ords = new WeakMap<object, number>();
-  square = new WeakMap<object, string>();
-  counts = new Map<string, number>();
-  stored = new Set<string>();
-  dirty = new Set<string>();
-  /** The diary wrote the list's kind since the last look, and where (null: anywhere). */
-  changed = false;
-  rects: ChangeRect[] | null = [];
-}
-
-const freshKeyed = (): Record<KeyedName, KeyedState> =>
-  Object.fromEntries(KEYED_NAMES.map((name) => [name, new KeyedState()])) as Record<KeyedName, KeyedState>;
-const freshLists = (): Record<ListName, ListState> =>
-  Object.fromEntries(LIST_NAMES.map((name) => [name, new ListState()])) as Record<ListName, ListState>;
-
-/** DO NOT number the items by their index: one item taken from the front would renumber, and write, every tile of the list */
-function placeInOrder(list: readonly object[], ords: WeakMap<object, number>): Set<object> | 'all' {
-  const fresh = new Set<object>();
-  let last = -Infinity;
-  let i = 0;
-  while (i < list.length) {
-    const own = ords.get(list[i]!);
-    if (own !== undefined && own > last) { last = own; i++; continue; }
-    // A run of items with no place (new, or out of order) up to the next one whose place still holds.
-    let j = i + 1;
-    while (j < list.length) {
-      const next = ords.get(list[j]!);
-      if (next !== undefined && next > last) break;
-      j++;
-    }
-    const count = j - i;
-    const bound = j < list.length ? ords.get(list[j]!)! : undefined;
-    const lo = last !== -Infinity ? last : bound !== undefined ? bound - count - 1 : 0;
-    const hi = bound ?? lo + count + 1;
-    const step = (hi - lo) / (count + 1);
-    for (let k = 0; k < count; k++) {
-      const value = lo + step * (k + 1);
-      // No room left between two neighbours in a double: the whole list numbered again (every one of its tiles written).
-      if (!(value > last) || !(value < hi)) { list.forEach((item, at) => ords.set(item, at + 1)); return 'all'; }
-      ords.set(list[i + k]!, value);
-      fresh.add(list[i + k]!);
-      last = value;
-    }
-    i = j;
-  }
-  return fresh;
-}
-
-/** A format by squares: version 5 (the tiles in JSON), 6 (binary regions of the tiles of 1,024 m), 7 (binary regions of the tiles of 1,000 m and the cells of 250 m), each layer's squares by key, the parts kept outside the tiles. */
+/** A format by squares: version 5 (the tiles in JSON), 6 (binary regions of the tiles of 1,024 m), 7 (binary regions of the tiles of 1,000 m and the cells of 250 m), 8 (the same squares, every kind kept in a table as tables cut from the map's), each layer's squares by key, the parts kept outside the tiles. */
 interface TiledManifest {
-  readonly version: 5 | 6 | 7;
+  readonly version: 5 | 6 | 7 | 8;
   readonly savedAt: number;
   readonly settings: unknown;
   readonly squares: Partial<Record<LayerName, readonly string[]>>;
   readonly globals: readonly GlobalPart[];
 }
-/** The binary regions on the universal grid: the same index as the tiles', its blobs binary frames under keys of their own. */
+/** The binary regions cut from the map's tables: the same index as the tiles', its blobs binary frames under keys of their own. */
 interface RegionManifest {
-  readonly version: 7;
+  readonly version: 8;
   readonly savedAt: number;
   readonly settings: unknown;
   readonly squares: Partial<Record<LayerName, readonly string[]>>;
@@ -256,7 +63,7 @@ interface OldManifest {
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
 
-function isTiledManifest(value: unknown, version: 5 | 6 | 7 = 5): value is TiledManifest {
+function isTiledManifest(value: unknown, version: 5 | 6 | 7 | 8 = 5): value is TiledManifest {
   if (!isObject(value) || value['version'] !== version || typeof value['savedAt'] !== 'number') return false;
   const squares = value['squares'], globals = value['globals'];
   if (!isObject(squares) || !Array.isArray(globals)) return false;
@@ -272,19 +79,21 @@ function isOldManifest(value: unknown): value is OldManifest {
 
 /** How the map just read was stored: what `adopt` needs so the next save writes only what changes. */
 export interface SavedLayout {
-  /** The keys of a map saved in a format before the binary regions (kept for an older build; the next save writes the map whole as regions); null: saved as regions. */
+  /** The keys of a map saved in a format before this one (kept for an older build; the next save writes the map whole in this one); null: saved in this format. */
   readonly old: readonly string[] | null;
   readonly squares: Partial<Record<LayerName, readonly string[]>>;
   readonly globals: readonly GlobalPart[];
-  /** Each keyed record's square, as stored. */
-  readonly where: Partial<Record<KeyedName, ReadonlyMap<number, string>>>;
   /** Each list's places in the order and squares, in the order read. */
   readonly lists: Partial<Record<ListName, { readonly ords: readonly number[]; readonly squares: readonly string[] }>>;
 }
 
+/** The tables a map read back from its squares holds its records in (the kinds kept in tables), each joined from its squares without decoding; a kind absent has its records in the document (a save before manifest 8). */
+export type SavedTables = Partial<Record<DocTable, ArrayBufferLike>>;
+
 /** What a tiled save reads back. */
 interface TiledSession {
   readonly document: SerializedDoc;
+  readonly tables: SavedTables;
   readonly settings: unknown;
   readonly savedAt: number;
   readonly layout: SavedLayout;
@@ -305,7 +114,7 @@ export class TiledSaves {
   /** The parts kept outside the tiles to write again, and those stored. */
   private globals = new Set<GlobalPart>(GLOBAL_PARTS);
   private storedGlobals = new Set<GlobalPart>();
-  /** The keys of a map stored before the tiles: removed in the transaction that writes it by tiles. */
+  /** The keys of a map stored before this format: removed in the transaction that writes it by tiles. */
   private oldKeys: readonly string[] = [];
   /** Saves one after another: a save under way finishes before the next reads the map. */
   private queue: Promise<unknown> = Promise.resolve();
@@ -315,11 +124,12 @@ export class TiledSaves {
     this.writer = store.writer ?? storeWriter(store);
   }
 
-  private blobKey(layer: LayerName, square: string): string { return `${this.key}:R7:${layer}:${square}`; }
-  private wearKey(square: string): string { return `${this.key}:RW7:${square}`; }
-  private globalKey(part: GlobalPart): string { return `${this.key}:RG7:${part}`; }
-  /** The regions' manifest (version 7). The manifests before it (`:regions`, version 6; `:tiles`, version 5 in JSON; `:manifest`, version 3) are never written here: an older build still opens the map they hold. */
-  private get manifestKey(): string { return `${this.key}:regions7`; }
+  private blobKey(layer: LayerName, square: string): string { return `${this.key}:R8:${layer}:${square}`; }
+  private wearKey(square: string): string { return `${this.key}:RW8:${square}`; }
+  private globalKey(part: GlobalPart): string { return `${this.key}:RG8:${part}`; }
+  /** The regions' manifest (version 8). The manifests before it (`:regions7`, version 7; `:regions`, version 6; `:tiles`, version 5 in JSON; `:manifest`, version 3) are never written here: an older build still opens the map they hold. */
+  private get manifestKey(): string { return `${this.key}:regions8`; }
+  private get regions7ManifestKey(): string { return `${this.key}:regions7`; }
   private get regions6ManifestKey(): string { return `${this.key}:regions`; }
   private get tilesManifestKey(): string { return `${this.key}:tiles`; }
   private get oldManifestKey(): string { return `${this.key}:manifest`; }
@@ -334,6 +144,12 @@ export class TiledSaves {
     wear: (square) => this.wearKey(square),
     global: (part) => this.globalKey(part),
   };
+  /** The keys of the regions on the universal grid before the tables (manifest 7). */
+  private readonly regions7Keys: SquareKeys = {
+    blob: (layer, square) => `${this.key}:R7:${layer}:${square}`,
+    wear: (square) => `${this.key}:RW7:${square}`,
+    global: (part) => `${this.key}:RG7:${part}`,
+  };
   /** The keys of the regions of the tiles of 1,024 m (manifest 6). */
   private readonly regions6Keys: SquareKeys = {
     blob: (layer, square) => `${this.key}:R:${layer}:${square}`,
@@ -345,8 +161,12 @@ export class TiledSaves {
     return this.queued(() => this.write(doc, settings, savedAt));
   }
 
-  /** The document just opened from this store (`Persistence.adoptLoaded`): what it holds is what is stored. */
-  adopt(doc: RoadDoc, layout: SavedLayout): void {
+  /**
+   * The document just opened from this store (`Persistence.adoptLoaded`): what it holds is what is stored. `since`: the diary's serial once
+   * the map stood replaced (`restoreInto` replacedAt): what was written after it (its roads repaired at the opening) is written by the
+   * next save; the default, the diary as it stands now, nothing.
+   */
+  adopt(doc: RoadDoc, layout: SavedLayout, since: number = doc.changes.version): void {
     this.doc = doc;
     this.cursor.read(doc.changes);
     this.keyed = freshKeyed();
@@ -354,16 +174,9 @@ export class TiledSaves {
     this.globals = new Set();
     this.storedGlobals = new Set(layout.globals);
     this.oldKeys = layout.old ?? [];
-    // A map stored before the tiles: written whole, by tiles, at the next save.
+    // A map stored in a format before this one: written whole, in this one, at the next save.
     if (layout.old) { this.everything(doc); return; }
-    for (const name of KEYED_NAMES) {
-      const st = this.keyed[name];
-      st.stored = new Set(layout.squares[name] ?? []);
-      for (const [id, square] of layout.where[name] ?? []) st.place(id, square);
-      st.dirty.clear();
-      // @rebuild Once, at the opening: a record the loader moved or dropped (a repair) has its squares written again.
-      this.reconcile(doc, name, []);
-    }
+    for (const name of KEYED_NAMES) this.keyed[name].stored = new Set(layout.squares[name] ?? []);
     for (const name of LIST_NAMES) {
       const st = this.lists[name], spec = LISTS[name];
       st.stored = new Set(layout.squares[name] ?? []);
@@ -379,11 +192,15 @@ export class TiledSaves {
         if (squareAt(spec.at(item), spec.side) !== square) st.changed = true;
       });
     }
+    // What the loader wrote after the map stood replaced (a repair of its roads): those squares again. Too far back for the diary: everything.
+    const entries = doc.changes.since(since, DOC_CHANGE_KINDS);
+    if (entries === null) { this.everything(doc); return; }
+    for (const entry of entries) this.note(doc, entry);
   }
 
   /** Nothing is known to be stored the way the map stands: the next save compares and writes every square. */
   private everything(doc: RoadDoc): void {
-    for (const name of KEYED_NAMES) this.reconcile(doc, name, null);
+    for (const name of KEYED_NAMES) this.wholeLayer(doc, name);
     for (const name of LIST_NAMES) { this.lists[name].changed = true; this.lists[name].rects = null; }
     for (const part of GLOBAL_PARTS) this.globals.add(part);
   }
@@ -403,9 +220,12 @@ export class TiledSaves {
     if (kind === 'buildingWear') { this.worn(doc, entry); return; }
     for (const name of KEYED_NAMES) {
       if (!KEYED[name].kinds.includes(kind)) continue;
-      // The ids of an entry may be of either layer of its kind (a road's: nodes and segments): each one looked up in both.
-      if (entry.ids) for (const id of entry.ids) this.touch(doc, name, id);
-      else this.reconcile(doc, name, entry.rects);
+      if (entry.rects === null) { this.wholeLayer(doc, name); continue; }
+      const spec = KEYED[name], st = this.keyed[name];
+      // Where the records were: the stored squares the change reaches (the diary's rectangles cover a record's old place as its new one, or the renderer would show it stale).
+      st.dirtyStored(entry.rects, spec.side);
+      // Where they are now: the ids named looked up (either layer of the kind: a road's entry names nodes and segments, each looked up in both), else every record the rectangles reach.
+      if (entry.ids) { for (const id of entry.ids) this.touch(doc, name, id); } else this.squaresMeeting(doc, name, entry.rects);
     }
     for (const name of LIST_NAMES) {
       if (!LISTS[name].kinds.includes(kind)) continue;
@@ -418,34 +238,44 @@ export class TiledSaves {
 
   /** Buildings whose wear alone changed: their squares' wears, never their records. */
   private worn(doc: RoadDoc, entry: Change): void {
-    const st = this.keyed.buildings;
-    if (!entry.ids) { for (const square of st.members.keys()) st.wear.add(square); return; }
+    const spec = KEYED.buildings, st = this.keyed.buildings;
+    if (!entry.ids) { for (const square of this.occupied(doc, 'buildings')) st.wear.add(square); return; }
     for (const id of entry.ids) {
-      if (!st.where.has(id)) this.touch(doc, 'buildings', id);
-      const square = st.where.get(id);
-      if (square !== undefined) st.wear.add(square);
+      const at = spec.placeOf(doc, id);
+      if (at) st.wear.add(squareAt(at, spec.side));
     }
   }
 
-  /** One record of a layer looked up by id: where it was and where it is now written again. */
+  /** One record of a layer looked up by id: the square it stands in now written again (the one it left is reached by the entry's rectangles). */
   private touch(doc: RoadDoc, name: KeyedName, id: number): void {
     const spec = KEYED[name];
-    const record = spec.get(doc, id);
-    this.keyed[name].place(id, record ? squareAt(spec.at(doc, record), spec.side) : null);
-    if (record && spec.reaches) for (const [other, otherId] of spec.reaches(doc, record)) this.touch(doc, other, otherId);
+    if (!spec.items(doc).has(id)) return;
+    this.keyed[name].dirty.add(squareAt(spec.placeOf(doc, id), spec.side));
   }
 
-  /** @rebuild An entry that names no ids (a whole-map change): the layer's records walked once, each one's square checked */
-  private reconcile(doc: RoadDoc, name: KeyedName, rects: readonly ChangeRect[] | null): void {
+  /** @rebuild The squares a layer's records stand in, each once: one pass of the ids and places (a table's columns, no record decoded). */
+  private occupied(doc: RoadDoc, name: KeyedName): Set<string> {
+    const spec = KEYED[name];
+    const out = new Set<string>();
+    for (const id of spec.items(doc).keys()) out.add(squareAt(spec.placeOf(doc, id), spec.side));
+    return out;
+  }
+
+  /** A change of a whole layer (an entry without a place): every square that holds records or a blob written again. */
+  private wholeLayer(doc: RoadDoc, name: KeyedName): void {
+    const st = this.keyed[name];
+    st.dirtyStored(null, KEYED[name].side);
+    for (const square of this.occupied(doc, name)) st.dirty.add(square);
+  }
+
+  /** A change over rectangles naming no ids: the squares of the records standing in them written again. */
+  private squaresMeeting(doc: RoadDoc, name: KeyedName, rects: readonly ChangeRect[]): void {
     const spec = KEYED[name], st = this.keyed[name];
-    const seen = new Set<number>();
-    for (const record of spec.all(doc)) {
-      seen.add(record.id);
-      const now = squareAt(spec.at(doc, record), spec.side);
-      if (st.where.get(record.id) !== now) st.place(record.id, now);
+    for (const square of this.occupied(doc, name)) {
+      if (st.dirty.has(square)) continue;
+      const rect = squareRect(square, spec.side);
+      if (rects.some((r) => meets(r, rect))) st.dirty.add(square);
     }
-    for (const id of [...st.where.keys()]) if (!seen.has(id)) st.place(id, null);
-    st.dirtyOver(rects, spec.side);
   }
 
   /** An ordered list whose kind changed: each item's place in the order kept (new ones between their neighbours) and its square checked. */
@@ -478,6 +308,19 @@ export class TiledSaves {
     st.rects = [];
   }
 
+  /** The records standing in each of `squares`, by id in increasing order: one pass of the layer's ids and places (a table's columns, no record decoded), never a walk a square. */
+  private membersOf(doc: RoadDoc, name: KeyedName, squares: ReadonlySet<string>): Map<string, number[]> {
+    const spec = KEYED[name];
+    const out = new Map<string, number[]>();
+    for (const square of squares) out.set(square, []);
+    for (const id of spec.items(doc).keys()) {
+      const list = out.get(squareAt(spec.placeOf(doc, id), spec.side));
+      if (list) list.push(id);
+    }
+    for (const list of out.values()) list.sort((a, b) => a - b);
+    return out;
+  }
+
   private async write(doc: RoadDoc, settings: unknown, savedAt: number): Promise<boolean> {
     this.take(doc);
     for (const name of LIST_NAMES) if (this.lists[name].changed) this.walk(doc, name);
@@ -488,6 +331,11 @@ export class TiledSaves {
     const takenKeyed = new Map<KeyedName, { readonly dirty: Set<string>; readonly wear: Set<string> }>();
     const takenLists = new Map<ListName, Set<string>>();
     const nextStored = new Map<LayerName, Set<string>>();
+    // The map's tables the rows are copied from, and their readers (a building's wear read from its row alone), one each for this save.
+    const tables = new Map<ArrayBufferLike, RecordTable>();
+    const readers = new Map<ArrayBufferLike, TableReader>();
+    const tableOf = (buffer: ArrayBufferLike): RecordTable => { let t = tables.get(buffer); if (!t) tables.set(buffer, t = new RecordTable(buffer)); return t; };
+    const readerOf = (buffer: ArrayBufferLike): TableReader => { let r = readers.get(buffer); if (!r) readers.set(buffer, r = tableOf(buffer).reader()); return r; };
     for (const name of KEYED_NAMES) {
       const spec = KEYED[name], st = this.keyed[name];
       const { dirty, wear } = st;
@@ -495,23 +343,48 @@ export class TiledSaves {
       st.wear = new Set();
       takenKeyed.set(name, { dirty, wear });
       const stored = new Set(st.stored);
+      const asked = new Set<string>(dirty);
+      for (const square of wear) if (!dirty.has(square) && st.stored.has(square)) asked.add(square);
+      const members = asked.size ? this.membersOf(doc, name, asked) : new Map<string, number[]>();
+      const items = spec.items(doc);
+      /** A square's wears: each building's id and decay, the decay of a row of the table read from the row alone (`TableReader.field`). */
+      const wears = (ids: readonly number[]): ArrayBuffer => {
+        const pairs: number[] = [];
+        for (const id of ids) {
+          const ref = spec.ref?.(doc, id);
+          const decay = ref ? readerOf(ref.buffer).field(ref.row, 'decay') : (items.get(id) as Building | undefined)?.decay;
+          pairs.push(id, typeof decay === 'number' ? decay : 0);
+        }
+        return wearFrame(pairs);
+      };
       for (const square of dirty) {
-        const records = this.recordsIn(doc, name, square);
-        if (records.length === 0) {
+        const ids = members.get(square) ?? [];
+        if (ids.length === 0) {
           if (st.stored.has(square)) { remove.push(this.blobKey(name, square)); if (name === 'buildings') remove.push(this.wearKey(square)); }
           stored.delete(square);
           continue;
         }
-        const orders = spec.order ? records.map((r) => spec.order!(doc, r.id)) : null;
-        put.push({ key: this.blobKey(name, square), bytes: squareFrame(name === 'buildings', records.map((r) => spec.saved(r)), orders), packed: true });
-        if (name === 'buildings') put.push({ key: this.wearKey(square), bytes: wearFrame(records as Building[]), packed: false });
+        const orders = spec.order ? ids.map((id) => spec.order!(doc, id)) : null;
+        let records: ArrayBufferLike | unknown[];
+        if (spec.table) {
+          // A kind kept in a table: the square's rows copied from the map's table, nothing decoded; a record written on the page encoded as the file holds it.
+          const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null);
+          for (const id of ids) {
+            const ref = spec.ref!(doc, id);
+            if (ref) writer.copyRows(tableOf(ref.buffer), [ref.row]);
+            else writer.add([spec.saved(items.get(id)!) as TableRow]);
+          }
+          records = writer.finish().buffer;
+        } else records = ids.map((id) => spec.saved(items.get(id)!));
+        put.push({ key: this.blobKey(name, square), bytes: squareFrame(records, orders), packed: true });
+        if (name === 'buildings') put.push({ key: this.wearKey(square), bytes: wears(ids), packed: false });
         stored.add(square);
       }
       // The stored squares whose wears alone are written: their records stand as stored.
       for (const square of wear) {
         if (dirty.has(square) || !st.stored.has(square)) continue;
-        const records = this.recordsIn(doc, name, square);
-        if (records.length) put.push({ key: this.wearKey(square), bytes: wearFrame(records as Building[]), packed: false });
+        const ids = members.get(square) ?? [];
+        if (ids.length) put.push({ key: this.wearKey(square), bytes: wears(ids), packed: false });
       }
       nextStored.set(name, stored);
     }
@@ -535,7 +408,7 @@ export class TiledSaves {
             stored.delete(square);
             continue;
           }
-          put.push({ key: this.blobKey(name, square), bytes: squareFrame(false, blob.r, blob.o), packed: true });
+          put.push({ key: this.blobKey(name, square), bytes: squareFrame(blob.r, blob.o), packed: true });
           stored.add(square);
         }
       }
@@ -547,7 +420,7 @@ export class TiledSaves {
     const storedGlobals = new Set([...this.storedGlobals, ...globals]);
     const squares: Partial<Record<LayerName, string[]>> = {};
     for (const [name, set] of nextStored) if (set.size) squares[name] = [...set].sort();
-    const manifest: RegionManifest = { version: 7, savedAt, settings, squares, globals: GLOBAL_PARTS.filter((p) => storedGlobals.has(p)) };
+    const manifest: RegionManifest = { version: 8, savedAt, settings, squares, globals: GLOBAL_PARTS.filter((p) => storedGlobals.has(p)) };
     put.push({ key: this.manifestKey, bytes: valueFrame(MANIFEST_MAGIC, manifest), packed: false });
     const oldKeys = this.oldKeys;
     this.oldKeys = [];
@@ -568,21 +441,14 @@ export class TiledSaves {
     return true;
   }
 
-  /** The records filed in one square, by id: the square's ids looked up, never the layer walked. */
-  private recordsIn(doc: RoadDoc, name: KeyedName, square: string): Keyed[] {
-    const spec = KEYED[name];
-    const ids = [...(this.keyed[name].members.get(square) ?? [])].sort((a, b) => a - b);
-    const out: Keyed[] = [];
-    for (const id of ids) { const record = spec.get(doc, id); if (record) out.push(record); }
-    return out;
-  }
-
-  /** The map saved here (as regions on the universal grid, as regions of the tiles of 1,024 m, by tiles in JSON, or in the format before them), or null when there is none or it cannot be read. Each format is known by its manifest, the regions' by its magic word. */
+  /** The map saved here (as regions cut from its tables, as regions on the universal grid or of the tiles of 1,024 m, by tiles in JSON, or in the format before them), or null when there is none or it cannot be read. Each format is known by its manifest, the regions' by its magic word. */
   async read(): Promise<TiledSession | null> {
-    const [regionBlob, regions6Blob, tilesBlob, oldBlob] = await this.store.get([this.manifestKey, this.regions6ManifestKey, this.tilesManifestKey, this.oldManifestKey]);
+    const [regionBlob, regions7Blob, regions6Blob, tilesBlob, oldBlob] = await this.store.get([this.manifestKey, this.regions7ManifestKey, this.regions6ManifestKey, this.tilesManifestKey, this.oldManifestKey]);
     const regions = regionBlob ? readValueFrame(await regionBlob.arrayBuffer(), MANIFEST_MAGIC) : null;
-    if (isTiledManifest(regions, 7)) return this.readSquares(regions, this.regionKeys, REGION_CODEC, null);
-    // Squares of the tiles of 1,024 m: read whole as they were, every record filed again in the squares of now by the next save (`adopt`, layout `old`).
+    if (isTiledManifest(regions, 8)) return this.readSquares(regions, this.regionKeys, REGION_CODEC, null);
+    // The regions before the tables (manifest 7), and of the tiles of 1,024 m (6): read as they were, every record filed again in the squares of now by the next save (`adopt`, layout `old`).
+    const regions7 = regions7Blob ? readValueFrame(await regions7Blob.arrayBuffer(), MANIFEST_MAGIC) : null;
+    if (isTiledManifest(regions7, 7)) return this.readSquares(regions7, this.regions7Keys, REGION_CODEC, [...this.keysOf(regions7, this.regions7Keys), this.regions7ManifestKey]);
     const regions6 = regions6Blob ? readValueFrame(await regions6Blob.arrayBuffer(), MANIFEST_MAGIC) : null;
     if (isTiledManifest(regions6, 6)) return this.readSquares(regions6, this.regions6Keys, REGION_CODEC, [...this.keysOf(regions6, this.regions6Keys), this.regions6ManifestKey]);
     const tiles: unknown = tilesBlob ? JSON.parse(await tilesBlob.text()) : null;
@@ -601,7 +467,12 @@ export class TiledSaves {
     return out;
   }
 
-  /** A map by squares read back, its blobs decoded by `codec`; `old`: the keys of a format before the regions (the next save writes the map whole). */
+  /**
+   * A map by squares read back, its blobs decoded by `codec`; `old`: the keys of a format before this one (the next save writes the map
+   * whole). A kind kept in a table whose every square is a table (manifest 8; the buildings' since 6) is joined into one table of the
+   * map, row by row without decoding (`copyRows`), in id order (the lots in their order), a building whose stored wear differs from its
+   * row's alone decoded and written with it; a kind with a square in JSON (a save before) goes to the document as records, as before.
+   */
   private async readSquares(manifest: TiledManifest, keys: SquareKeys, codec: SquareCodec, old: readonly string[] | null): Promise<TiledSession | null> {
     const blobs: { layer: LayerName; square: string }[] = [];
     for (const name of LAYER_NAMES) for (const square of manifest.squares[name] ?? []) blobs.push({ layer: name, square });
@@ -627,10 +498,12 @@ export class TiledSaves {
       if (read) for (const [id, decay] of read) wears.set(id, decay);
     }
     const keyedRead = new Map<KeyedName, { record: unknown; id: number; order: number; square: string }[]>();
+    /** A kind kept in a table: each square's table and the order of its rows, joined once every square is read (`joined`). */
+    const tableRead = new Map<KeyedName, { table: RecordTable; orders: Float64Array | null }[]>();
     const listRead = new Map<ListName, { item: unknown; ord: number; square: string }[]>();
     // DO NOT wait for each square's decompression before starting the next (EDT-03: hundreds, one after the other, at the opening): a batch at a time in flight, read in the same order.
     for (let i = 0; i < blobs.length; i += GUNZIP_BATCH) {
-      const batch: Promise<SquareBlob | null>[] = [];
+      const batch: Promise<SquareBlob | SquareSections | null>[] = [];
       for (let k = i; k < Math.min(blobs.length, i + GUNZIP_BATCH); k++) {
         const blob = got[k];
         if (!blob) return null;
@@ -643,21 +516,47 @@ export class TiledSaves {
         const { layer, square } = blobs[i + k]!;
         if ((KEYED_NAMES as readonly LayerName[]).includes(layer)) {
           const name = layer as KeyedName;
+          if ('table' in value && value.table) {
+            if (KEYED[name].table) {
+              // The table in a buffer of its own: its columns are read from offset 0 (`RecordTable`).
+              const list = tableRead.get(name) ?? [];
+              tableRead.set(name, list);
+              list.push({ table: new RecordTable(value.table.slice().buffer), orders: value.orders });
+              continue;
+            }
+          }
+          const records = squareRecords(value);
+          if (!records) return null;
           const out = keyedRead.get(name) ?? [];
           keyedRead.set(name, out);
-          value.r.forEach((record, j) => out.push({
-            record: name === 'buildings' ? withWear(record, wears) : record, id: idOf(record), order: value.o?.[j] ?? 0, square,
+          records.r.forEach((record, j) => out.push({
+            record: name === 'buildings' ? withWear(record, wears) : record, id: idOf(record), order: records.o?.[j] ?? 0, square,
           }));
         } else {
           const name = layer as ListName;
-          if (!value.o) return null;
+          const records = squareRecords(value);
+          if (!records?.o) return null;
           const out = listRead.get(name) ?? [];
           listRead.set(name, out);
-          value.r.forEach((item, j) => out.push({ item, ord: value.o![j]!, square }));
+          records.r.forEach((item, j) => out.push({ item, ord: records.o![j]!, square }));
         }
       }
     }
     performance.mark('save:parsed');
+    // A kind with a square in JSON beside its tables (a save of two formats): every record of it as an object, the tables decoded too.
+    const tables: Partial<Record<DocTable, ArrayBufferLike>> = {};
+    for (const [name, squares] of tableRead) {
+      const spec = KEYED[name];
+      if (keyedRead.has(name)) {
+        const out = keyedRead.get(name)!;
+        for (const { table, orders } of squares) {
+          const records = tableRecords(table.buffer);
+          records.forEach((record, j) => out.push({ record: name === 'buildings' ? withWear(record, wears) : record, id: table.ids[j]!, order: orders?.[j] ?? 0, square: '' }));
+        }
+        continue;
+      }
+      tables[spec.table!] = this.joined(name, squares, wears);
+    }
     for (const [name, out] of keyedRead) out.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
     for (const out of listRead.values()) out.sort((a, b) => a.ord - b.ord);
     const records = (name: KeyedName): unknown[] => (keyedRead.get(name) ?? []).map((e) => e.record);
@@ -672,16 +571,38 @@ export class TiledSaves {
       poles: records('poles'), poleSpans: records('spans'), landscape: records('landscape'), barriers: records('barriers'),
       buildings: records('buildings'), zones: items('zones'), zoneMarks: items('zoneMarks'), lots: records('lots'), lotKeys: rest.lotKeys ?? [],
     } as unknown as SerializedDoc;
-    // A format before the regions: nothing of it is the regions' layout, the next save writes every square.
-    if (old) return { document, settings: manifest.settings, savedAt: manifest.savedAt, layout: { old, squares: {}, globals: [], where: {}, lists: {} } };
-    const where: Partial<Record<KeyedName, Map<number, string>>> = {};
-    for (const [name, out] of keyedRead) where[name] = new Map(out.map((e) => [e.id, e.square] as const));
+    // A format before this one: nothing of it is this format's layout, the next save writes every square.
+    if (old) return { document, tables, settings: manifest.settings, savedAt: manifest.savedAt, layout: { old, squares: {}, globals: [], lists: {} } };
     const lists: Partial<Record<ListName, { ords: number[]; squares: string[] }>> = {};
     for (const [name, out] of listRead) lists[name] = { ords: out.map((e) => e.ord), squares: out.map((e) => e.square) };
     return {
-      document, settings: manifest.settings, savedAt: manifest.savedAt,
-      layout: { old: null, squares: manifest.squares, globals: manifest.globals, where, lists },
+      document, tables, settings: manifest.settings, savedAt: manifest.savedAt,
+      layout: { old: null, squares: manifest.squares, globals: manifest.globals, lists },
     };
+  }
+
+  /**
+   * A kind's squares joined into one table of the map, row by row without decoding (`TableWriter.copyRows`), in id order (the lots in
+   * their stored order, then by id) as the map read as records always held them; a building whose stored wear differs from its row's
+   * decoded, given its wear and written with the rest - that one record an object, let go at once.
+   */
+  private joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null }[], wears: ReadonlyMap<number, number>): ArrayBufferLike {
+    const rows: { t: number; row: number; id: number; order: number }[] = [];
+    squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
+    rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
+    const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null);
+    const readers = new Map<number, TableReader>();
+    for (const { t, row, id } of rows) {
+      const table = squares[t]!.table;
+      if (name === 'buildings' && wears.has(id)) {
+        let reader = readers.get(t);
+        if (!reader) readers.set(t, reader = table.reader());
+        const decay = reader.field(row, 'decay');
+        if ((typeof decay === 'number' ? decay : 0) !== wears.get(id)) { writer.add([withWear(reader.record(row), wears) as TableRow]); continue; }
+      }
+      writer.copyRows(table, [row]);
+    }
+    return writer.finish().buffer;
   }
 
   /** The keys of a map stored in the format before the tiles. */
@@ -707,8 +628,8 @@ export class TiledSaves {
       for (const record of records) buildings.push(wears ? withWear(record, wears) : record);
     }
     return {
-      document: { ...(head as unknown as SerializedDoc), buildings } as SerializedDoc, settings: manifest.settings, savedAt: manifest.savedAt,
-      layout: { old: this.oldKeysOf(manifest), squares: {}, globals: [], where: {}, lists: {} },
+      document: { ...(head as unknown as SerializedDoc), buildings } as SerializedDoc, tables: {}, settings: manifest.settings, savedAt: manifest.savedAt,
+      layout: { old: this.oldKeysOf(manifest), squares: {}, globals: [], lists: {} },
     };
   }
 
@@ -719,14 +640,16 @@ export class TiledSaves {
     return done;
   }
 
-  /** The keys the saved map is held under, as regions (on the universal grid, and of the tiles of 1,024 m) and by tiles in JSON, each manifest after its blobs. */
+  /** The keys the saved map is held under, in every format by squares (8, 7, 6 and the tiles in JSON), each manifest after its blobs. */
   private async savedKeys(): Promise<string[]> {
-    const [regionBlob, regions6Blob, tilesBlob] = await this.store.get([this.manifestKey, this.regions6ManifestKey, this.tilesManifestKey]);
+    const [regionBlob, regions7Blob, regions6Blob, tilesBlob] = await this.store.get([this.manifestKey, this.regions7ManifestKey, this.regions6ManifestKey, this.tilesManifestKey]);
     const regions = regionBlob ? readValueFrame(await regionBlob.arrayBuffer(), MANIFEST_MAGIC) : null;
+    const regions7 = regions7Blob ? readValueFrame(await regions7Blob.arrayBuffer(), MANIFEST_MAGIC) : null;
     const regions6 = regions6Blob ? readValueFrame(await regions6Blob.arrayBuffer(), MANIFEST_MAGIC) : null;
     const tiles: unknown = tilesBlob ? JSON.parse(await tilesBlob.text()) : null;
     return [
-      ...(isTiledManifest(regions, 7) ? this.keysOf(regions, this.regionKeys) : []), this.manifestKey,
+      ...(isTiledManifest(regions, 8) ? this.keysOf(regions, this.regionKeys) : []), this.manifestKey,
+      ...(isTiledManifest(regions7, 7) ? [...this.keysOf(regions7, this.regions7Keys), this.regions7ManifestKey] : []),
       ...(isTiledManifest(regions6, 6) ? [...this.keysOf(regions6, this.regions6Keys), this.regions6ManifestKey] : []),
       ...(isTiledManifest(tiles) ? [...this.keysOf(tiles, this.tileKeys), this.tilesManifestKey] : []),
     ];
@@ -765,6 +688,14 @@ export class TiledSaves {
       return this.store.write(put, keys);
     });
   }
+}
+
+/** A square's records from what its codec read: the records themselves, or a table's decoded (a square read as records). */
+function squareRecords(value: SquareBlob | SquareSections): SquareBlob | null {
+  if (!('table' in value)) return value;
+  const r: unknown = value.table ? tableRecords(value.table.slice().buffer) : value.json ? JSON.parse(new TextDecoder().decode(value.json)) : null;
+  if (!Array.isArray(r) || (value.orders && value.orders.length !== r.length)) return null;
+  return value.orders ? { r, o: Array.from(value.orders) } : { r };
 }
 
 /** Where a format keeps a map by squares. */

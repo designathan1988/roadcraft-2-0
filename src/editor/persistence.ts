@@ -8,7 +8,7 @@ import { readEconomy } from '@world/economy';
 import { isSerializedBuildings } from '@world/buildings/serialize';
 import { unitFactor } from '@world/rescale';
 import { METERS_PER_UNIT, m, perM } from '@world/units';
-import { type SavedLayout, TiledSaves } from './chunkedSave';
+import { type SavedLayout, type SavedTables, TiledSaves } from './chunkedSave';
 import { type PartStore, SAVES_STORE, indexedDbParts, openSaves, portWriter } from './saveStore';
 import { FILE_DOC, FILE_MAGIC, FILE_SETTINGS, jsonOf, magicOf, readFrame } from './saveBinary';
 import { jobPort } from '../jobs/jobPool';
@@ -55,6 +55,8 @@ export const withUnit = (settings: SavedSettings): SavedSettings => ({ ...settin
 export interface SavedSession {
   readonly document: SerializedDoc;
   readonly settings: SavedSettings;
+  /** The tables a map saved by squares holds its records in (`chunkedSave.ts` SavedTables), joined from its squares without decoding; absent: every record in the document (a whole-map copy, a file, an older save). */
+  readonly tables?: SavedTables;
 }
 
 /** Autosave and file export. */
@@ -76,9 +78,9 @@ export class Persistence {
     this.parted = parts ? new TiledSaves(parts, storageKey) : null;
   }
 
-  /** The document just restored from `loadSessionAsync`: read from the parts, they are it, and the next save writes only what changes. */
-  adoptLoaded(doc: RoadDoc): void {
-    if (this.parted && this.loadedParts) this.parted.adopt(doc, this.loadedParts);
+  /** The document just restored from `loadSessionAsync`: read from the parts, they are it, and the next save writes only what changes. `since`: the diary's serial once the map stood replaced (`restoreInto` replacedAt): what the loader wrote after it (its roads repaired) is written by the next save. */
+  adoptLoaded(doc: RoadDoc, since?: number): void {
+    if (this.parted && this.loadedParts) this.parted.adopt(doc, this.loadedParts, since);
     this.loadedParts = null;
   }
 
@@ -180,7 +182,8 @@ export class Persistence {
     if (parted && parted.savedAt > bestAt) {
       const session = { version: 2, document: parted.document, settings: parted.settings };
       if (isSavedSession(session)) {
-        best = { document: session.document, settings: this.readSettings() ?? normalizeSettings(session.settings) };
+        // Its tables beside the document: the records of the kinds kept in tables, never decoded here (`restoreInto` takes them as they are).
+        best = { document: session.document, settings: this.readSettings() ?? normalizeSettings(session.settings), tables: parted.tables };
         bestAt = parted.savedAt;
         bestParts = parted.layout;
       }

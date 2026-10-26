@@ -12,7 +12,7 @@ import { GLOBAL_PARTS, RoadDoc, type SerializedDoc } from '@world/doc';
 import { tableIn } from '@world/buildings/recordTable';
 import { CELL } from '@world/cells';
 
-/** THE SAVES ARE BINARY END TO END (`saveBinary.ts`, `chunkedSave.ts` manifest 7, `mapExport.ts`): saved, loaded and saved again to the very same bytes; the JSON saves before them open and are saved as regions; an edit rewrites its region alone; no text of the whole map is ever made. */
+/** THE SAVES ARE BINARY END TO END (`saveBinary.ts`, `chunkedSave.ts` manifest 8, `mapExport.ts`): saved, loaded and saved again to the very same bytes; the JSON saves before them open and are saved as regions; an edit rewrites its region alone; no text of the whole map is ever made. */
 
 type MemoryStore = PartStore & { readonly blobs: Map<string, Blob>; writes: string[][] };
 
@@ -82,14 +82,14 @@ describe('the autosave as binary regions', () => {
     const writer = new Persistence(undefined, largeStore(), first);
     writer.saveSession(smallCity(), settings);
     await saved(writer);
-    expect(magicOf(await first.blobs.get(`${KEY}:regions7`)!.arrayBuffer())).toBe(MANIFEST_MAGIC);
+    expect(magicOf(await first.blobs.get(`${KEY}:regions8`)!.arrayBuffer())).toBe(MANIFEST_MAGIC);
     // Every square's blob compressed (gzip), never JSON text.
-    for (const [k, b] of await contents(first)) if (k.includes(':R7:')) expect([b[0], b[1]]).toEqual([0x1f, 0x8b]);
+    for (const [k, b] of await contents(first)) if (k.includes(':R8:')) expect([b[0], b[1]]).toEqual([0x1f, 0x8b]);
 
     // Opened as the page opens it, and saved by another store: the same keys, the same bytes.
     const reader = new Persistence(undefined, largeStore(), first);
     const session = await reader.loadSessionAsync();
-    const loaded = RoadDoc.fromJSON(session!.document, { repair: false });
+    const loaded = RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables });
     const second = memoryStore();
     const again = new Persistence(undefined, largeStore(), second);
     again.saveSession(loaded, session!.settings);
@@ -104,15 +104,17 @@ describe('the autosave as binary regions', () => {
     const store = memoryStore();
     const saves = new TiledSaves(store, 'map');
     await saves.save(doc, {});
-    const squares = store.writes[0]!.filter((k) => k.startsWith('map:R7:buildings:')).length;
+    const squares = store.writes[0]!.filter((k) => k.startsWith('map:R8:buildings:')).length;
     expect(squares).toBeGreaterThan(10);
     const one = [...doc.buildings.all()][40]!;
     doc.buildings.put({ ...one, name: 'Edited' });
     await saves.save(doc, {});
     const at = `${Math.floor(one.x / CELL)},${Math.floor(one.y / CELL)}`;
-    expect(store.writes.at(-1)).toEqual([`map:R7:buildings:${at}`, `map:RW7:${at}`, 'map:regions7']);
+    expect(store.writes.at(-1)).toEqual([`map:R8:buildings:${at}`, `map:RW8:${at}`, 'map:regions8']);
     const read = await saves.read();
-    expect(read!.document.buildings!.find((b) => (b as { id: number }).id === one.id)).toMatchObject({ name: 'Edited' });
+    // The buildings come back in their table, none in the document; the edited one read from it.
+    expect(read!.document.buildings).toEqual([]);
+    expect(RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables }).buildings.get(one.id)).toMatchObject({ name: 'Edited' });
   });
 
   it('never makes a text of the whole map: each text one square\'s records, far below the map', async () => {
@@ -173,18 +175,18 @@ describe('the JSON saves before the binary regions', () => {
     const read = await saves.read();
     expect(read?.savedAt).toBe(77);
     expect(read?.layout.old).toContain('map:tiles');
-    const doc = RoadDoc.fromJSON(read!.document, { repair: false });
+    const doc = RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables });
     expect(doc.buildings.size).toBe(original.buildings.size);
     saves.adopt(doc, read!.layout);
     const before = new Map(store.blobs);
     await saves.save(doc, { camera: 6 }, 88);
     for (const [k, blob] of before) expect(store.blobs.get(k)).toBe(blob);
-    expect(store.blobs.has('map:regions7')).toBe(true);
-    expect(store.writes.at(-1)!.filter((k) => k.startsWith('map:R7:buildings:')).length).toBeGreaterThan(10);
+    expect(store.blobs.has('map:regions8')).toBe(true);
+    expect(store.writes.at(-1)!.filter((k) => k.startsWith('map:R8:buildings:')).length).toBeGreaterThan(10);
     const again = await new TiledSaves(store, 'map').read();
     expect(again?.layout.old).toBeNull();
     expect(again?.savedAt).toBe(88);
-    expect(JSON.stringify(RoadDoc.fromJSON(again!.document, { repair: false }).toJSON().buildings?.length)).toBe(String(original.buildings.size));
+    expect(JSON.stringify(RoadDoc.fromJSON(again!.document, { repair: false, tables: again!.tables }).toJSON().buildings?.length)).toBe(String(original.buildings.size));
   });
 
   it('a whole map saved as one JSON text opens, and is saved next as binary regions', async () => {
@@ -201,8 +203,8 @@ describe('the JSON saves before the binary regions', () => {
     p.adoptLoaded(doc);
     p.saveSession(doc, settings);
     await p.written();
-    expect(parts.blobs.has(`${KEY}:regions7`)).toBe(true);
-    expect([...parts.blobs.keys()].filter((k) => k.startsWith(`${KEY}:R7:nodes:`))).toEqual([`${KEY}:R7:nodes:${Math.floor(0 / SAVE_TILE)},0`]);
+    expect(parts.blobs.has(`${KEY}:regions8`)).toBe(true);
+    expect([...parts.blobs.keys()].filter((k) => k.startsWith(`${KEY}:R8:nodes:`))).toEqual([`${KEY}:R8:nodes:${Math.floor(0 / SAVE_TILE)},0`]);
     const next = await new Persistence(undefined, large, parts).loadSessionAsync();
     expect(next?.document.nodes).toHaveLength(2);
   });
@@ -217,7 +219,7 @@ describe('the map file', () => {
     expect(new DataView(bytes).getUint32(4, true)).toBe(1);
     const session = readMapFile(bytes);
     expect(session?.settings.camera).toEqual(settings.camera);
-    expect(JSON.stringify(RoadDoc.fromJSON(session!.document, { repair: false }).toJSON())).toBe(JSON.stringify(doc.toJSON()));
+    expect(JSON.stringify(RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables }).toJSON())).toBe(JSON.stringify(doc.toJSON()));
     expect(bytes.byteLength).toBeLessThan(doc.toText().length);
   });
 

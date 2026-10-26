@@ -195,11 +195,6 @@
       "count": 1
     }
   },
-  "src/editor/chunkedSave.ts": {
-    "roadcraft/no-whole-map-walk": {
-      "count": 1
-    }
-  },
   "src/editor/cityGenerator.ts": {
     "roadcraft/no-global-revision": {
       "count": 2

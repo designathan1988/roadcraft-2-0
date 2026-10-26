@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { blueprintByKey } from '@world/buildings/blueprints';
 import { internMembers } from '@world/buildings/intern';
-import { encodeRecords, readRecords, RecordTable } from '@world/buildings/recordTable';
+import { encodeRecords, readRecords, RecordTable, TableWriter } from '@world/buildings/recordTable';
 import { type Building, asBuildingId, cloneBuilding } from '@world/buildings/types';
 
 /** A tile's buildings as one typed table in shared memory (`recordTable.ts`) */
@@ -59,5 +59,39 @@ describe('a record table', () => {
 
   it('lives in shared memory, posted as a handle', () => {
     expect(encodeRecords(rows).buffer).toBeInstanceOf(SharedArrayBuffer);
+  });
+
+  it('copies rows into another table without decoding them: the same records back, a member shared by the copied rows written once', () => {
+    // The save cuts a square's rows from the map's table, and a map joins its squares' tables (`editor/chunkedSave.ts`): the bytes copied, the strings, shapes and shared members renumbered.
+    const source = encodeRecords(rows);
+    const writer = new TableWriter();
+    writer.copyRows(source, [3, 1]);
+    writer.add([rows[2]!]);
+    writer.copyRows(source, [0]);
+    const copied = writer.finish();
+    const back = copied.reader();
+    for (const [row, from] of [[0, 3], [1, 1], [2, 2], [3, 0]] as const) expect(JSON.stringify(back.record(row))).toBe(JSON.stringify(rows[from]));
+    expect([...copied.ids]).toEqual([10, 8, 9, 7]);
+    expect(copied.xs[3]).toBe(10);
+    // Rows 3 and 1 share their members (interned): the copy holds them once, as the source did.
+    const twice = encodeRecords([rows[3]!, rows[1]!]).buffer.byteLength, one = encodeRecords([rows[3]!]).buffer.byteLength;
+    const copiedTwo = new TableWriter();
+    copiedTwo.copyRows(source, [3, 1]);
+    expect(copiedTwo.finish().buffer.byteLength).toBeLessThan(one * 2);
+    expect(copiedTwo.finish().buffer.byteLength).toBe(twice);
+    // A copy of a copy: the same bytes as the copy (deterministic, the save's "same bytes" round trip).
+    const again = new TableWriter();
+    again.copyRows(copied, [0, 1, 2, 3]);
+    expect(Buffer.compare(Buffer.from(again.finish().buffer), Buffer.from(copied.buffer))).toBe(0);
+  });
+
+  it('reads one field of a row, the rest passed over', () => {
+    const table = encodeRecords(rows), reader = table.reader();
+    expect(reader.field(3, 'name')).toBe('Edifício Itália');
+    expect(reader.field(0, 'name')).toBeUndefined();
+    expect(reader.field(1, 'x')).toBe(40.5);
+    expect(Object.is(reader.field(2, 'decay'), -0)).toBe(true);
+    // The reader still reads whole records after.
+    expect(JSON.stringify(reader.record(3))).toBe(JSON.stringify(rows[3]));
   });
 });

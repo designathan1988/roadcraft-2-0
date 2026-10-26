@@ -7,7 +7,7 @@ import { insideLot, lotRecord, type Lot } from './lotRecord';
 import { lotCentre } from './lotRings';
 import { PointFiling } from './pointFiling';
 import { TableItems } from './buildings/items';
-import { encodeRecords } from './buildings/recordTable';
+import { type RecordRef, encodeRecords } from './buildings/recordTable';
 import { type TableSections, itemsOfSections, sectionsOf } from './buildings/sections';
 import { m } from './units';
 
@@ -143,6 +143,23 @@ export class LotStore {
     const items = this.items;
     return (items instanceof TableItems ? items.placeOf(id) : undefined) ?? placeOf(items.get(id)!);
   };
+
+  /** The lots by id as a read-only map (the save walks their ids, `editor/chunkedSave.ts`): a working copy's the original's while it wrote nothing. */
+  itemsOf(): ReadonlyMap<number, Lot> {
+    return this.below ? this.below.itemsOf() : this.items;
+  }
+
+  /** Where a lot of the table is read without decoding (`TableItems.tableRef`: the table's buffer and row); null for one written since, or not here. */
+  tableRef(id: number): RecordRef | null {
+    if (this.below) return this.below.tableRef(id);
+    return this.items instanceof TableItems ? this.items.tableRef(id) : null;
+  }
+
+  /** Where a lot stands (its centre, as its table's columns and its filing have it), nothing decoded for a lot of the table; undefined when it is not here. */
+  placeOf(id: number): Vec2 | undefined {
+    if (this.below) return this.below.placeOf(id);
+    return this.items.has(id) ? this.centreOf(id) : undefined;
+  }
 
   /** The lots whose box meets `rect`, in increasing id order: a superset of those whose shape reaches it */
   in(rect: ChangeRect): Lot[] {

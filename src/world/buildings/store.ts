@@ -129,6 +129,18 @@ export class BuildingStore {
     return this.items.keys();
   }
 
+  /** The buildings by id as a read-only map (the save walks their ids, `editor/chunkedSave.ts`): a working copy's the original's while it wrote nothing. */
+  itemsOf(): ReadonlyMap<BuildingId, Building> {
+    return this.items;
+  }
+
+  /** Where a building stands: the table's columns for one of the table (nothing decoded), its record's x and y else; undefined when it is not here. */
+  placeOf(id: BuildingId): { readonly x: number; readonly y: number } | undefined {
+    if (this.items instanceof BuildingItems) return this.items.placeOf(id);
+    const b = this.items.get(id);
+    return b ? { x: b.x, y: b.y } : undefined;
+  }
+
   /** The buildings whose box (or anchor) may reach the rectangle, in the order of `all()` */
   near(minX: number, minY: number, maxX: number, maxY: number): Building[] {
     if (this.below) return this.below.near(minX, minY, maxX, maxY);

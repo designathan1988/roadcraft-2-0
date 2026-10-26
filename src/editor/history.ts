@@ -174,17 +174,19 @@ export function openedGenerated(data: SerializedDoc, table: ArrayBufferLike | nu
   return buildings > 10_000 && (data.terrain?.length ?? 0) === 0 && data.relief === RELIEF_FLAT;
 }
 
-/** `tables`: the city's tables (`OpenedTables`: its buildings', landscaping's and lots'), or its buildings' table alone, or none (every record in `data`). */
-export function restoreInto(target: RoadDoc, data: SerializedDoc, net: Network, tables: OpenedTables | ArrayBufferLike | null = null): void {
+/** `tables`: the city's tables (`OpenedTables`: its buildings' and the other kinds'), or its buildings' table alone, or none (every record in `data`). Returns the diary's serial once the map stood replaced, before its roads were repaired: what the autosave adopts the map from (`Persistence.adoptLoaded`). */
+export function restoreInto(target: RoadDoc, data: SerializedDoc, net: Network, tables: OpenedTables | ArrayBufferLike | null = null): { readonly replacedAt: number } {
   const t: OpenedTables = tables === null ? { ...noCityTables(), buildings: null } : isOpenedTables(tables) ? tables : { ...noCityTables(), buildings: tables };
   const generated = openedGenerated(data, t.buildings);
   target.replaceFromJSON(data, { ...(generated ? { repair: false } : {}), tables: t, whole: true });
+  const replacedAt = target.changes.version;
   performance.mark('restore:replaced');
   // A map opened is built whole, nothing taken from the map before it (`Network.rebuild`)
   net.rebuild({ full: true });
   performance.mark('restore:rebuilt');
   if (!generated) repairNearConnections(target, net);
   performance.mark('restore:repaired');
+  return { replacedAt };
 }
 
 /** Restores a document saved by the model itself exactly (a failed load put back, a gesture cancelled). */

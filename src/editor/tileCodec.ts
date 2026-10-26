@@ -1,3 +1,4 @@
+import type { SquareSections } from './regionFrames';
 import { gunzip } from './saveStore';
 
 /** THE TILES SAVED IN JSON READ BACK (`chunkedSave.ts` manifest 5), AND THE WEARS KEPT BESIDE A SAVE'S BUILDINGS (every format's) */
@@ -10,9 +11,9 @@ function isSquareBlob(value: unknown): value is SquareBlob {
   return Array.isArray(r) && (o === undefined || (Array.isArray(o) && o.length === r.length));
 }
 
-/** How a format's blobs are read back. */
+/** How a format's blobs are read back: a square as its records (the tiles in JSON) or as its sections, a table's bytes undecoded (the binary regions, `regionFrames.ts`). */
 export interface SquareCodec {
-  square(blob: Blob): Promise<SquareBlob | null>;
+  square(blob: Blob): Promise<SquareBlob | SquareSections | null>;
   wears(blob: Blob): Promise<Map<number, number> | null>;
   global(blob: Blob): Promise<unknown>;
 }
