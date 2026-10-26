@@ -8,7 +8,7 @@ export function serve(self: JobScope): void {
     try {
       const cells = buildFarRoadCells(input);
       const transfer: ArrayBuffer[] = [];
-      for (const c of cells) transfer.push(c.positions.buffer as ArrayBuffer, c.colors.buffer as ArrayBuffer, c.sections.buffer as ArrayBuffer, c.indices.buffer as ArrayBuffer, c.pieces.buffer as ArrayBuffer);
+      for (const c of cells) transfer.push(c.positions.buffer as ArrayBuffer, c.colors.buffer as ArrayBuffer, c.indices.buffer as ArrayBuffer);
       self.postMessage({ id, cells }, transfer);
     } catch (error) {
       console.error('[roads] the far roads could not be made', error);

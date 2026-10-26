@@ -8,7 +8,6 @@ import { ViewCells } from '@world/viewCells';
 import { JournalCursor } from '@world/derived';
 import type { NodeId, SegmentId } from '@world/ids';
 import type { Network } from '@world/network';
-import type { NetworkDelta } from '@world/networkDelta';
 import { ROAD_STRUCTURES, roadStructure } from '@world/structures';
 import { m } from '@world/units';
 import {
@@ -106,8 +105,6 @@ export class SurfaceInputs {
       return;
     }
 
-    // The roads held moved, no edit (`NetworkDelta.scopeOnly`, the page's network holding the tiles near the view): the roads that came are filed as the first build files them, derived when a part of theirs is visited; those that left are let go with their marks. DO NOT derive a tile's every shape for its coming into view.
-    if (delta.scopeOnly) { this.followScope(net, delta); return; }
     const segs = new Set<SegmentId>(delta.segments);
     // A crossing is fitted to the footway along its road, a flush footway lowers the kerbs on it
     if (delta.rects.length) for (const id of net.segmentCells.idsMeetingAny(delta.rects)) segs.add(id);
@@ -160,10 +157,9 @@ export class SurfaceInputs {
     this.count.clear();
     // Every mark let go with them, placed again as each item is (`roadMarks.ts`, written at the build's swap).
     roadMarks.clear(net.doc);
-    // The roads the network holds (`Network.scope`: the tiles near the view on the page, every road elsewhere), and the nodes whose every road it holds.
-    const ids = [...net.scope ?? net.doc.segments.keys()].filter((id) => net.doc.segment(id)).sort((p, q) => p - q);
+    const ids = [...net.doc.segments.keys()].sort((p, q) => p - q);
     this.reassign(net, ids);
-    const nodes = net.scope === null ? [...net.doc.nodes.keys()].sort((p, q) => p - q) : this.completeEnds(net, ids);
+    const nodes = [...net.doc.nodes.keys()].sort((p, q) => p - q);
     if (this.cells) {
       for (const id of ids) this.fileSegment(net, id);
       for (const node of nodes) this.fileNode(net, node);
@@ -171,69 +167,6 @@ export class SurfaceInputs {
     }
     for (const id of ids) this.placeSegment(net, id);
     for (const node of nodes) this.placeNode(net, node);
-  }
-
-  /** The ends of `ids` the network holds whole (`Network.complete`), in id order. */
-  private completeEnds(net: Network, ids: Iterable<SegmentId>): NodeId[] {
-    const out = new Set<NodeId>();
-    for (const id of ids) {
-      const segment = net.doc.segment(id);
-      if (!segment) continue;
-      if (net.complete(segment.a)) out.add(segment.a);
-      if (net.complete(segment.b)) out.add(segment.b);
-    }
-    return [...out].sort((p, q) => p - q);
-  }
-
-  /** The roads held moved (`refresh`, `scopeOnly`): a road that came filed (derived when visited), one that left forgotten; the same of the nodes, held whole or not. */
-  private followScope(net: Network, delta: NetworkDelta): void {
-    const nodes = new Set<NodeId>(delta.nodes);
-    const came: SegmentId[] = [], went: SegmentId[] = [];
-    for (const id of [...delta.segments].sort((p, q) => p - q)) {
-      const segment = net.doc.segment(id);
-      if (segment) { nodes.add(segment.a); nodes.add(segment.b); }
-      const item = this.segments.get(id);
-      if (item) { nodes.add(item.ends[0]); nodes.add(item.ends[1]); }
-      const held = segment !== undefined && net.holds(id);
-      if (held && !item) came.push(id); else if (!held && item) went.push(id);
-    }
-    for (const id of went) this.forgetSegment(net, id);
-    // The alignments of the roads raised by hand that came or went: a road whose pass moved filed again under it.
-    for (const id of this.reassign(net, [...came, ...went])) {
-      if (came.includes(id) || !this.segments.has(id)) continue;
-      this.forgetSegment(net, id);
-      if (net.holds(id)) this.fileSegment(net, id);
-    }
-    for (const id of came) this.fileSegment(net, id);
-    for (const node of [...nodes].sort((p, q) => p - q)) {
-      const item = this.nodes.get(node);
-      const held = net.doc.node(node) !== undefined && net.complete(node);
-      if (held && !item) this.fileNode(net, node);
-      else if (!held && item) this.forgetNode(net, node);
-    }
-  }
-
-  /** A road let go whole (it left the roads held): its entries or its filing, its pass's count, its marks. */
-  private forgetSegment(net: Network, id: SegmentId): void {
-    const old = this.segments.get(id);
-    if (!old) return;
-    if (old.entries) { this.unfile(old.entries, true); this.residentBytes -= old.bytes; }
-    else { this.dormantSegments.remove(id); this.undormant(old.superset, false); }
-    if (old.pass !== null) this.count.set(old.pass, (this.count.get(old.pass) ?? 1) - 1);
-    this.segments.delete(id);
-    this.residentSegments.delete(id);
-    roadMarks.place(net.doc, { kind: 'segment', id }, []);
-  }
-
-  /** A node let go whole (a road of its left the roads held): as `forgetSegment`. */
-  private forgetNode(net: Network, node: NodeId): void {
-    const old = this.nodes.get(node);
-    if (!old) return;
-    if (old.entries) { this.unfile(old.entries, true); this.residentBytes -= old.bytes; }
-    else { this.dormantNodes.remove(node); this.undormant(old.superset, false); }
-    this.nodes.delete(node);
-    this.residentNodes.delete(node);
-    roadMarks.place(net.doc, { kind: 'node', id: node }, []);
   }
 
   /** A road filed as not derived (held round the view): its pass counted, its parts filed (`Superset`). */

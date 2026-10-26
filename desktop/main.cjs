@@ -74,6 +74,20 @@ function writeSettings() {
 // A look run's own Chromium switches, 'name=value' space-separated (a backend's presentation compared): never read outside a look run.
 if (process.env.ROADCRAFT_LOOK === '1') for (const sw of (process.env.ROADCRAFT_SWITCHES ?? '').split(' ').filter(Boolean)) { const at = sw.indexOf('='); if (at > 0) app.commandLine.appendSwitch(sw.slice(0, at), sw.slice(at + 1)); else app.commandLine.appendSwitch(sw); }
 
+/**
+ * THE GAME WHILE IT IS BEING WORKED ON (never packaged): `ROADCRAFT_DEV_URL` the project's Vite server on this machine (`npm run dev`, its own
+ * port), loaded in place of the built game, so every change of the code reloads the window the owner watches (Vite's full reload); the job and
+ * simulation threads keep reading `dist/desktop-jobs` (`npm run desktop:dev` rebuilds it as the code changes, each page's threads made anew).
+ * `ROADCRAFT_DEBUG_PORT`: Chromium's remote debugging on that port of this machine only (Electron command-line switches,
+ * https://www.electronjs.org/docs/latest/api/command-line-switches: "Enables remote debugging over HTTP on the specified port"), so the checks
+ * run in that same open window (`scripts/inGame.mjs`), never in another one.
+ */
+const DEV_URL = !app.isPackaged && /^http:\/\/(127\.0\.0\.1|localhost):\d{2,5}\/$/.test(process.env.ROADCRAFT_DEV_URL ?? '') ? process.env.ROADCRAFT_DEV_URL : null;
+if (DEV_URL && /^\d{4,5}$/.test(process.env.ROADCRAFT_DEBUG_PORT ?? '')) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.ROADCRAFT_DEBUG_PORT);
+  app.commandLine.appendSwitch('remote-debugging-address', '127.0.0.1');
+}
+
 // VSync off: frames as fast as the GPU draws them (Chromium `--disable-gpu-vsync`, `--disable-frame-rate-limit`); read at start, so a change waits for the next one.
 if (!settings.vsync) {
   app.commandLine.appendSwitch('disable-gpu-vsync');
@@ -119,6 +133,8 @@ protocol.registerSchemesAsPrivileged([
 /** The built game: beside the executable when packaged, `dist/` when run from the project. */
 const GAME = app.isPackaged ? path.join(process.resourcesPath, 'game') : path.join(__dirname, '..', 'dist');
 const ORIGIN = 'app://roadcraft/';
+/** Where the game's page is loaded from: the built game, or the project's server while it is worked on (`DEV_URL`). */
+const PAGE_ORIGIN = DEV_URL ?? ORIGIN;
 
 /** A run of `scripts/look.mjs --electron`: the window never shown, the game drawn at 1920x1080 all the same (`paintWhenInitiallyHidden`). */
 const LOOK = process.env.ROADCRAFT_LOOK === '1';
@@ -179,11 +195,11 @@ function createWindow() {
   window.on('leave-full-screen', keepFullscreen);
   // A look run may ask for a renderer of its own (`scripts/look.mjs` plan "gpu"), never kept in the settings.
   const gpu = LOOK && GPU_BACKENDS.includes(process.env.ROADCRAFT_LOOK_GPU ?? '') ? process.env.ROADCRAFT_LOOK_GPU : settings.gpu;
-  void window.loadURL(`${ORIGIN}index.html${gpu === 'webgpu' ? '?gpu=webgpu' : ''}`);
+  void window.loadURL(`${PAGE_ORIGIN}${DEV_URL ? '' : 'index.html'}${gpu === 'webgpu' ? '?gpu=webgpu' : ''}`);
 }
 
 /** Only the game's own page may ask (Electron security checklist: validate the sender of every IPC message). */
-const fromGame = (event) => typeof event.senderFrame?.url === 'string' && event.senderFrame.url.startsWith(ORIGIN);
+const fromGame = (event) => typeof event.senderFrame?.url === 'string' && event.senderFrame.url.startsWith(PAGE_ORIGIN);
 const NAME = /^[A-Za-z0-9_.-]{1,128}$/;
 /** A lab report's two files together, characters (a long recording's frames fit well under it). */
 const LAB_REPORT_MAX = 64 * 1024 * 1024;

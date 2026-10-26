@@ -1,6 +1,5 @@
 import { shapeFromControl } from '@core/bezier';
 import type { Vec2 } from '@core/vec2';
-import type { ChangeRect } from '@world/changes';
 import { MAP_HALF } from '@world/cityGen/wholeMap';
 import type { RoadDoc } from '@world/doc';
 import type { NodeId, SegmentId } from '@world/ids';
@@ -27,10 +26,7 @@ export function roundaboutRefusal(doc: RoadDoc, net: Network, centre: Vec2, radi
   const width = casingHalf(roadProfile(type, 2, 'both'));
   // DO NOT measure every road of the map for one placement.
   const near = reach + width;
-  const box: ChangeRect = [centre.x - near, centre.y - near, centre.x + near, centre.y + near];
-  // The roads there held first: the page's network holds the tiles near the view (`Network.holdNear`).
-  net.holdNear?.(box);
-  for (const ribbon of net.ribbonsMeeting(box)) {
+  for (const ribbon of net.ribbonsMeeting([centre.x - near, centre.y - near, centre.x + near, centre.y + near])) {
     const segment = doc.segment(ribbon.id);
     if (!segment) continue;
     const otherWidth = casingHalf(roadProfile(segment.type, segment.lanes, segment.direction, segment.section, segment.parking));

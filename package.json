@@ -30,6 +30,8 @@
     "check:all": "node scripts/run-limited.mjs node scripts/check.mjs --all",
     "cook:cities": "node scripts/cook-cities.mjs",
     "desktop": "electron desktop/main.cjs",
+    "desktop:jobs:watch": "vite build -c scripts/vite/desktop-jobs-dev.config.ts --watch",
+    "desktop:dev": "node scripts/desktopDev.mjs",
     "package:desktop": "npm run build && node scripts/package-desktop.mjs",
     "test:scale:raw": "vitest run -c vitest.scale.config.ts",
     "test:scale": "node scripts/run-limited.mjs npm run test:scale:raw",

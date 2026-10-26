@@ -89,8 +89,6 @@ export function commitRoadPath(
   const timed = (what: string): void => { const now = performance.now(); measureHitch(`hitch:commit/${what}`, lap, now); lap = now; };
   // DO NOT copy the map to judge against when the network is behind (`snapshotRoads`)
   if (net.revision !== doc.revision) net.rebuild();
-  // The roads the draft may cross held before the copy is made (`Network.holdNear`: the page's network holds the tiles near the view; the copy reads what its parent holds).
-  holdAlong(net, pieces.flatMap((piece) => [piece.start.at, piece.end.at]));
   // DO NOT work the road out again at the click when the draft at rest was judged on this same map (`roadTool.ts` judge): its copy laid.
   const key = dryRunKey(start, end, type, pieces, lanes, parking, ground !== undefined);
   const kept = lastDryRun;
@@ -158,14 +156,6 @@ export function commitRoadPath(
     return { committed: true, heightLimited, finalHeightOffset: currentHeight, cost: charge.amount, stations };
   }
   return layCopy(doc, net, work, workNet, bore, heightLimited, currentHeight, ground, timed);
-}
-
-/** The roads within a draft's reach held by the page's network before a working copy reads them (`Network.holdNear`): the box of the points given, grown by the merge distance; nothing where every road is held. */
-function holdAlong(net: Network, points: readonly Vec2[]): void {
-  if (!net.holdNear || !points.length) return;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
-  net.holdNear([minX - MERGE_EPS, minY - MERGE_EPS, maxX + MERGE_EPS, maxY + MERGE_EPS]);
 }
 
 /** The road worked out on the copy, paid for on it (so the live map takes the balance with the roads and undo gives it back) and taken back. */
@@ -359,8 +349,6 @@ export function commitDraft(
 
   // Up to the map as it stands first: the edit is judged against it, never against a copy of it.
   if (net.revision !== doc.revision) net.rebuild();
-  // The roads the draft may cross held before the copy is made (`Network.holdNear`).
-  holdAlong(net, [start.at, end.at]);
   const work = doc.fork();
   const workNet = net.fork(work);
   const before = { doc, net };
@@ -759,13 +747,6 @@ export function reconcileMovedNode(doc: RoadDoc, net: Network, id: NodeId, depth
 export function moveNodeChecked(doc: RoadDoc, net: Network, id: NodeId, to: Vec2): DraftResult {
   // Made on a working copy (`RoadDoc.fork`) and judged against the map as it stands, as a drawn road is
   if (net.revision !== doc.revision) throw new Error('moveNodeChecked: the network is not built for the document as it stands');
-  // The roads the moved node and its roads may cross held before the copy is made (`Network.holdNear`): from where it stands to where it goes, and its roads' far ends.
-  const node = doc.node(id);
-  if (node) {
-    const ends: Vec2[] = [node, to];
-    for (const sid of node.incident) { const seg = doc.segment(sid); const far = seg && doc.node(seg.a === id ? seg.b : seg.a); if (far) ends.push(far); }
-    holdAlong(net, ends);
-  }
   const work = doc.fork();
   const workNet = net.fork(work);
   if (!work.moveNode(id, to)) return { committed: false, reason: 'duplicate' };

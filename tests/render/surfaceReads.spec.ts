@@ -24,10 +24,7 @@ function readingAll(): MeshBasicMaterial {
 /** Set again for the roads built piece by piece as the owner's road tool builds them (`roads/pieceMesh.ts`): no verge, every corner curved, the
  *  paint drawn by the carriageway's shader, 500 m blocks from the origin. Each layout of the lab's catalogue looked at against the build before,
  *  on the optimisation sheets and drawn with the game's own materials and baked textures (2026-10-25). The mesh counts here are this stand-in
- *  material's (one material a surface): with the game's one road material the grid fixture draws 12 meshes where it drew 43.
- *  Set again for 31d60513 (every lane line drawn, every junction corner paved, the asphalt without its lattice of squares: the roads as the
- *  owner's tool draws them, on purpose), whose bytes every build since has made the same (bisected over the copies of each commit, 2026-10-26);
- *  the digests had stood at the build before it, unrun. */
+ *  material's (one material a surface): with the game's one road material the grid fixture draws 12 meshes where it drew 43. */
 const materials = new Proxy({}, {
   get: (_target, key) => key === 'scale' ? new Proxy({}, { get: () => 4 }) : readingAll(),
 }) as unknown as SceneMaterials;
@@ -55,10 +52,10 @@ describe('road surface reads', () => {
   for (const [name, make, plain] of [
     ['the grid and bends fixture',
       () => RoadDoc.fromJSON(JSON.parse(readFileSync('tests/fixtures/grid-and-bends.json', 'utf8')).document),
-      '46 18eafa80e274ecbc457c18ed515b055f69303b13f85f488f55fb654aa959ccb3'],
+      '46 539df7eb07c5c6d4cb8ef3824c79452ba11d7ac2e6261ae791e01e23fc557127'],
     ['a generated city',
       () => layCity(planCity({ ...DEFAULT_CITY, seed: 2, size: 'small', radius: 640 })),
-      '64 cc13aaaae352e132e89390fd432663f043c032212d3c520044966c8ec49f75ef'],
+      '64 b982fcbf04692268006aa89848923bbcd4bc9a45a61317b23d50bcbb3b7108f5'],
   ] as const) it(`build ${name} byte for byte as before`, () => {
     const net = new Network(make());
     net.rebuild();

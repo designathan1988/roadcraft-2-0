@@ -7,8 +7,7 @@ import { RoadDoc } from '@world/doc';
 import { buildRoadElevation } from '@world/elevation';
 import { Network } from '@world/network';
 import { m } from '@world/units';
-import { farRoadInput } from '@render/networkFarInput';
-import { pageSlots } from '@render/networkFarRoads';
+import { farRoadInput } from '@render/networkFarRoads';
 import { buildFarRoadCells } from '@render/networkFarRoadsBuild';
 import { CELL, pieceOfPart } from '@render/roadSurfaceEntries';
 import { SurfaceInputs } from '@render/roadSurfaceInputs';
@@ -85,7 +84,7 @@ describe('the triangles of the network\'s far level', () => {
     it(`lay no needle in ${name}: every triangle of every block's layers has its edges a centimetre or more on the plan`, () => {
       const net = new Network(make());
       net.rebuild();
-      const cells = buildFarRoadCells(farRoadInput(net, buildRoadElevation(net, ground), ground, CELL, null, pageSlots(net)).input);
+      const cells = buildFarRoadCells(farRoadInput(net, buildRoadElevation(net, ground), ground, CELL, null).input);
       let triangles = 0;
       const needles: string[] = [];
       for (const cell of cells) {

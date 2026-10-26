@@ -70,9 +70,8 @@ export function setRoadSnap(patch: Partial<RoadSnap>): void {
   }
 }
 
-/** DO NOT walk `net.ribbons` / `doc.segments` instead, and DO NOT go through `Network.ribbonsMeeting`: its order table. The roads there held first (`Network.holdNear`: the page's network holds the tiles near the view, a tool reads wherever the pointer is). */
+/** DO NOT walk `net.ribbons` / `doc.segments` instead, and DO NOT go through `Network.ribbonsMeeting`: its order table */
 export function ribbonsNear(net: Network, rect: ChangeRect): SegmentRibbon[] {
-  net.holdNear?.(rect);
   const out: SegmentRibbon[] = [];
   for (const id of net.segmentCells.idsMeeting(rect)) {
     const ribbon = net.ribbons.get(id);

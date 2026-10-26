@@ -6,13 +6,6 @@ export interface NetworkDelta {
   readonly segments: ReadonlySet<SegmentId>;
   readonly nodes: ReadonlySet<NodeId>;
   readonly rects: readonly ChangeRect[];
-  /**
-   * The rebuild moved the roads held alone (`Network.rescope`: roads came into the network's scope or left it, nodes became complete or
-   * not), no edit of the document behind any of it. What follows the roads held (the lane graph, the surfaces' inputs, the kerbs) follows
-   * these as any change; what follows the MAP (the far level drawn for every road of it, the lots' plan) leaves them be: the map did not
-   * change. Absent or false: an edit's rebuild, or one with an edit in it.
-   */
-  readonly scopeOnly?: boolean;
 }
 
 /** One rebuild, or several merged: from one state of the network to another, and what changed; `null`, everything */
@@ -110,22 +103,20 @@ export class DeltaLog {
     }
     if (!start) return null;
     const segments = new Set<SegmentId>(), nodes = new Set<NodeId>(), rects: ChangeRect[] = [];
-    let scopeOnly = true;
     for (let at = start; at !== this.stateRef;) {
       const edge = via.get(at)!;
       if (edge.delta === null) return null;
       for (const s of edge.delta.segments) segments.add(s);
       for (const n of edge.delta.nodes) nodes.add(n);
       rects.push(...edge.delta.rects);
-      scopeOnly &&= edge.delta.scopeOnly === true;
       at = edge.from === at ? edge.to : edge.from;
     }
-    return { segments, nodes, rects, scopeOnly };
+    return { segments, nodes, rects };
   }
 }
 
-/** Two changes as one: every road, node and rectangle of both, the roads held alone moved only when both did; `null` (everything) if either is. */
+/** Two changes as one: every road, node and rectangle of both; `null` (everything) if either is. */
 function union(a: NetworkDelta | null, b: NetworkDelta | null): NetworkDelta | null {
   if (a === null || b === null) return null;
-  return { segments: new Set([...a.segments, ...b.segments]), nodes: new Set([...a.nodes, ...b.nodes]), rects: [...a.rects, ...b.rects], scopeOnly: a.scopeOnly === true && b.scopeOnly === true };
+  return { segments: new Set([...a.segments, ...b.segments]), nodes: new Set([...a.nodes, ...b.nodes]), rects: [...a.rects, ...b.rects] };
 }

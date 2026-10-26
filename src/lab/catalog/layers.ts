@@ -14,8 +14,7 @@ import { BufferGeometry as BufferGeometryClass, DoubleSide, InstancedMesh, type 
 import { REGIONS } from '@world/ecology';
 import { ROAD_TYPES } from '@world/roadTypes';
 import { BufferAttribute, Group } from 'three';
-import { farLayerMaterial, pageSlots } from '../../render/networkFarRoads';
-import { farRoadInput } from '../../render/networkFarInput';
+import { farLayerMaterial, farRoadInput } from '../../render/networkFarRoads';
 import { FAR_CARRIAGEWAY, FAR_SECTION, buildFarRoadCells } from '../../render/networkFarRoadsBuild';
 import { CELL as ROAD_BLOCK } from '../../render/roadSurfaceEntries';
 import type { PieceSpec } from './items';
@@ -213,7 +212,7 @@ export function farNetworkItems(add: Add): void {
       } else doc.addSegment(doc.addNode({ x: -LEG, y: 0 }).id, doc.addNode({ x: LEG, y: 0 }).id, t);
       const net = new Network(doc);
       net.rebuild();
-      const { input } = farRoadInput(net, buildRoadElevation(net, flat), flat, ROAD_BLOCK, null, pageSlots(net));
+      const { input } = farRoadInput(net, buildRoadElevation(net, flat), flat, ROAD_BLOCK, null);
       const group = new Group();
       group.name = 'road-far-network';
       const pieces: PieceSpec[] = [];
