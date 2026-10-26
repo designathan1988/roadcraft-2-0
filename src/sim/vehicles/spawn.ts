@@ -51,9 +51,9 @@ function chosenTraffic(w: SimWorld): number | null {
   return roadLength(w) * TRAFFIC_DENSITY * w.trafficIntensity * w.demandMultiplier;
 }
 
-/** The road length of a network, kept by what each rebuild changed (`world/networkLength.ts`). */
+/** The road length of the whole map, kept by the diary (`world/docLength.ts`). */
 function roadLength(w: SimWorld): number {
-  return w.roadLength.of(w.net);
+  return w.roadLength.of(w.doc);
 }
 
 /** DO NOT walk the map's lanes for an edit. */

@@ -209,7 +209,7 @@ describe('the street length round a place', () => {
         net.rebuild();
       }
       expect(net.ribbons.size).toBeGreaterThan(0);
-      // The whole map's is kept by the edits (`world/networkLength.ts`), summed exactly in millionths of a unit
+      // The whole map's is kept by the diary (`world/docLength.ts`), summed exactly in millionths of a unit
       const whole = oldRoad(net, 0, 0, Infinity);
       expect(Math.abs(streetLength(net, 0, 0, Infinity) - whole)).toBeLessThanOrEqual(1e-6 * net.ribbons.size + 1e-9 * whole);
       wholes.add(streetLength(net, 0, 0, Infinity));

@@ -1,5 +1,4 @@
 import { Digest } from '@core/digest';
-import { Polyline } from '@core/polyline';
 import { ForkMap, ForkSet } from '@core/forkMap';
 import { samePlain } from '@core/plain';
 import { MIN_RIBBON } from '@core/scalar';
@@ -8,8 +7,8 @@ import type { NodeId, SegmentId } from './ids';
 import { Level, SURFACE_LEVELS, type SurfaceLevel, flushOn } from './roadTypes';
 import { type Junction, buildJunction, surfaceMode } from './junction/build';
 import { JUNCTION_KIT, deriveJunctionLevel } from './junction/derive';
-import { JunctionLevels, type JunctionLevelsData } from './junction/levels';
-import { SUMMARY, SUMMARY_FLOOR, trimSummary } from './junction/trimSummary';
+import { JunctionLevels } from './junction/levels';
+import { SUMMARY, SUMMARY_FLOOR } from './junction/trimSummary';
 import { clampSegmentTrims } from './junction/trim';
 import { MIN_LEG_ANGLE, legAngles, smallestGap } from './legAngles';
 import { CellFiling } from './cells';
@@ -17,12 +16,17 @@ import type { ChangeRect } from './changes';
 import { m } from './units';
 import type { PolylineCache } from './geometry';
 import type { NetworkDelta } from './networkDelta';
-import { type SegmentRibbon, type SegmentTrims, bendAt, junctionBounds, leanRibbon, makeRibbon, ribbonBounds } from './ribbons';
+import { type SegmentRibbon, type SegmentTrims, bendAt, junctionBounds, makeRibbon, ribbonBounds } from './ribbons';
 import { networkWork } from './rebuildWork';
+import { type MemoEntry, type NetworkBake, memoData, memoEntry, memoOf, nodeBakeKey, nodeRecordKey, nodeSourceKey, ribbonFromBake, segmentSourceKey } from './networkBake';
+export type { NetworkBake } from './networkBake';
 
-/** What the build writes: the network's own derived maps */
+/** What the build writes: the network's own derived maps, and the roads it holds (`Network.scope`, `holds`, `complete`). */
 interface Network {
   readonly doc: RoadDoc;
+  readonly scope: ReadonlySet<SegmentId> | null;
+  holds(segment: SegmentId): boolean;
+  complete(nodeId: NodeId): boolean;
   readonly polylines: PolylineCache;
   readonly junctions: Map<NodeId, JunctionLevels>;
   readonly ribbons: Map<SegmentId, SegmentRibbon>;
@@ -39,108 +43,12 @@ interface Network {
 /** A mouth cut this little short of where its carriageway separates from the neighbouring leg's is the solver's own */
 const SQUEEZE_NOISE = m(0.4);
 
-/**
- * A junction solved for one pass, with what the pass handed it (`junctionKey`), the plate it reaches, how many levels it has and what
- * the reconciling of its roads reads of it (`trimSummary`). A pass's junction a later pass solved again is let go once the rebuild
- * is over (`byLevel` null: DO NOT keep two or three whole junctions a pressured node, ~two thirds of the junctions' memory,
- * 2026-10-22): its summary and plate are all the next rebuilds read of it, and it is solved again should a node fall back to it (`levels3`).
- */
-interface MemoEntry {
-  readonly key: number;
-  readonly byLevel: JunctionLevels | null;
-  readonly size: number;
-  readonly plate: readonly (readonly [SegmentId, number])[];
-  readonly summary: readonly number[];
-}
-
-function memoEntry(key: number, byLevel: JunctionLevels, plate: MemoEntry['plate']): MemoEntry {
-  return { key, byLevel, size: byLevel.size, plate, summary: trimSummary(byLevel) };
-}
-
 interface RibbonMemo {
   readonly ribbon: SegmentRibbon;
   /** The trims it was made with (compared as numbers, `samePlain`). */
   readonly trims: SegmentTrims;
   readonly bendA: number;
   readonly bendB: number;
-}
-
-/** A TILE'S JUNCTIONS AND RIBBONS SOLVED OFF THE PAGE (`editor/tileStore.ts` prepareTile, the save worker or the generator's): each node's passes with the key of what they were solved from (`nodeBakeKey`), each road's ribbon with what it was made from; the page's build takes them where its inputs are the same (`takeBakes`) and solves only the nodes with a road of a tile not here. Plain data and typed arrays, cloned by the message. */
-export interface NetworkBake {
-  readonly nodes: BakedNode[];
-  readonly segments: BakedSegment[];
-}
-interface BakedNode {
-  readonly id: NodeId;
-  readonly key: number;
-  readonly j1: BakedMemo | null;
-  readonly j2: BakedMemo | null;
-  readonly j3: BakedMemo | null;
-}
-/** A pass's junctions as their data (`JunctionLevels.data`: the carriageway, the frames its outer levels are made from, what is kept whole; null: let go, `MemoEntry`). */
-interface BakedMemo { readonly key: number; readonly levels: JunctionLevelsData | null; readonly size: number; readonly plate: MemoEntry['plate']; readonly summary: readonly number[] }
-/** A ribbon as what it is made from (`ribbons.ts` LeanRibbon): its road, its whole centreline as its flat array (`Polyline.xy`) and its box; its levels made on the thread that reads them (`ribbonFromBake`). */
-type BakedRibbon = Pick<SegmentRibbon, 'id' | 'typeIndex' | 'direction' | 'road' | 'dashOrigin'> & {
-  readonly full: Float64Array; readonly bounds: ChangeRect;
-};
-
-function memoData(entry: MemoEntry | undefined): BakedMemo | null {
-  if (!entry) return null;
-  return { key: entry.key, levels: entry.byLevel ? entry.byLevel.data() : null, size: entry.size, plate: entry.plate, summary: entry.summary };
-}
-
-function memoOf(baked: BakedMemo): MemoEntry {
-  return { key: baked.key, byLevel: baked.levels ? JunctionLevels.fromData(baked.levels, JUNCTION_KIT) : null, size: baked.size, plate: baked.plate, summary: baked.summary };
-}
-interface BakedSegment {
-  readonly id: SegmentId;
-  /** `segmentSourceKey` of the road the ribbon was made from. */
-  readonly source: number;
-  readonly trims: SegmentTrims;
-  readonly bendA: number;
-  readonly bendB: number;
-  readonly ribbon: BakedRibbon;
-}
-
-function ribbonFromBake(s: BakedSegment): SegmentRibbon {
-  const r = s.ribbon;
-  return leanRibbon(r.id, r.typeIndex, r.direction, r.road, r.dashOrigin, Polyline.fromFlat(r.full), s.trims, s.bendA, s.bendB, r.bounds);
-}
-
-/** What a node's junctions are solved from, whichever thread solves them: its record and its roads' (where their ends stand too), the roads in id order (a road of a tile not on that thread changes it: the page then solves the node itself). */
-function nodeBakeKey(doc: RoadDoc, n: RoadNode): number {
-  const incident = n.incident.slice().sort((p, q) => p - q);
-  const digest = nodeSourceDigest({ ...n, incident });
-  for (const id of incident) {
-    const s = doc.segment(id);
-    digest.add(s ? segmentSourceKey(doc, s) : NaN);
-  }
-  return digest.value();
-}
-
-// DO NOT keep a road's or a node's inputs as JSON text: a number per record (`Digest`), not a string per record of the map.
-/** Everything a segment's polyline, ribbon and junction legs are built from: its record and where its two ends stand. */
-function segmentSourceKey(doc: RoadDoc, s: RoadSegment): number {
-  const a = doc.node(s.a), b = doc.node(s.b);
-  return new Digest().add(s.a).add(s.b).add(s.type).addPlain(s.curve ? [s.curve.t, s.curve.h] : null).add(s.dashOrigin)
-    .addText(s.direction).addPlain(s.lanes).addText(s.structure).addPlain(s.section ?? null).addPlain(s.parking ?? null)
-    .addPlain(a ? [a.x, a.y] : null).addPlain(b ? [b.x, b.y] : null).add(s.cutWalls ? 1 : 0).value();
-}
-
-/** Everything of a node a junction there is built from: its place, height, roads by id, control, crossing and end. */
-function nodeSourceKey(n: RoadNode): number {
-  return nodeSourceDigest(n).value();
-}
-
-function nodeSourceDigest(n: RoadNode): Digest {
-  return new Digest().add(n.x).add(n.y).add(n.heightOffset).add(n.smooth ? 1 : 0).addAll(n.incident).addText(n.control)
-    .addPlain(n.blockedMovements).addPlain(n.crossing ? [n.crossing.kind, n.crossing.segment] : null)
-    .addPlain(n.end ?? null).addPlain(n.uturn ?? null);
-}
-
-/** The whole record of a node: what the traffic reads of it besides the geometry (lane links, signal settings, approach rules). */
-function nodeRecordKey(n: RoadNode): number {
-  return nodeSourceDigest(n).addPlain(n.laneLinks ?? null).addPlain(n.signal ?? null).addPlain(n.approachRules ?? null).value();
 }
 
 /** A point's rectangle, for filing a node by where it stands. */
@@ -173,6 +81,23 @@ export class NetworkBuild {
 
   constructor(private readonly net: Network) {}
 
+  /** A road as this build holds it: the document's, when the network holds the road (`Network.holds`); none otherwise, as a road gone. */
+  private seg(id: SegmentId): RoadSegment | undefined {
+    return this.net.holds(id) ? this.net.doc.segment(id) : undefined;
+  }
+
+  /** A node as this build holds it: the document's, when every road at it is held (`Network.complete`); none otherwise (no junction, no marks there). */
+  private node(id: NodeId): RoadNode | undefined {
+    return this.net.complete(id) ? this.net.doc.node(id) : undefined;
+  }
+
+  /** The roads at a node that this build holds (a node not complete: its held roads alone). */
+  private incidentHeld(id: NodeId): SegmentId[] {
+    const out: SegmentId[] = [];
+    for (const seg of this.net.doc.node(id)?.incident ?? []) if (this.net.holds(seg)) out.push(seg);
+    return out;
+  }
+
   /** A tile's junctions and ribbons solved off the page, for the next rebuild (the tile's records just loaded). */
   offerBake(bake: NetworkBake): void {
     this.bakes.push(bake);
@@ -203,7 +128,7 @@ export class NetworkBuild {
     const doc = this.net.doc;
     for (const bake of this.bakes.splice(0)) {
       for (const b of bake.nodes) {
-        const node = doc.node(b.id);
+        const node = this.node(b.id);
         if (!node || !nodes.has(b.id) || nodeBakeKey(doc, node) !== b.key) continue;
         if (b.j1) this.j1.set(b.id, memoOf(b.j1));
         if (b.j2) this.j2.set(b.id, memoOf(b.j2));
@@ -211,7 +136,7 @@ export class NetworkBuild {
         networkWork.taken++;
       }
       for (const s of bake.segments) {
-        const seg = doc.segment(s.id);
+        const seg = this.seg(s.id);
         if (!seg || !segments.has(s.id) || segmentSourceKey(doc, seg) !== s.source) continue;
         this.ribbonMemo.set(s.id, { ribbon: ribbonFromBake(s), trims: s.trims, bendA: s.bendA, bendB: s.bendB });
       }
@@ -312,7 +237,7 @@ export class NetworkBuild {
     const n1 = changedNodes;
     for (const node of n1) {
       networkWork.marks++;
-      const record = doc.node(node);
+      const record = this.node(node);
       const isActive = !!record && surfaceMode(doc, net.polylines, node) === 'junction';
       if (isActive) {
         this.active.add(node);
@@ -328,8 +253,8 @@ export class NetworkBuild {
 
     // ---- reconcile 1: the scales ------------------------------------------
     const s1 = new Set<SegmentId>();
-    for (const id of changedSegs) if (doc.segment(id)) s1.add(id);
-    for (const node of n1) for (const id of doc.node(node)?.incident ?? []) s1.add(id);
+    for (const id of changedSegs) if (this.seg(id)) s1.add(id);
+    for (const node of n1) for (const id of this.incidentHeld(node)) s1.add(id);
     const scaled1 = new Set<SegmentId>();
     for (const id of s1) {
       networkWork.segments++;
@@ -337,7 +262,7 @@ export class NetworkBuild {
       if (scale !== (this.scale1.get(id) ?? 1)) scaled1.add(id);
       if (scale < 1) this.scale1.set(id, scale); else this.scale1.delete(id);
     }
-    for (const id of changedSegs) if (!doc.segment(id)) { this.scale1.delete(id); this.scale2.delete(id); this.trims2.delete(id); }
+    for (const id of changedSegs) if (!this.seg(id)) { this.scale1.delete(id); this.scale2.delete(id); this.trims2.delete(id); }
 
     // ---- pass 2: the nodes under length pressure --------------------------
     const n2 = new Set(n1);
@@ -356,7 +281,7 @@ export class NetworkBuild {
 
     // ---- reconcile 2: the trims --------------------------------------------
     const s2 = new Set(s1);
-    for (const node of moved2) for (const id of doc.node(node)?.incident ?? []) s2.add(id);
+    for (const node of moved2) for (const id of this.incidentHeld(node)) s2.add(id);
     const retrimmed = new Set<SegmentId>();
     for (const id of s2) {
       networkWork.segments++;
@@ -403,11 +328,11 @@ export class NetworkBuild {
     // ---- the roads: final trims, plate reaches, ribbons --------------------
     const s3 = new Set<SegmentId>(s2);
     for (const id of retrimmed) s3.add(id);
-    for (const node of moved3) for (const id of doc.node(node)?.incident ?? []) s3.add(id);
-    for (const node of plated) for (const id of doc.node(node)?.incident ?? []) s3.add(id);
-    for (const node of n1) for (const id of doc.node(node)?.incident ?? []) s3.add(id);
+    for (const node of moved3) for (const id of this.incidentHeld(node)) s3.add(id);
+    for (const node of plated) for (const id of this.incidentHeld(node)) s3.add(id);
+    for (const node of n1) for (const id of this.incidentHeld(node)) s3.add(id);
     for (const id of changedSegs) {
-      if (doc.segment(id)) continue;
+      if (this.seg(id)) continue;
       // A road gone: everything it had.
       const ribbon = net.ribbons.get(id);
       ribbonBefore.set(id, ribbon);
@@ -423,7 +348,7 @@ export class NetworkBuild {
     const retrimmedFinal = new Set<SegmentId>();
     for (const id of s3) {
       networkWork.segments++;
-      const seg = doc.segment(id);
+      const seg = this.seg(id);
       if (!seg) continue;
       const trims = this.finalTrims(id, seg);
       const old = net.trims.get(id);
@@ -474,7 +399,7 @@ export class NetworkBuild {
       if (after) rects.push(ribbonBounds(after));
     }
     for (const id of retrimmedFinal) segments.add(id);
-    for (const node of plated) for (const id of doc.node(node)?.incident ?? []) segments.add(id);
+    for (const node of plated) for (const id of this.incidentHeld(node)) segments.add(id);
     const nodes = new Set<NodeId>(records);
     for (const node of changedNodes) nodes.add(node);
     for (const node of moved3) {
@@ -500,8 +425,8 @@ export class NetworkBuild {
     }
     if (everything) {
       // In increasing id order: a build from nothing files in one order whatever order the document holds them in (no reader depends on it).
-      for (const id of [...new Set([...doc.segments.keys(), ...this.segmentSource.keys()])].sort((p, q) => p - q)) candSegs.add(id);
-      for (const id of [...new Set([...doc.nodes.keys(), ...this.nodeSource.keys()])].sort((p, q) => p - q)) candNodes.add(id);
+      for (const id of [...new Set([...this.net.scope ?? doc.segments.keys(), ...this.segmentSource.keys()])].sort((p, q) => p - q)) candSegs.add(id);
+      for (const id of [...new Set([...this.net.scope ? [] : doc.nodes.keys(), ...this.nodeSource.keys()])].sort((p, q) => p - q)) candNodes.add(id);
     } else {
       // A node moved moves its roads.
       for (const node of candNodes) {
@@ -509,11 +434,17 @@ export class NetworkBuild {
         for (const id of this.nodeIncident.get(node) ?? []) candSegs.add(id);
       }
     }
+    // The roads held moved (`Network.rescope`): those that came are not recorded yet, those that left are recorded and held no more.
+    const scope = this.net.scope;
+    if (scope) {
+      for (const id of scope) if (!this.segmentSource.has(id)) candSegs.add(id);
+      for (const id of this.segmentSource.keys()) if (!scope.has(id)) candSegs.add(id);
+    }
 
     const segments = new Set<SegmentId>();
     for (const id of candSegs) {
       networkWork.sources++;
-      const seg = doc.segment(id);
+      const seg = this.seg(id);
       const key = seg ? segmentSourceKey(doc, seg) : undefined;
       if (this.segmentSource.get(id) === key) continue;
       segments.add(id);
@@ -526,7 +457,7 @@ export class NetworkBuild {
     }
     for (const id of candNodes) {
       networkWork.sources++;
-      const node = doc.node(id);
+      const node = this.node(id);
       const source = node ? nodeSourceKey(node) : undefined;
       const record = node ? nodeRecordKey(node) : undefined;
       let changed = this.nodeSource.get(id) !== source;
@@ -538,7 +469,7 @@ export class NetworkBuild {
 
     // The sources recorded as they are now.
     for (const id of segments) {
-      const seg = doc.segment(id);
+      const seg = this.seg(id);
       if (seg) {
         this.segmentSource.set(id, segmentSourceKey(doc, seg));
         this.segmentEnds.set(id, [seg.a, seg.b]);
@@ -548,7 +479,7 @@ export class NetworkBuild {
       }
     }
     for (const id of records) {
-      const node = doc.node(id);
+      const node = this.node(id);
       if (node) {
         this.nodeSource.set(id, nodeSourceKey(node));
         this.nodeRecord.set(id, nodeRecordKey(node));

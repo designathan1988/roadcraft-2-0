@@ -26,8 +26,9 @@ function grid(n: number, side: number): RoadDoc {
   return doc;
 }
 
-/** The page's client and the worker's host in one thread, each message handled in order. */
-async function wired(doc: RoadDoc): Promise<SimClient> {
+
+/** The page's client and the worker's host in one thread, each message handled in order; the worker's micro window stood over the whole town (its network holds the window's roads alone, `Network.scope`). `frames`: frames of the game passed, as between an edit and the tool's next ask. */
+async function wired(doc: RoadDoc): Promise<{ client: SimClient; frames: (n: number) => Promise<void> }> {
   const client = new SimClient(doc);
   let chain = Promise.resolve();
   const host = new SimHost((message: FromSim) => (client as unknown as { receive(m: FromSim): void }).receive(message));
@@ -35,7 +36,15 @@ async function wired(doc: RoadDoc): Promise<SimClient> {
   (client as unknown as { worker: { postMessage(message: ToSim): void } }).worker = {
     postMessage: (message) => { chain = chain.then(() => host.handle(message)); },
   };
-  return client;
+  const frames = async (n: number): Promise<void> => {
+    for (let f = 0; f < n; f++) {
+      client.frame(1 / 30, false, { traffic: true, pedestrians: false, maxShare: 1 });
+      await chain;
+    }
+  };
+  client.window(m(240), m(240), m(1000));
+  await frames(12);
+  return { client, frames };
 }
 
 /** A plan as compared: its lots' keys and corners, its keys and their places, the lots it drops. */
@@ -46,7 +55,7 @@ describe("the proposed lots planned in the simulation's worker", () => {
     const doc = grid(4, m(120));
     const net = new Network(doc);
     net.rebuild();
-    const client = await wired(doc);
+    const { client, frames } = await wired(doc);
     const worker = await client.lotPlan();
     const page = planLots(doc, net);
     expect(page.add.length).toBeGreaterThan(20);
@@ -57,6 +66,9 @@ describe("the proposed lots planned in the simulation's worker", () => {
     net.rebuild();
     applyLots(doc, { add: page.add.slice(0, 5), keys: [], drop: [] });
     const again = planLots(doc, net);
+    // Right after the edit the worker's window has not held the new road yet: no plan, asked again; a few frames on, the road is the window's.
+    expect(await client.lotPlan()).toBeNull();
+    await frames(6);
     expect(shape(await client.lotPlan())).toEqual(shape(again));
   });
 });

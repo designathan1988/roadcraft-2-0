@@ -1870,6 +1870,11 @@ export class RoadDoc {
     };
   }
 
+  /** The ids of a tile's own roads and nodes now (`tileIndex.ts`, by `OWNER`): what the micro window finds its roads by (`SimWorld.scopeOf`), DO NOT walk every road of the map for it. */
+  tileRoads(key: number): { readonly nodes: ReadonlySet<number>; readonly segments: ReadonlySet<number> } {
+    return this.tileIndex.roadsOf(key);
+  }
+
   /** The ids of what a tile holds now (`tileMembers`), the parts another copy of the document follows: what that copy takes in or lets go with the tile (`sim/host/simClient.ts`). */
   tileIds(key: number): { readonly nodes: readonly NodeId[]; readonly borrowedNodes: readonly NodeId[]; readonly segments: readonly SegmentId[]; readonly lots: readonly number[]; readonly buildings: readonly BuildingId[] } {
     const t = this.tileMembers(key);

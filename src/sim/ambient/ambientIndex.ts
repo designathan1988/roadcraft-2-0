@@ -1,5 +1,5 @@
 import type { ChangeJournal } from '@world/changes';
-import { NetworkLength } from '@world/networkLength';
+import { DocRoadLength } from '@world/docLength';
 import type { Network, SegmentRibbon } from '@world/network';
 import { m, stepsIn } from '@world/units';
 import { IdSlots, grown } from '@core/idSlots';
@@ -346,8 +346,8 @@ export class BuildingMix {
 
 /** Street length within `r` of (x, y), world units */
 export class StreetLength {
-  /** The street length of the whole map (`world/networkLength.ts`). */
-  private readonly whole = new NetworkLength();
+  /** The street length of the whole map (`world/docLength.ts`): the document's roads, whatever roads the network holds. */
+  private readonly whole = new DocRoadLength();
   /** Each ribbon's straight pieces as the walk reads them: middle x, middle y, length. Ribbons are never changed in place. */
   private readonly pieces = new WeakMap<SegmentRibbon, Float64Array>();
 
@@ -364,9 +364,9 @@ export class StreetLength {
     return total;
   }
 
-  /** DO NOT sum every ribbon of the map when the network moves: every road drawn walked the town's roads. */
+  /** DO NOT sum every road of the map when the network moves: every road drawn walked the town's roads. */
   private wholeMap(net: Network): number {
-    return this.whole.of(net);
+    return this.whole.of(net.doc);
   }
 
   /** The pieces of `ribbon` whose middle is within `r` of (x, y), added to `total` in order. */

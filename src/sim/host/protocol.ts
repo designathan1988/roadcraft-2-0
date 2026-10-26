@@ -1,7 +1,7 @@
 import type { Restoration } from '@world/doc';
 import type { BuildingSent, TrafficMap } from '../agents/trafficBuildings';
 import type { NodeId, SegmentId } from '@world/ids';
-import type { NetworkBake } from '@world/networkBuild';
+import type { NetworkBake } from '@world/networkBake';
 import type { BodyPart, PedView, PersonAgeClass } from '../people/view';
 import type { Casualty } from '../people/casualties';
 import type { KerbStop } from '../vehicles/kerbStops';
@@ -87,10 +87,13 @@ export interface TrainState { readonly colour: string; readonly metro: boolean; 
 /** The page to the worker: never the whole map nor a building's record, only what traffic reads (`agents/trafficBuildings.ts`). */
 export type ToSim =
   /** `frames`: the memory both sides hold; null for a worker in another process (the desktop's), told its frames with each tick instead. */
-  | { readonly type: 'init'; readonly frames: SharedFrames | null; readonly map: TrafficMap; readonly seed: number; readonly zones: ReadonlyMap<string, Float64Array | null>; readonly zonesPrefix: string | null; readonly ambient: 'view' | 'edges'; readonly bake?: NetworkBake | null }
+  /** `bakes`: the page holds the map's network solved and answers `bakeAsk` with the roads the window comes to (SIM-04); none, the worker solves them. */
+  | { readonly type: 'init'; readonly frames: SharedFrames | null; readonly map: TrafficMap; readonly seed: number; readonly zones: ReadonlyMap<string, Float64Array | null>; readonly zonesPrefix: string | null; readonly ambient: 'view' | 'edges'; readonly bakes?: boolean }
+  /** The page's junctions and ribbons of these roads, solved (`Network.exportBake`), for `bakeAsk`. */
+  | { readonly type: 'bakeAnswer'; readonly id: number; readonly bake: NetworkBake | null }
   /** The kept conflict zones a worker in another process asked for (`derivedAsk`): the page's store answers, that process has none. */
   | { readonly type: 'derivedAnswer'; readonly id: number; readonly values: ReadonlyMap<string, Float64Array | null> }
-  | { readonly type: 'load'; readonly map: TrafficMap; readonly bake?: NetworkBake | null }
+  | { readonly type: 'load'; readonly map: TrafficMap }
   /** The SAME map sent whole again, when the diary cannot say what changed (its entries let go, a change without ids): the replica brought up to it, the simulation kept running (SIM-18). */
   | { readonly type: 'resync'; readonly map: TrafficMap }
   /** The page's job lanes for the lots' bays and the conflict pairs (`jobPool.ts` jobChannel), before `init`: the worker opens no pool of its own. */
@@ -171,6 +174,8 @@ export type FromSim =
   | { readonly type: 'answer'; readonly id: number; readonly answer: unknown }
   /** A worker in another process reads and keeps the conflict zones through the page's store (`core/derivedCache.ts` is the page's IndexedDB; that process has none). */
   | { readonly type: 'derivedAsk'; readonly id: number; readonly prefix: string; readonly keys: readonly string[] }
+  /** The junctions and ribbons of the roads the micro window comes to, asked of the page's network, which holds the map solved (`SimWorld.bakeSource`; answered with `bakeAnswer`). */
+  | { readonly type: 'bakeAsk'; readonly id: number; readonly nodes: readonly NodeId[]; readonly segments: readonly SegmentId[] }
   | { readonly type: 'derivedKeep'; readonly prefix: string; readonly values: ReadonlyMap<string, Float64Array | null> };
 
 /** The cars come into a bay or gone from one, `PARKED_STRIDE` numbers each (fields `PK`), in a buffer handed over; `whole`: every car standing, those not in it gone. */

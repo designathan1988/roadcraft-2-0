@@ -23,14 +23,15 @@ import {
 import { CellFiling } from './cells';
 import { m } from './units';
 import type { ChangeRect } from './changes';
-import { type NetworkBake, NetworkBuild } from './networkBuild';
+import { NetworkBuild } from './networkBuild';
+import type { NetworkBake } from './networkBake';
 import type { SegmentRibbon, SegmentTrims } from './ribbons';
 import { DeltaLog, type NetworkDelta } from './networkDelta';
 import type { PoleLineState } from './poleLines';
 
 
 export type { SegmentRibbon, SegmentTrims } from './ribbons';
-export type { NetworkBake } from './networkBuild';
+export type { NetworkBake } from './networkBake';
 
 /** All geometry derived from the authoring document. */
 /** A crossing's landing on the footways (`Network.crossingLandingAt`): kept clear of everything. */
@@ -82,6 +83,35 @@ export class Network {
   poleLines: PoleLineState | null = null;
   /** The network this one is a working copy of (`fork`), its maps laid over that one's; null for a network of its own. */
   forkedFrom: Network | null = null;
+
+  /**
+   * THE ROADS THIS NETWORK HOLDS: every road of the document (null, the page's), or the micro window's alone (the simulation's twin,
+   * `SimWorld.useMeso`: the lane graph's `scope`): their ribbons and trims, and the junctions at the nodes every one of whose roads is
+   * held (`complete`); a node with a road outside is no junction here. Moved with the window by `rescope`: what left is taken out and
+   * what came is built, as an edit's rebuild does, and said in the network's changes (`changesSince`) so whatever follows the network
+   * follows the window too. DO NOT hold a 10 km city's junctions and ribbons in the simulation's process for the street in view.
+   */
+  scope: ReadonlySet<SegmentId> | null = null;
+
+  /** Whether a road is one this network holds. */
+  holds(segment: SegmentId): boolean {
+    return this.scope === null || this.scope.has(segment);
+  }
+
+  /** Whether every road at a node is held: only then has the node its junction, trims and marks. */
+  complete(nodeId: NodeId): boolean {
+    if (this.scope === null) return true;
+    const node = this.doc.node(nodeId);
+    if (!node) return false;
+    for (const seg of node.incident) if (!this.scope.has(seg)) return false;
+    return true;
+  }
+
+  /** The roads held moved to `next` (the micro window's, `SimWorld.rescopeSteps`): the roads that left taken out, those that came built, as a rebuild (its delta in the changes). */
+  rescope(next: ReadonlySet<SegmentId>): void {
+    this.scope = next;
+    this.rebuild();
+  }
 
   /** Matches `RoadDoc.revision` at the time of the last rebuild. */
   revision = -1;
@@ -184,6 +214,7 @@ export class Network {
     own['trims'] = new ForkMap(this.trims);
     own['plateReach'] = new ForkMap(this.plateReach);
     own['transitions'] = new ForkSet(this.transitions);
+    copy.scope = this.scope;
     copy.polylines.forkFrom(this.polylines);
     copy.build.forkFrom(this.build);
     copy.log.takeFrom(this.log);

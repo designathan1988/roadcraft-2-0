@@ -1,6 +1,7 @@
 import type { NodeId } from '@world/ids';
 import type { RoadSegment } from '@world/doc';
 import { allowsDirection, linkCentre } from '@world/lanelets';
+import { segmentPolyline } from '@world/geometry';
 import { roadProfile, travelLanes } from '@world/roadTypes';
 import { laneUse } from '@world/roadSection';
 import { TUNNELS_DRAWN } from '@world/structures';
@@ -31,6 +32,7 @@ export function linkSpec(w: SimWorld, seg: RoadSegment, forward: boolean): LinkS
   for (let lane = 0; lane < lpd; lane++) if (laneUse(seg.section, forward, lane) !== 'bus') lanes++;
   if (!lanes) return null;
   const from = forward ? seg.a : seg.b, to = forward ? seg.b : seg.a;
-  const length = linkCentre(w.doc, w.net, seg, from, to).centre.length;
+  // Its length between its stop lines where the network holds the road (the micro window's); its line's whole length elsewhere, the network holding no trims there (DO NOT read the network for a road outside the window: its polylines filled with the map's).
+  const length = w.net.holds(seg.id) ? linkCentre(w.doc, w.net, seg, from, to).centre.length : segmentPolyline(w.doc, seg).length;
   return { from, to, lanes, length, vFree: rt.speedLimit, controlled: w.doc.degree(to) >= 3 || w.doc.node(to)?.crossing !== undefined };
 }

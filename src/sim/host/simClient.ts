@@ -206,16 +206,21 @@ export class SimClient implements JournalReader {
   private wounds: Wound[] = [];
   private casualtyList: Casualty[] = [];
 
-  /** `net`: the page's network of `doc`, whose junctions and ribbons the worker takes as solved (`bake`, SIM-04); none: the worker solves them. */
+  /** `net`: the page's network of `doc`, whose junctions and ribbons the worker takes as solved for the roads its window comes to (`bakeAsk`, SIM-04); none: the worker solves them. */
   constructor(readonly doc: RoadDoc, private readonly net: Network | null = null) {}
 
-  /** The page's junctions and ribbons of the whole map: the worker's build takes each whose inputs are the same. */
-  private bake(): NetworkBake | null {
+  /** Whether this page holds the map's network solved for the worker to take (`init.bakes`). */
+  private get bakes(): boolean {
+    return this.net !== null && this.net.doc === this.doc;
+  }
+
+  /** The page's junctions and ribbons of these roads (the micro window's, `bakeAsk`): the worker's build takes each whose inputs are the same. DO NOT send the whole map's: a 10 km city's junctions went in one message at the start. */
+  private bake(nodes: readonly NodeId[], segments: readonly SegmentId[]): NetworkBake | null {
     const net = this.net;
     if (!net || net.doc !== this.doc) return null;
     // Brought up to the document first: the rebuild the page's next frame would make (`main.ts`).
     if (!net.isBuilt()) net.rebuild();
-    return net.exportBake(this.doc.nodes.keys(), this.doc.segments.keys());
+    return net.exportBake(nodes, segments);
   }
 
   /** The wounds told since the last call, taken (`render/playEffects.ts`). */
@@ -261,7 +266,7 @@ export class SimClient implements JournalReader {
     });
     this.markSent();
     // No frames shared with a worker of another process (a SharedArrayBuffer never crosses one): it is told so, and posts its frames with each tick.
-    this.send({ type: 'init', frames: this.maker ? null : this.frames, map: trafficMapOf(this.doc), seed, zones, zonesPrefix, ambient, bake: this.bake() });
+    this.send({ type: 'init', frames: this.maker ? null : this.frames, map: trafficMapOf(this.doc), seed, zones, zonesPrefix, ambient, bakes: this.bakes });
     return ready;
   }
 
@@ -273,7 +278,7 @@ export class SimClient implements JournalReader {
   /** Another map (opened, generated, new): the worker's copy made whole again (only what traffic reads), the simulation started over. */
   load(): void {
     this.markSent();
-    this.send({ type: 'load', map: trafficMapOf(this.doc), bake: this.bake() });
+    this.send({ type: 'load', map: trafficMapOf(this.doc) });
     this.clearViews();
   }
 
@@ -526,6 +531,8 @@ export class SimClient implements JournalReader {
         );
         return;
       case 'derivedKeep': writeDerivedMany(message.prefix, message.values); return;
+      // The roads the worker's window comes to, solved here (SIM-04): answered at once, from the network the page holds.
+      case 'bakeAsk': this.send({ type: 'bakeAnswer', id: message.id, bake: this.bake(message.nodes, message.segments) }); return;
       // DO NOT stay silent: the frame asked of it never comes, and the city would stand still with no word.
       case 'failed':
         // Told once (each frame after may fail the same way), the last kept for the probes.
