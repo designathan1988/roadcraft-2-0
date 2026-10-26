@@ -68,6 +68,9 @@ const ROAD_REACH = m(60);
 /** Proposals a draw makes before it gives up (`LotPlaces.pick`). */
 const MAX_PROPOSALS = 64;
 
+/** A box of the world the places are drawn within (the micro window's square, `ambient.ts`). */
+export interface PlaceBox { readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number }
+
 /** A lot's way on foot from its door to the footway (`agents/lotDoors.ts` DoorWay). */
 export interface PlaceWay {
   readonly building: number;
@@ -189,6 +192,34 @@ export class LotPlaces<W extends PlaceWay> {
     return this.trees.map((tree) => tree.total / WEIGHT_SCALE);
   }
 
+  /** `frontages` of the lots whose cell meets the box (the micro window's square): DO NOT sum every lot of the map for the window's street. */
+  frontagesIn(box: PlaceBox): number[] {
+    const out = PLACE_KINDS.map(() => 0);
+    for (const c of this.cellsIn(box)) for (let k = 0; k < PLACE_KINDS.length; k++) out[k] = out[k]! + c.sums[k]! / WEIGHT_SCALE;
+    return out;
+  }
+
+  /** The cells whose square meets the box, by their keys (the box's cells, not the map's). */
+  private cellsIn(box: PlaceBox): PlaceCell[] {
+    const out: PlaceCell[] = [];
+    const cx0 = Math.floor(box.x0 / PLACE_CELL), cx1 = Math.floor(box.x1 / PLACE_CELL);
+    const cy0 = Math.floor(box.y0 / PLACE_CELL), cy1 = Math.floor(box.y1 / PLACE_CELL);
+    if ((cx1 - cx0 + 1) * (cy1 - cy0 + 1) > this.cells.size) {
+      for (const [key, c] of this.cells) {
+        const cx = Math.floor(key / 65536) - 32768, cy = (key % 65536) - 32768;
+        if (cx >= cx0 && cx <= cx1 && cy >= cy0 && cy <= cy1) out.push(c);
+      }
+      return out;
+    }
+    for (let gx = cx0; gx <= cx1; gx++) {
+      for (let gy = cy0; gy <= cy1; gy++) {
+        const c = this.cells.get(cellKey(gx, gy));
+        if (c) out.push(c);
+      }
+    }
+    return out;
+  }
+
   /** A building's way as a place (worked out now if it was not yet); undefined for a building not filed. */
   wayOf(id: number, joins: (p: { x: number; y: number }) => boolean): W | null | undefined {
     const p = this.byBuilding.get(id);
@@ -197,10 +228,49 @@ export class LotPlaces<W extends PlaceWay> {
     return this.ways[p];
   }
 
-  /** A lot drawn by `coef[kind] x frontage`, or, given `not` */
+  /** A lot drawn by `coef[kind] x frontage`, or, given `not`; `within`: among the lots whose cell meets the box alone (the micro window's). */
   pick(rng: { float(): number }, coef: readonly number[], not: W | null, joins: (p: { x: number; y: number }) => boolean,
-    decay: number, near: number): W | null {
-    return not ? this.pickFrom(rng, coef, not, joins, decay, near) : this.pickAny(rng, coef, joins);
+    decay: number, near: number, within: PlaceBox | null = null): W | null {
+    if (not) return this.pickFrom(rng, coef, not, joins, decay, near, within);
+    return within ? this.pickIn(rng, coef, joins, within) : this.pickAny(rng, coef, joins);
+  }
+
+  /** A lot of the box's cells, drawn by `coef[kind] x frontage` as `pickAny` draws over the map: each cell by its weight, a member by its. */
+  private pickIn(rng: { float(): number }, coef: readonly number[], joins: (p: { x: number; y: number }) => boolean, within: PlaceBox): W | null {
+    const cells = this.cellsIn(within);
+    const running = new Float64Array(cells.length);
+    let acc = 0;
+    cells.forEach((c, i) => {
+      let weight = 0;
+      for (let k = 0; k < PLACE_KINDS.length; k++) weight += coef[k]! * c.sums[k]!;
+      acc += Math.max(0, weight);
+      running[i] = acc;
+    });
+    if (!(acc > 0)) return null;
+    for (let t = 0; t < MAX_PROPOSALS; t++) {
+      const c = cells[atRoll(running, rng.float() * acc)]!;
+      let weight = 0;
+      for (let k = 0; k < PLACE_KINDS.length; k++) weight += coef[k]! * c.sums[k]!;
+      if (!(weight > 0)) continue;
+      let roll = rng.float() * weight;
+      let p = -1;
+      for (const q of c.members) {
+        const part = coef[this.kind[q]!]! * this.weight[q]!;
+        if (!(part > 0)) continue;
+        p = q;
+        if (roll < part) break;
+        roll -= part;
+      }
+      if (p < 0) continue;
+      ambientIndexWork.proposals++;
+      const was = this.weight[p]!;
+      if (this.ways[p] === undefined) this.workOut(p, joins);
+      const way = this.ways[p];
+      if (!way) continue;
+      // Taken with the chance of its frontage over the weight it was drawn by.
+      if (this.weight[p]! >= was || rng.float() * was < this.weight[p]!) return way;
+    }
+    return null;
   }
 
   private pickAny(rng: { float(): number }, coef: readonly number[], joins: (p: { x: number; y: number }) => boolean): W | null {
@@ -232,13 +302,13 @@ export class LotPlaces<W extends PlaceWay> {
   }
 
   private pickFrom(rng: { float(): number }, coef: readonly number[], not: W, joins: (p: { x: number; y: number }) => boolean,
-    decay: number, near: number): W | null {
+    decay: number, near: number, within: PlaceBox | null): W | null {
     const foot = not.out[not.out.length - 1]!;
     // Each cell drawn by its weight times the nearest its feet can be (a bound of every member's own distance decay)
     const cells: PlaceCell[] = [];
     const bounds: number[] = [];
     let sum = 0;
-    for (const c of this.cells.values()) {
+    for (const c of within ? this.cellsIn(within) : this.cells.values()) {
       ambientIndexWork.cells++;
       let weight = 0;
       for (let k = 0; k < PLACE_KINDS.length; k++) weight += coef[k]! * c.sums[k]!;

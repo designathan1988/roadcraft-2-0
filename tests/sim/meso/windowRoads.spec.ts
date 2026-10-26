@@ -3,6 +3,7 @@ import { RoadDoc } from '@world/doc';
 import { Network } from '@world/network';
 import { LaneletGraph } from '@world/lanelets';
 import type { Walkways } from '@world/walkways';
+import type { SegmentId } from '@world/ids';
 import { m } from '@world/units';
 import { SimWorld } from '@sim/world';
 import { step } from '@sim/pipeline';
@@ -11,13 +12,15 @@ import { TopologyCatchUp } from '@sim/topologyCatchUp';
 import { DT } from '@sim/params';
 import { ARCHETYPES } from '@sim/vehicles/archetypes';
 import { spawnVehicleAt } from '@sim/vehicles/spawn';
+import { createAgentWalkEngine } from '@sim/agents/walk';
+import { addLine, addStop, emptyTransit } from '@world/transit';
 
 /** THE LANE GRAPH AND THE WALKWAYS HOLD THE MICRO WINDOW'S ROADS ALONE (`SimWorld.useMeso`, `LaneletGraph.scope`, `Walkways.scope`): built where the window goes, taken out where it left, every car handed to the meso at its edge */
 
 const BLOCK = 120;
 
-/** A grid of 12 x 12 blocks (1.4 km a side) with a road off the map at two corners. */
-function town(): RoadDoc {
+/** A grid of 12 x 12 blocks (1.4 km a side) with a road off the map at two corners; `busLine`: a bus line along the row y = -600 with a stop every four blocks. */
+function town(busLine = false): RoadDoc {
   const n = 12;
   const doc = new RoadDoc();
   const ids: number[][] = [];
@@ -34,12 +37,27 @@ function town(): RoadDoc {
   const half = m(BLOCK) * (n / 2);
   doc.addSegment(ids[0]![0]! as never, doc.addNode({ x: -half - m(150), y: -half }).id as never, 1);
   doc.addSegment(ids[n]![n]! as never, doc.addNode({ x: half + m(150), y: half }).id as never, 1);
+  if (busLine) {
+    let t = emptyTransit();
+    const stops: number[] = [];
+    const row = ids.map((column) => column[1]!);
+    // A stop every four blocks: from a stop in the window the next lies beyond its roads.
+    for (let i = 0; i < n; i += 4) {
+      const seg = [...doc.segments.values()].find((s) => (s.a === row[i] && s.b === row[i + 1]) || (s.b === row[i] && s.a === row[i + 1]))!;
+      const a = doc.node(seg.a)!, b = doc.node(seg.b)!;
+      const stop = addStop(t, { mode: 'bus', x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - m(6), segment: seg.id });
+      t = stop.data;
+      stops.push(stop.id);
+    }
+    t = addLine(t, 'bus', stops).data;
+    doc.setTransit(t);
+  }
   return doc;
 }
 
 /** The game's world: the micro window on, the meso driving the map, the topology caught up off the step as the frame loop does (`simHost.ts`). */
-function game(): { w: SimWorld; meso: Meso; frames: (seconds: number) => void; whole: LaneletGraph } {
-  const doc = town();
+function game(pedestrians = false, busLine = false): { w: SimWorld; meso: Meso; frames: (seconds: number) => void; whole: LaneletGraph } {
+  const doc = town(busLine);
   const net = new Network(doc);
   net.rebuild();
   const whole = new LaneletGraph();
@@ -57,7 +75,7 @@ function game(): { w: SimWorld; meso: Meso; frames: (seconds: number) => void; w
       if (!catching) topology.stepWindow(w, net.trafficToken());
       w.topologyDeferred = catching;
       w.walkwaysNow();
-      step(w, { traffic: true, pedestrians: false });
+      step(w, { traffic: true, pedestrians });
     }
   };
   return { w, meso, frames, whole };
@@ -65,12 +83,12 @@ function game(): { w: SimWorld; meso: Meso; frames: (seconds: number) => void; w
 
 /** Every junction of the graph has every one of its roads' lanes (its legs all there), and every lane's road is one the window holds. */
 function expectWindowRoads(w: SimWorld, win: { x: number; y: number; r: number }): void {
-  const inside = new Set<number>();
+  const inside = new Set<SegmentId>();
   for (const seg of w.doc.segments.values()) {
     const a = w.doc.node(seg.a)!, b = w.doc.node(seg.b)!;
     if (Math.hypot((a.x + b.x) / 2 - win.x, (a.y + b.y) / 2 - win.y) < win.r) inside.add(seg.id);
   }
-  const held = new Set<number>();
+  const held = new Set<SegmentId>();
   for (const seg of inside) for (const node of [w.doc.segment(seg)!.a, w.doc.segment(seg)!.b]) for (const other of w.doc.node(node)!.incident) held.add(other);
   for (const lane of w.graph.lanelets.values()) if (lane.kind === 'link') expect(held.has(lane.segment!), `lane ${lane.id}`).toBe(true);
   for (const seg of held) expect(w.graph.linksOfSegment(seg).length, `road ${seg}`).toBeGreaterThan(0);
@@ -134,5 +152,63 @@ describe("the micro window's roads", () => {
     frames(120);
     expect(w.vehicles.has(id as never)).toBe(false);
     expect(meso.model.handedIn).toBeGreaterThan(handed);
+  });
+
+  it("makes the scenery's people in the window alone, from the footway ends at its edge, and takes them with it", () => {
+    const { w, meso, frames } = game(true);
+    w.usePedestrianEngine(createAgentWalkEngine());
+    w.ambient.enabled = true;
+    w.ambient.source = 'edges';
+    w.pedestrianCount = 400;
+    w.trafficIntensity = 0;
+    const win = { x: m(-600), y: m(-600), r: m(250) };
+    meso.want(win.x, win.y, win.r);
+    frames(30);
+    const onHeldFootway = (x: number, y: number): boolean => w.pedEngine.walkableNear!.call(w.pedEngine, w, x, y, m(6)) !== null;
+    expect(w.pedViews.length).toBeGreaterThan(10);
+    // Fewer than the map's count: the window's share of it, by its street.
+    expect(w.pedViews.length).toBeLessThan(200);
+    for (const p of w.pedViews) {
+      expect(onHeldFootway(p.x, p.y), `person ${p.id} at ${p.x}, ${p.y}`).toBe(true);
+      expect(Math.hypot(p.x - win.x, p.y - win.y), `person ${p.id}`).toBeLessThan(win.r + m(200));
+    }
+    // The window moves: nobody is left walking where its roads were.
+    const moved = { x: m(0), y: m(-600), r: m(250) };
+    meso.want(moved.x, moved.y, moved.r);
+    frames(3);
+    expect(meso.microWindow()).toEqual(moved);
+    for (const p of w.pedViews) expect(onHeldFootway(p.x, p.y), `person ${p.id} at ${p.x}, ${p.y}`).toBe(true);
+    frames(20);
+    expect(w.pedViews.length).toBeGreaterThan(10);
+    for (const p of w.pedViews) expect(Math.hypot(p.x - moved.x, p.y - moved.y), `person ${p.id}`).toBeLessThan(moved.r + m(200));
+  });
+
+  it('run the buses on the road inside the window and by the timetable beyond it, a bus bound for a stop beyond driving out at the edge', () => {
+    const { w, meso, frames } = game(false, true);
+    w.trafficIntensity = 0;
+    const win = { x: m(-600), y: m(-600), r: m(250) };
+    meso.want(win.x, win.y, win.r);
+    type BusRecord = { id: number | null; next: number; away?: string | undefined };
+    const buses = (): readonly BusRecord[] => (w.city.transit as unknown as { buses: BusRecord[] }).buses;
+    const onRoad = (): number => [...w.vehicles.values()].filter((v) => v.archetype.id === 'bus').length;
+    frames(2);
+    expect(buses().length).toBeGreaterThan(0);
+    let wasOn = 0, wentAway = 0, byTimetable = 0;
+    for (let k = 0; k < 150; k++) {
+      frames(1);
+      wasOn = Math.max(wasOn, onRoad());
+      for (const b of buses()) {
+        if (b.away !== undefined) wentAway++;
+        const v = b.id !== null ? w.vehicles.get(b.id as never) : undefined;
+        // A bus on the road is on a road the window holds, inside the window.
+        if (v) {
+          expect(w.lanelet(v.lanelet), `bus ${b.id}`).toBeDefined();
+        } else if (b.next > 0) byTimetable++;
+      }
+    }
+    // Buses drove in the window, some left it towards a stop beyond, and the line ran on by the timetable where the window is not.
+    expect(wasOn).toBeGreaterThan(0);
+    expect(wentAway).toBeGreaterThan(0);
+    expect(byTimetable).toBeGreaterThan(0);
   });
 });

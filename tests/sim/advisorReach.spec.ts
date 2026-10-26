@@ -111,7 +111,7 @@ describe('the control advisor', () => {
     let inside = true;
     w.meso = {
       step() {}, reset() {}, insideWindow: () => inside, microWindow: () => null, driven: false,
-      wantedWindow: () => null, windowMoved() {}, takeBackFrom() {}, handoffDestination: () => null,
+      wantedWindow: () => null, windowMoved() {}, takeBackFrom() {}, handoffDestination: () => null, handoffTowards: () => null,
     };
     // The conflicts' window holds nothing: the meso's says where the flows are counted.
     w.conflicts.setWindow(w.graph, new Set());

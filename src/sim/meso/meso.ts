@@ -666,6 +666,22 @@ export class Meso {
     return null;
   };
 
+  /** The lane past the window's edge nearest (x, y) that `start` reaches (null: none): a bus's way out towards a stop beyond the window (`transit.ts` leaveTowards), tried nearest first. */
+  handoffTowards(w: SimWorld, start: LaneletId, body: BodyClass, x: number, y: number): LaneletId | null {
+    const lanes = this.handoffLanes(w);
+    if (!lanes.length) return null;
+    const far = lanes.map((id) => {
+      const l = w.lanelet(id);
+      const p = l ? l.centre.sampleAt(l.length).p : null;
+      return { id, d: p ? Math.hypot(p.x - x, p.y - y) : Infinity };
+    }).sort((a, b) => a.d - b.d || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    for (const { id } of far) {
+      if (id === start || !w.graph.lanelets.has(id) || w.rt(id).ghost) continue;
+      if (w.laneReaches.mayReach(w, start, id, body)) return id;
+    }
+    return null;
+  }
+
   /** The cars handed to the window made, a few a tick (as the edge entries admit them), up to the fleet the machine carries and the tick's trip searches. */
   private admit(w: SimWorld): void {
     if (!this.pendingSlots.size) return;

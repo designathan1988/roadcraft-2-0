@@ -1,12 +1,14 @@
 import type { Vec2 } from '@core/vec2';
 import type { SegmentId } from '@world/ids';
+import type { LaneletId } from '@world/lanelets';
 import { type RailGraph, type TransitLine, type TransitStop, railGraph, railPath } from '@world/transit';
 import { m } from '@world/units';
 import { CellFiling } from '@world/cells';
 import type { ChangeRect } from '@world/changes';
 import { DRIVER_NOISE, DT } from '../params';
 import type { SimWorld } from '../world';
-import { ARCHETYPES } from '../vehicles/archetypes';
+import { roadProfile } from '@world/roadTypes';
+import { ARCHETYPES, bodyClassOfArchetype } from '../vehicles/archetypes';
 import { makeDriver } from '../vehicles/driver';
 import { createVehicle, snapshot, type Vehicle, type VehicleId } from '../vehicles/state';
 import { planFrom } from '../routing/router';
@@ -62,6 +64,8 @@ interface Bus {
   dwell: number;
   /** Seconds before it is put on the road (spaced from the bus before). */
   wait: number;
+  /** Driving out of the micro window towards a stop beyond its roads (`sendBus`): the lane past the window's edge it heads for, handed to the timetable there. */
+  away?: LaneletId | undefined;
 }
 
 interface Train {
@@ -156,19 +160,21 @@ export class TransitSim {
   /** A bus line's buses: those it had kept where they are, each sent on again; more put at its terminal, up to its number. */
   private placeBuses(w: SimWorld, line: TransitLine, was: readonly Bus[], kept: Set<Bus>): void {
     {
-      const served = line.stops.filter((id) => this.stopLanes.has(id));
+      // A stop beyond the micro window's roads is served by the timetable (`stopPoint`).
+      const served = line.stops.filter((id) => this.stopPoint(w, id) !== null);
       if (served.length < 2) return;
       // From a terminal, if the line has one.
       const start = Math.max(0, line.stops.findIndex((id) => this.stops.get(id)?.terminal));
       for (let k = 0; k < line.vehicles; k++) {
         const bus = was[k];
         if (!bus) {
-          this.buses.push({ line: line.id, id: null, next: start, dir: 1, dwell: 0, wait: k * BUS_SPACING });
+          this.buses.push({ line: line.id, id: null, next: start, dir: 1, dwell: 0, wait: k * BUS_SPACING, away: undefined });
           continue;
         }
         if (bus.next >= line.stops.length) { bus.next = start; bus.dir = 1; }
         const v = bus.id !== null ? w.vehicles.get(bus.id) : undefined;
         if (v) v.commute = null;
+        bus.away = undefined;
         kept.add(bus);
         this.buses.push(bus);
       }
@@ -300,6 +306,7 @@ export class TransitSim {
       w.removeVehicle(v);
       bus.id = null;
       bus.dwell = 0;
+      bus.away = undefined;
       bus.wait = goal && pose ? travelTime(Math.hypot(goal.x - pose.p.x, goal.y - pose.p.y), goal.speed) : BUS_SPACING;
     }
   }
@@ -340,18 +347,14 @@ export class TransitSim {
       return;
     }
     const c = v.commute;
+    // Driving out towards a stop beyond the window's roads (`sendBus`): on its way to the edge, where the timetable takes it.
+    if (!c && bus.away !== undefined && v.destination === bus.away) {
+      this.awayFromView(w, line, bus, v);
+      return;
+    }
     if (!c) { this.sendBus(w, line, bus, v); return; }
     // Driven out of the view's reach (past a margin, between stops, its doors shut): taken off the road, on by the timetable to the stop it was going to.
-    if (bus.dwell === 0 && !v.kerbStop && v.doors.every((open) => open === 0)) {
-      const pose = vehiclePose(w, v, 1);
-      const goal = this.stopPoint(w, line.stops[bus.next]!);
-      if (pose && goal && !w.inFocusReach(pose.p.x, pose.p.y, AWAY_MARGIN)) {
-        w.removeVehicle(v);
-        bus.id = null;
-        bus.wait = travelTime(Math.hypot(goal.x - pose.p.x, goal.y - pose.p.y), goal.speed);
-        return;
-      }
-    }
+    if (bus.dwell === 0 && !v.kerbStop && v.doors.every((open) => open === 0) && this.awayFromView(w, line, bus, v)) return;
     const at = v.lanelet === c.lanelet && v.v < STOPPED && v.s >= c.at - AT_STOP;
     if (!at) return;
     // At the stop, doors open.
@@ -366,13 +369,30 @@ export class TransitSim {
     this.sendBus(w, line, bus, v);
   }
 
-  /** Where a stop's bus stands (the point of its lane beside it) and the lane's speed; null when it has no lane. */
+  /** A bus out of the view's reach (past a margin, or outside the micro window's roads): taken off the road, on by the timetable to the stop it was going to; false when it stays. */
+  private awayFromView(w: SimWorld, line: TransitLine, bus: Bus, v: Vehicle): boolean {
+    const pose = vehiclePose(w, v, 1);
+    const goal = this.stopPoint(w, line.stops[bus.next]!);
+    if (!pose || !goal || w.inFocusReach(pose.p.x, pose.p.y, AWAY_MARGIN)) return false;
+    w.removeVehicle(v);
+    bus.id = null;
+    bus.away = undefined;
+    bus.wait = travelTime(Math.hypot(goal.x - pose.p.x, goal.y - pose.p.y), goal.speed);
+    return true;
+  }
+
+  /** Where a stop's bus stands (the point of its lane beside it) and the lane's speed; a stop beyond the micro window's roads (`SimWorld.useMeso`), the stop itself at its street's limit, for the timetable; null when it has no lane. */
   private stopPoint(w: SimWorld, stopId: number): { x: number; y: number; speed: number } | null {
     const lane = this.stopLanes.get(stopId);
     const l = lane ? w.lanelet(lane.lanelet) : undefined;
-    if (!lane || !l) return null;
-    const p = l.centre.sampleAt(Math.min(l.length, Math.max(0, lane.at))).p;
-    return { x: p.x, y: p.y, speed: l.speedLimit };
+    if (lane && l) {
+      const p = l.centre.sampleAt(Math.min(l.length, Math.max(0, lane.at))).p;
+      return { x: p.x, y: p.y, speed: l.speedLimit };
+    }
+    const stop = this.stops.get(stopId);
+    if (!stop || !w.microScoped || w.inFocusReach(stop.x, stop.y)) return null;
+    const seg = stop.segment !== undefined ? w.doc.segment(stop.segment) : undefined;
+    return { x: stop.x, y: stop.y, speed: seg ? roadProfile(seg.type, seg.lanes, seg.direction, seg.section, seg.parking).speedLimit : m(8) };
   }
 
   /** A bus away from the view at its stop by the timetable: its dwell there, on to the next stop (turning at the ends), and the time to drive there. */
@@ -396,11 +416,25 @@ export class TransitSim {
         planFrom(w, v);
         if (lane.lanelet === v.lanelet || v.destination === lane.lanelet) return;
         v.commute = null;
-      }
+      } else if (this.leaveTowards(w, bus, v, line.stops[bus.next]!)) return;
       // A stop with no lane beside it: skipped.
       if (bus.next + bus.dir < 0 || bus.next + bus.dir >= line.stops.length) bus.dir = bus.dir === 1 ? -1 : 1;
       bus.next += bus.dir;
     }
+  }
+
+  /** A stop beyond the micro window's roads (`SimWorld.useMeso`): the bus drives out towards it, to the lane past the window's edge nearest the stop (`MesoTraffic.handoffTowards`), and the timetable takes it there (`awayFromView`); false when there is no way out that way. */
+  private leaveTowards(w: SimWorld, bus: Bus, v: Vehicle, stopId: number): boolean {
+    const stop = this.stops.get(stopId);
+    if (!stop || !w.microScoped || !w.meso || w.inFocusReach(stop.x, stop.y)) return false;
+    const goal = w.meso.handoffTowards(w, v.lanelet, bodyClassOfArchetype(v.archetype), stop.x, stop.y);
+    if (goal === null) return false;
+    v.commute = null;
+    v.destination = goal;
+    planFrom(w, v);
+    if (v.destination !== goal) return false;
+    bus.away = goal;
+    return true;
   }
 
   private spawnBus(w: SimWorld, line: TransitLine, bus: Bus): VehicleId | null {
@@ -424,6 +458,7 @@ export class TransitSim {
     v.commute = { trip: -1, lanelet: lane.lanelet, at: lane.at + arch.length / 2 };
     v.destination = lane.lanelet;
     planFrom(w, v);
+    bus.away = undefined;
     return v.id;
   }
 

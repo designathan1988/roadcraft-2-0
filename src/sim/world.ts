@@ -159,6 +159,8 @@ export interface MesoTraffic {
   takeBackFrom(w: SimWorld, segments: ReadonlySet<SegmentId>): void;
   /** Where a trip begun at `start` ends: a lane just past the window's edge (null: none reachable), `routing/destination.ts`. */
   handoffDestination(w: SimWorld, start: LaneletId, body: BodyClass): LaneletId | null;
+  /** The lane past the window's edge nearest a point beyond it that `start` reaches (null: none): a bus's way out towards a stop beyond the window (`transit.ts`). */
+  handoffTowards(w: SimWorld, start: LaneletId, body: BodyClass, x: number, y: number): LaneletId | null;
 }
 
 export class SimWorld {
@@ -765,6 +767,16 @@ export class SimWorld {
     return this.microScope !== null;
   }
 
+  /** The window's roads held (`microScope`); null: every road of the map. */
+  get microRoads(): ReadonlySet<SegmentId> | null {
+    return this.microScope;
+  }
+
+  /** The footway ends at the window's edge (`Walkways.edgeEnds`): where the scenery's people come in and go out, as at a road's end. */
+  walkEdgeEnds(): readonly { readonly node: NodeId; readonly x: number; readonly y: number }[] {
+    return this.walkways.edgeEnds();
+  }
+
   /** The window's roads, as the graphs and the walkways hold them (`microScope`). */
   private setScope(scope: Set<SegmentId>): void {
     this.microScope = scope;
@@ -845,9 +857,9 @@ export class SimWorld {
     if (signalled.size) this.syncControllers(signalled);
   }
 
-  /** Whether a point lies within the micro window's reach round the view (the meso's window where the roads held are its, `useMeso`; `keepMicroWindow`'s focus square otherwise), grown by `pad`; true with no window or no view (everything is micro then). */
+  /** Whether a point lies within the micro window's reach round the view, grown by `pad`: `keepMicroWindow`'s focus square; with the roads held the meso's window alone (`useMeso`), the meso's window itself and no margin, since past it there is no road to drive on; true with no window or no view (everything is micro then). */
   inFocusReach(x: number, y: number, pad = 0): boolean {
-    if (this.microScope && this.meso) return this.meso.insideWindow(x, y, pad);
+    if (this.microScope && this.meso) return this.meso.insideWindow(x, y);
     const focus = this.focus;
     if (!this.microWindow || !focus) return true;
     const r = Math.min(FOCUS_WINDOW, Math.max(focus.r * 1.35, m(200)) * 1.15 + m(100)) + pad;

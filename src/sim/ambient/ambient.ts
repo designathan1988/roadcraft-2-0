@@ -147,6 +147,7 @@ export class AmbientWorld {
     // DO NOT keep them going: the same map opened twice filled other streets with other people at other ticks.
     this.clock = 0;
     this.nextEdgeLook = 0;
+    this.endsWalk = null;
     this.gateWalks.made = 0;
     this.gateWalks.fromGate = 0;
     this.gateWalks.toGate = 0;
@@ -308,6 +309,7 @@ export class AmbientWorld {
 
   /** DO NOT look round every node of the map when the network moves: every road drawn probed the town's road ends again. */
   private roadEnds(w: SimWorld): { node: number; x: number; y: number }[] {
+    if (w.microScoped) return this.windowEnds(w);
     if (this.endsFor === w.net.state) return this.ends;
     const engine = w.pedEngine;
     if (!engine.walkableNear) return this.ends;
@@ -329,34 +331,89 @@ export class AmbientWorld {
       }
       for (const id of nodes) this.dropEnds(id);
     }
-    for (const id of [...nodes].sort((x, y) => x - y)) {
-      const node = w.doc.node(id as never);
-      if (!node || !w.doc.mapEdge(node.id)) continue;
-      const found: { x: number; y: number }[] = [];
-      // Round the end, out to past the widest footway: each side's walkway once.
-      for (let k = 0; k < 16; k++) {
-        const angle = (k / 16) * Math.PI * 2;
-        for (const r of [m(4), m(8), m(12)]) {
-          const q = engine.walkableNear.call(engine, w, node.x + Math.cos(angle) * r, node.y + Math.sin(angle) * r, m(3));
-          if (!q || Math.hypot(q.x - node.x, q.y - node.y) > END_LOOK) continue;
-          if (found.some((f) => Math.hypot(f.x - q.x, f.y - q.y) < m(3))) continue;
-          found.push({ x: q.x, y: q.y });
-        }
-      }
-      const slots: number[] = [];
-      for (const q of found) { slots.push(this.ends.length); this.ends.push({ node: node.id, x: q.x, y: q.y }); }
-      if (slots.length) this.endSlots.set(node.id, slots);
-    }
+    for (const id of [...nodes].sort((x, y) => x - y)) this.probeEnd(w, id);
     return this.ends;
   }
 
-  /** How many people on foot the panel asks for: its count, or, following the city */
+  /** The footway points round a road's end off the map (`roadEnds`), each side's walkway once, filed under the node. */
+  private probeEnd(w: SimWorld, id: number): void {
+    const engine = w.pedEngine;
+    const node = w.doc.node(id as never);
+    if (!node || !w.doc.mapEdge(node.id) || !engine.walkableNear) return;
+    const found: { x: number; y: number }[] = [];
+    // Round the end, out to past the widest footway: each side's walkway once.
+    for (let k = 0; k < 16; k++) {
+      const angle = (k / 16) * Math.PI * 2;
+      for (const r of [m(4), m(8), m(12)]) {
+        const q = engine.walkableNear.call(engine, w, node.x + Math.cos(angle) * r, node.y + Math.sin(angle) * r, m(3));
+        if (!q || Math.hypot(q.x - node.x, q.y - node.y) > END_LOOK) continue;
+        if (found.some((f) => Math.hypot(f.x - q.x, f.y - q.y) < m(3))) continue;
+        found.push({ x: q.x, y: q.y });
+      }
+    }
+    this.fileEnds(node.id, found);
+  }
+
+  /** The points of a node's end filed (`ends`, `endSlots`). */
+  private fileEnds(node: number, points: readonly { x: number; y: number }[]): void {
+    const slots = this.endSlots.get(node) ?? [];
+    for (const q of points) { slots.push(this.ends.length); this.ends.push({ node, x: q.x, y: q.y }); }
+    if (slots.length) this.endSlots.set(node, slots);
+  }
+
+  /** The walkways' state the window's ends were read at (`windowEnds`). */
+  private endsWalk: object | null = null;
+
+  /**
+   * THE ENDS OF THE WINDOW'S ROADS (`SimWorld.microRoads`): where the window's people come in and go out - its roads' ends off the map,
+   * and the footway ends at its edge, where a road runs on outside it (`SimWorld.walkEdgeEnds`), as a road end of the map. Read whole
+   * again when the roads held or the network moved: the window's ends, never the map's.
+   */
+  private windowEnds(w: SimWorld): { node: number; x: number; y: number }[] {
+    const graph = w.walkwaysNow();
+    if (this.endsFor === w.net.state && this.endsWalk === graph.state) return this.ends;
+    this.endsFor = w.net.state;
+    this.endsWalk = graph.state;
+    this.ends = [];
+    this.endSlots.clear();
+    const nodes = new Set<number>();
+    for (const seg of w.microRoads ?? []) {
+      const s = w.doc.segment(seg);
+      if (s) { nodes.add(s.a); nodes.add(s.b); }
+    }
+    for (const id of [...nodes].sort((x, y) => x - y)) this.probeEnd(w, id);
+    const edge = new Map<number, { x: number; y: number }[]>();
+    for (const e of w.walkEdgeEnds()) {
+      const list = edge.get(e.node);
+      if (list) list.push(e); else edge.set(e.node, [e]);
+    }
+    for (const node of [...edge.keys()].sort((x, y) => x - y)) this.fileEnds(node, edge.get(node)!);
+    return this.ends;
+  }
+
+  /** The micro window's square, where the window's people live (`SimWorld.useMeso`); null: the whole map's. */
+  private windowBox(w: SimWorld): { readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number } | null {
+    const win = w.microScoped ? w.meso?.microWindow() ?? null : null;
+    return win ? { x0: win.x - win.r, y0: win.y - win.r, x1: win.x + win.r, y1: win.y + win.r } : null;
+  }
+
+  /** How many people on foot the panel asks for: its count, or, following the city; in the micro window (`SimWorld.useMeso`), the window's share of it, by its street of the map's. */
   private peopleTarget(w: SimWorld): number {
-    const street = this.roadAround(w, 0, 0, Infinity);
+    // Nobody until the window stands somewhere: its people are made where it is.
+    if (w.microScoped && !w.meso?.microWindow()) return 0;
+    const win = w.microScoped ? w.meso!.microWindow()! : null;
+    const street = win ? this.roadAround(w, win.x, win.y, win.r) : this.roadAround(w, 0, 0, Infinity);
     const most = Math.floor(stepsIn(street, 8));
-    if (w.pedestrianCount !== null || !w.followCity) return Math.min(Math.max(0, Math.round(w.pedestrianCount ?? 0)), most);
+    if (w.pedestrianCount !== null || !w.followCity) {
+      let count = Math.max(0, Math.round(w.pedestrianCount ?? 0));
+      if (win) {
+        const whole = this.roadAround(w, 0, 0, Infinity);
+        count = whole > 0 ? Math.round(count * (street / whole)) : 0;
+      }
+      return Math.min(count, most);
+    }
     const hour = (w.city.minutes(w) % 1440) / 60;
-    const mix = this.mixAround(w, 0, 0, Infinity);
+    const mix = win ? this.mixAround(w, win.x, win.y, win.r) : this.mixAround(w, 0, 0, Infinity);
     const table = PEOPLE.home * mix.home * busy('home', hour) + PEOPLE.shop * mix.shop * busy('shop', hour)
       + PEOPLE.work * mix.work * busy('work', hour) + PEOPLE.civic * mix.civic * busy('civic', hour);
     const want = Math.round(stepsIn(street, 100) * table * w.pedestrianIntensity);
@@ -377,8 +434,9 @@ export class AmbientWorld {
     // The lots' own people: how many the land use puts on its street at this hour
     let outW = 0, inW = 0;
     if (this.gates && (this.placesReady(w) || !ends.length)) {
-      // By kind: the frontage of the lots of that kind that may be walked to
-      const frontage = this.places.frontages();
+      // By kind: the frontage of the lots of that kind that may be walked to (the window's, with the micro window)
+      const box = this.windowBox(w);
+      const frontage = box ? this.places.frontagesIn(box) : this.places.frontages();
       PLACE_KINDS.forEach((kind, k) => {
         const people = PEOPLE[kind] * busy(kind, hour) * (frontage[k]! / m(100));
         const out = outShare(kind, hour);
@@ -502,6 +560,8 @@ export class AmbientWorld {
 
   /** The panel's numbers put on the streets of a map just opened, a slice a tick (`OPEN_CARS`, `OPEN_PEOPLE`) */
   private open(w: SimWorld): void {
+    // The window's roads not held yet (`SimWorld.useMeso`): the fill waits for them.
+    if (w.microScoped && !w.meso?.microWindow()) return;
     // A map with no road (a new map): nothing to fill, and nothing filled later in sight
     if (!this.openingLanes(w).length) { this.endOpening(); return; }
     const cars = w.edgeTraffic && !w.meso ? trafficTarget(w) - w.vehicles.size : 0;
@@ -591,7 +651,7 @@ export class AmbientWorld {
       const share = outShare(kind, hour);
       return PEOPLE[kind] * busy(kind, hour) * (out ? share : 1 - share);
     });
-    return this.places.pick(w.rng.ambient, coef, not, (p) => joinsFootway(w, p), WALK_DECAY, m(40));
+    return this.places.pick(w.rng.ambient, coef, not, (p) => joinsFootway(w, p), WALK_DECAY, m(40), this.windowBox(w));
   }
 
   /** Now and then somebody walking with a walker just made (`walkTrip` with) */
