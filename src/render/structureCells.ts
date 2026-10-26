@@ -25,9 +25,13 @@ interface Cell { readonly details: StructureDetails; readonly reads: ChangeRect 
 export interface StructureCells {
   readonly group: Group;
   readonly triangles: number;
-  /** The cells a road edit reached (`blocks`: where the roads or the ground changed; null: everywhere) built again */
+  /** The cells a road edit reached (`blocks`: where the roads or the ground changed, and the road cells the view took or let go; null: every
+   *  cell held) built again; `within`: whether a cell's square is one the view has (`mesh/roadResidency.ts` taken) - a cell not within is let go,
+   *  and none is built outside. DO NOT build the structures of the whole map: the cells built are the view's, as the roads' are. */
   prepare(net: Network, elevation: RoadElevation, terrainAt: (x: number, y: number) => number,
-    blocks: readonly (readonly [number, number, number, number])[] | null): { readonly fresh: readonly Group[]; apply(): void };
+    blocks: readonly (readonly [number, number, number, number])[] | null, within?: (rect: ChangeRect) => boolean): { readonly fresh: readonly Group[]; apply(): void };
+  /** Every cell let go (another map opened), the shapes kept. */
+  clear(): void;
   dispose(): void;
 }
 
@@ -54,12 +58,11 @@ export function createStructureCells(materials: SceneMaterials, groundMaterial?:
   return {
     group,
     get triangles() { return triangles; },
-    prepare(net, elevation, terrainAt, blocks) {
+    prepare(net, elevation, terrainAt, blocks, within) {
       const reached = blocks;
       const dirty = new Set<number>();
       if (reached === null) {
-        /** @rebuild Every road of the map only when the edit cannot say where (the first world, a map opened). */
-        for (const ribbon of net.ribbons.values()) dirty.add(cellOfRibbon(ribbon));
+        /** @rebuild Every cell held, when the edit cannot say where: never the map's roads - the cells are the view's (`within`). */
         for (const key of cells.keys()) dirty.add(key);
       } else {
         for (const b of reached) {
@@ -70,9 +73,11 @@ export function createStructureCells(materials: SceneMaterials, groundMaterial?:
           for (const key of filing.idsMeeting(b)) dirty.add(key);
         }
       }
+      // A cell held that the view no longer has goes with this build.
+      if (within) for (const key of cells.keys()) if (!within(cellRect(key))) dirty.add(key);
       const made = new Map<number, Cell | null>();
       for (const key of dirty) {
-        const ribbons = ribbonsOf(net, key);
+        const ribbons = within && !within(cellRect(key)) ? [] : ribbonsOf(net, key);
         const details = ribbons.length ? buildStructureDetails(net, elevation, terrainAt, materials, groundMaterial, ribbons, shapes) : null;
         if (!details || details.group.children.length === 0) { details?.dispose(); made.set(key, null); continue; }
         let reads: ChangeRect | null = null;
@@ -99,6 +104,11 @@ export function createStructureCells(materials: SceneMaterials, groundMaterial?:
           }
         },
       };
+    },
+    clear() {
+      for (const [key, cell] of cells) { group.remove(cell.details.group); cell.details.dispose(); filing.remove(key); }
+      cells.clear();
+      triangles = 0;
     },
     dispose() {
       for (const cell of cells.values()) cell.details.dispose();

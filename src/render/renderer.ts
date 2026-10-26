@@ -42,7 +42,6 @@ import {
 
 import { Digest } from '@core/digest';
 import type { Change, ChangeJournal, ChangeKind, ChangeRect, DerivedChangeKind } from '@world/changes';
-import { isStreaming } from '@world/changes';
 import type { Vec2 } from '@core/vec2';
 import type { SegmentId } from '@world/ids';
 import { Network, type SegmentRibbon } from '@world/network';
@@ -1190,11 +1189,8 @@ export function createSceneRenderer(
   let roadLook: RoadLook | null = null;
   /** The cells a step let go whose blocks the build under way retires: let go of `releasing` when it lands (`worldSteps`). */
   const cellsRetiring = new Set<string>();
-  /** The player's road edits read since the network's far level was last asked (`requestNetworkFar`): one landing outdates it. */
-  const networkFarRead = new JournalCursor(['roads']);
-  /** The network's far level for the whole map asked (`networkFarRoads.ts`), the edits read so far in it. */
+  /** The network's far level for the whole map asked (`networkFarRoads.ts`): a map opened, and a scoped opening's solve completed (every road at its height). An edit's cells are made again alone (`NetworkFarRoads.refresh`, in `draw`). */
   const requestNetworkFar = (net: Network, heights: RoadElevation): void => {
-    networkFarRead.read(net.doc.changes);
     networkFar.request(net, heights, terrain.renderedHeightAt, FAR_ROAD_CELL, null);
   };
   /** The squares of the cells a step takes (`cellStep`, `buildWorld` full): their ground shaped, their tiles built. */
@@ -2458,7 +2454,11 @@ export function createSceneRenderer(
       { ms: freshRoads.workMs, detail: `${freshRoads.built} tiles built, ${freshRoads.reused} reused` });
     // The structures' details, the poles and the street furniture are each kept as they are when the edit's blocks reach none
     const atdetails = performance.now();
-    const freshDetails = (details ??= createStructureCells(materials, terrain.vergeMaterial)).prepare(net, solve, terrain.renderedHeightAt, blocks);
+    // The structures of the cells this build takes and lets go, with the blocks the roads changed in; a build that cannot say where: every cell held. Never the map's (`within`: the view's cells).
+    const cellRects = [...landing, ...retiring].map(farCellRect);
+    const freshDetails = (details ??= createStructureCells(materials, terrain.vergeMaterial)).prepare(net, solve, terrain.renderedHeightAt,
+      blocks === null ? (cellRects.length ? [...roadResidency.taken!].map(farCellRect) : null) : [...blocks, ...cellRects],
+      (rect) => roadResidency.taken!.has(farCellOf((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)));
     measureHitch('hitch:road-edit/details', atdetails);
     yield;
     // The overhead utility network.
@@ -2486,8 +2486,7 @@ export function createSceneRenderer(
     roads = freshRoads;
     mapRoadsIn = true;
     // The roads drawn changed by an edit since the network's far level was asked: it stands for none of them (`NetworkFarRoads.covers`), not shown for a cell let go till made again.
-    const roadEdits = networkFarRead.read(net.doc.changes);
-    if (roadEdits === null || roadEdits.some((entry) => !isStreaming(entry))) networkFar.outdate();
+    networkFar.changed(net);
     // The cells this build made in detail: the network's far level hidden there, their blocks stand for their roads now; the cells it retired the blocks of: let go for good (`mesh/roadResidency.ts` releasing), the level drawing them.
     for (const key of landing) { networkFar.hide(key); roadResidency.awaiting!.delete(key); }
     for (const key of retiring) { roadResidency.releasing!.delete(key); cellsRetiring.delete(key); }
@@ -3178,6 +3177,7 @@ export function createSceneRenderer(
       roadLook = null;
       cellsRetiring.clear();
       networkFar.clear();
+      details?.clear();
       forgetRoadCells(roadResidency);
       scopeNextOpening = false;
       mapOpened = true;
@@ -3887,7 +3887,7 @@ export function createSceneRenderer(
           // THE LOOK: the cells the view wants built and the ones it lets go (`cellStep` takes them), the levels of the blocks standing brought up to the eye. The map's road cells are the network's far level's (null before it landed: the opening's cells are taken already).
           roadLook = updateRoadLevels(blocks, roadFocus.x, roadFocus.y, roadFocus.reach, roadResidency, networkFar.cells.size ? networkFar.cells : null, FAR_ROAD_CELL);
           // Cells drawn by the network's far level that it does not stand for (none made, or made before the roads changed): made again for the roads drawn, off the page.
-          if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && !openingSolvePending && !networkFar.pending && networkFar.outdated()) requestNetworkFar(net, elevation);
+          if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && !openingSolvePending && !networkFar.pending && networkFar.outdated()) networkFar.refresh(net, elevation, terrain.renderedHeightAt, FAR_ROAD_CELL);
         }
         if (optimizer.reliefDue()) terrain.bakeRelief(renderer, close ? reliefFocus : null);
       }
@@ -4020,7 +4020,7 @@ export function createSceneRenderer(
           openingSolvePending = false;
           openingBuild = false;
           // Every road solved: the network's far level made again at the solved heights (the roads the scoped solve left stood on the ground).
-          if (elevation) { networkFar.outdate(); requestNetworkFar(net, elevation); }
+          if (elevation) requestNetworkFar(net, elevation);
         }
         // The cells the view wants built and the ones it let go, a few at a step (`cellStep`), between the edits' builds.
         if (roadLook !== null && worldJob === null && !openingBuild && !openingSolvePending && (roadLook.build.length > 0 || roadLook.release.length > 0)) cellStep(net);
