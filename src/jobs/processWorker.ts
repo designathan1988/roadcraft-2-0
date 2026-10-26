@@ -115,6 +115,11 @@ export function withPortFields<T>(message: T): { readonly message: T | (T & Port
   return { message: { ...out, portFields: fields } as T & PortFields, ports };
 }
 
+/** What a worker's error listener is handed when the thread is lost (`ProcessWorker.fail`): what the listeners read of a worker's `ErrorEvent` - its message, and `preventDefault`, which the simulation's client calls to keep the error off the console (`sim/host/simClient.ts`); without it the loss threw in the listener and the game was never told (2026-10-26). */
+function failure(message: string): ErrorEvent {
+  return { message, preventDefault(): void {} } as unknown as ErrorEvent;
+}
+
 /** Each buffer kept by job threads: its id, and the workers whose thread holds it. */
 const keptIds = new WeakMap<SharedArrayBuffer, number>();
 let nextKept = 1;
@@ -170,7 +175,7 @@ export class ProcessWorker implements WorkerLike {
     this.held.length = 0;
     this.port?.close();
     this.port = null;
-    this.onerror?.({ message: why } as ErrorEvent);
+    this.onerror?.(failure(why));
   }
 
   /** A kept buffer collected on the page: its thread lets it go. */
