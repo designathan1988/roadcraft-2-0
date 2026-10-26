@@ -1,6 +1,7 @@
 import { type SerializedDoc, landscapeRecord, lotRecord, poleRecord, spanPlace } from '@world/doc';
 import { DOC_TABLES, type DocTable } from '@world/docBinary';
 import { RecordTable, TableWriter, encodeRecords } from '@world/buildings/recordTable';
+import { buildingBounds } from '@world/buildings/geometry';
 import { SharedMembers } from '@world/buildings/intern';
 import { migrateBuilding } from '@world/buildings/serialize';
 import { type Building, settleBuilding } from '@world/buildings/types';
@@ -76,7 +77,8 @@ export function prepareCity(data: SerializedDoc, repair = false): PreparedCity {
  * `prepareCity`'s table (the members a building shares with others written once a batch, not once a city: the same values).
  */
 export class PreparedCityWriter {
-  private readonly table = new TableWriter(true);
+  /** Each row's box on the ground in its columns (`RowBox`): the page files the city by place from them, no record decoded (`BuildingStore` grid). */
+  private readonly table = new TableWriter<Building>(true, null, (b) => buildingBounds(b));
   private readonly ids = new Set<number>();
 
   /** `shared`: the members the city's buildings have alike, kept across batches (`SharedMembers`): each written once while it is met, as `prepareCity`'s interned members were. The growth's table shares it (`SpilledItems`): a member its records made canonical is found here by identity, not hashed again. Each batch ended by its owner (`endBatch`). */

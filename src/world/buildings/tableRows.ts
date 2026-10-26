@@ -71,6 +71,14 @@ export class TableRows<K extends number = BuildingId, T extends TableRow = Build
     return { x: this.table.xs[row]!, y: this.table.ys[row]! };
   }
 
+  /** The box a row's record covers on the ground, from the table's columns (a building's `buildingBounds`), nothing decoded; null when the table has no box columns (written before them) or the row none. */
+  boxAt(row: number): { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null {
+    const boxes = this.table.boxes;
+    if (!boxes) return null;
+    const minX = boxes.minX[row]!;
+    return Number.isFinite(minX) ? { minX, minY: boxes.minY[row]!, maxX: boxes.maxX[row]!, maxY: boxes.maxY[row]! } : null;
+  }
+
   /** A row's record: the one held somewhere if any, else decoded now. */
   record(row: number): T {
     const held = this.alive.get(row)?.deref();

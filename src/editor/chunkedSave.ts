@@ -1,5 +1,5 @@
 import type { Building } from '@world/buildings/types';
-import { RecordTable, type TableReader, TableWriter, type RowPlace, type TableRow, tableRecords } from '@world/buildings/recordTable';
+import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type TableRow, tableRecords } from '@world/buildings/recordTable';
 import { type Change, type ChangeRect, DOC_CHANGE_KINDS } from '@world/changes';
 import { JournalCursor } from '@world/derived';
 import type { DocTable } from '@world/docBinary';
@@ -368,7 +368,7 @@ export class TiledSaves {
         let records: ArrayBufferLike | unknown[];
         if (spec.table) {
           // A kind kept in a table: the square's rows copied from the map's table, nothing decoded; a record written on the page encoded as the file holds it.
-          const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null);
+          const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null, spec.box as RowBox<TableRow> | undefined ?? null);
           for (const id of ids) {
             const ref = spec.ref!(doc, id);
             if (ref) writer.copyRows(tableOf(ref.buffer), [ref.row]);
@@ -590,7 +590,7 @@ export class TiledSaves {
     const rows: { t: number; row: number; id: number; order: number }[] = [];
     squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
     rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
-    const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null);
+    const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, KEYED[name].box as RowBox<TableRow> | undefined ?? null);
     const readers = new Map<number, TableReader>();
     for (const { t, row, id } of rows) {
       const table = squares[t]!.table;

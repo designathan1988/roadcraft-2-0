@@ -2,7 +2,7 @@ import type { Aabb } from '@core/aabb';
 import { m } from '../units';
 import type { BuildingId } from './types';
 
-/** THE BUILDINGS BY PLACE (`BuildingStore.near`): a grid of cells, each holding the buildings whose box */
+/** THE BUILDINGS BY PLACE (`BuildingStore.near`): a grid of cells, each holding the buildings whose box reaches it. A store's table is filed from its columns (`insertBox`: the anchor and the box the table keeps a row), no record decoded: DO NOT decode a whole city to file it (160,000 buildings of a 10 km city, ~8 KB of heap each, at the first question by place, 2026-10-26). */
 
 /** Side of a cell, world units: as wide as the largest of the common buildings. */
 const CELL = m(50);
@@ -14,6 +14,12 @@ const PACKED_RANKS = 2 ** 20;
 /** Where a building is filed: its rank in the store's order, then the columns and rows of the cells its box reaches (`PLACED_*`). DO NOT keep its cells' keys as a list and an object round them (~260 B a building, 2026-10-21): five small integers in one list. */
 type Placed = readonly number[];
 const PLACED_RANK = 0, PLACED_I0 = 1, PLACED_I1 = 2, PLACED_J0 = 3, PLACED_J1 = 4;
+
+/** Where a building stands at `rank`: the cells its box and its anchor reach. */
+function placedAt(rank: number, x: number, y: number, minX: number, minY: number, maxX: number, maxY: number): Placed {
+  const x0 = Math.min(minX, x), y0 = Math.min(minY, y), x1 = Math.max(maxX, x), y1 = Math.max(maxY, y);
+  return [rank, Math.floor(x0 / CELL), Math.floor(x1 / CELL), Math.floor(y0 / CELL), Math.floor(y1 / CELL)];
+}
 
 /** Calls `visit` with the key of every cell a building's place reaches, columns outer, rows inner. */
 function forKeys(placed: Placed, visit: (key: number) => void): void {
@@ -75,8 +81,7 @@ export class BuildingGrid<T extends Filed> {
   /** Where `b` is filed at `rank`: the cells its box (and its anchor) reach. */
   private placeOf(b: T, rank: number): Placed {
     const box = this.boxOf(b);
-    const x0 = Math.min(box.minX, b.x), y0 = Math.min(box.minY, b.y), x1 = Math.max(box.maxX, b.x), y1 = Math.max(box.maxY, b.y);
-    return [rank, Math.floor(x0 / CELL), Math.floor(x1 / CELL), Math.floor(y0 / CELL), Math.floor(y1 / CELL)];
+    return placedAt(rank, b.x, b.y, box.minX, box.minY, box.maxX, box.maxY);
   }
 
   private file(id: BuildingId, placed: Placed): void {
@@ -104,10 +109,18 @@ export class BuildingGrid<T extends Filed> {
 
   /** A building new to the store: last in its order. */
   insert(b: T): void {
-    const placed = this.placeOf(b, this.nextRank++);
-    this.gone.delete(b.id);
-    this.placed.set(b.id, placed);
-    this.file(b.id, placed);
+    this.insertPlaced(b.id, this.placeOf(b, this.nextRank++));
+  }
+
+  /** A building new to the store filed by its columns alone - its anchor and its box as its table holds them (`RecordTable.boxes`) - no record decoded: how a store's whole table is filed (`BuildingStore`). */
+  insertBox(id: BuildingId, x: number, y: number, minX: number, minY: number, maxX: number, maxY: number): void {
+    this.insertPlaced(id, placedAt(this.nextRank++, x, y, minX, minY, maxX, maxY));
+  }
+
+  private insertPlaced(id: BuildingId, placed: Placed): void {
+    this.gone.delete(id);
+    this.placed.set(id, placed);
+    this.file(id, placed);
   }
 
   /** A building's record replaced: it keeps its place in the order. */

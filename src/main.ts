@@ -6,7 +6,7 @@ import { canQueueJobs, jobChannel, jobLanes, jobPoolStats, setJobWorkerMaker, se
 import type { CityGenAsk, CityGenReply } from './cityGen.worker';
 import { CITY_TABLES, type CityTable, type OpenedCity, type OpenedTables, noCityTables, openedBuildings, openedTables, prepareCity, preparedCity } from './editor/preparedCity';
 import { COOKED_CITY_SEEDS, readCookedCity } from './editor/cookedCities';
-import { tableBytes, tableIn } from '@world/buildings/recordTable';
+import { tableBytes, tableFormat, tableIn } from '@world/buildings/recordTable';
 import { desktopJobWorkers } from './desktopJobs';
 import { profileOf } from '@world/roads/profile';
 import { profiler } from '@core/profiler';
@@ -2078,7 +2078,8 @@ async function cityData(ask: CityGenAsk): Promise<OpenedCity> {
   const making = key ? citiesAhead.get(key) : undefined;
   if (making) { performance.mark('city:ahead'); return openedOf(await making); }
   const kept = key ? await readDerived<KeptCity>(key).catch(() => undefined) : undefined;
-  if (kept?.data && kept.buildings instanceof ArrayBuffer) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), besideTables(kept, tableIn)); }
+  // A city kept with a buildings' table of the format before the box columns (`recordTable.ts` format 1) is not taken: the page would decode it whole to file it by place; the shipped or regrown one is kept in its stead.
+  if (kept?.data && kept.buildings instanceof ArrayBuffer && tableFormat(kept.buildings) >= 2) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), besideTables(kept, tableIn)); }
   // Shipped with the game (the first new city of its size, `cookedCities.ts`): read, and kept as one grown here would be.
   const cooked = (ask.kind === 'large' || ask.kind === 'small') && ask.radius === undefined ? await readCookedCity(import.meta.env.BASE_URL, CITY_HASH, ask.kind, ask.seed ?? 7) : null;
   if (cooked) {

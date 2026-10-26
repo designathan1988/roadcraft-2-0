@@ -144,7 +144,7 @@ export class BuildingStore {
   /** The buildings whose box (or anchor) may reach the rectangle, in the order of `all()` */
   near(minX: number, minY: number, maxX: number, maxY: number): Building[] {
     if (this.below) return this.below.near(minX, minY, maxX, maxY);
-    this.grid ??= new BuildingGrid(this.items.values(), (b) => storedBounds(b));
+    this.grid ??= this.gridOf();
     return this.grid.near(minX, minY, maxX, maxY).map((id) => this.items.get(id)!);
   }
 
@@ -152,8 +152,35 @@ export class BuildingStore {
   nearAny(rects: readonly (readonly [number, number, number, number])[], pad: number,
     meets: (b: Building, rect: readonly [number, number, number, number]) => boolean): Building[] {
     if (this.below) return this.below.nearAny(rects, pad, meets);
-    this.grid ??= new BuildingGrid(this.items.values(), (b) => storedBounds(b));
+    this.grid ??= this.gridOf();
     return this.grid.nearAny(rects, pad, (id, rect) => meets(this.items.get(id)!, rect)).map((id) => this.items.get(id)!);
+  }
+
+  /**
+   * @rebuild The buildings by place, filed once after a whole-store change (`grid` null): every record of the store in its order - a row of
+   * the table from its columns (its anchor and the box its table keeps, `TableRows.boxAt`), no record decoded; a record written on the page
+   * from itself (`storedBounds`). DO NOT decode the table to file it: the whole city as objects at the first question by place. A row of a
+   * table written before the box columns (format 1) is decoded for its box alone.
+   */
+  private gridOf(): BuildingGrid<Building> {
+    const grid = new BuildingGrid<Building>([], (b) => storedBounds(b));
+    const items = this.items;
+    const table = items instanceof BuildingItems ? items.table : null;
+    if (!(items instanceof BuildingItems) || !table) {
+      for (const b of items.values()) grid.insert(b);
+      return grid;
+    }
+    const { gone, replaced, added } = items.writes();
+    for (let row = 0; row < table.size; row++) {
+      const id = table.idAt(row);
+      if (gone.has(id)) continue;
+      const over = replaced.get(id);
+      if (over) { grid.insert(over); continue; }
+      const box = table.boxAt(row);
+      if (box) { const at = table.placeAt(row); grid.insertBox(id, at.x, at.y, box.minX, box.minY, box.maxX, box.maxY); } else grid.insert(table.record(row));
+    }
+    for (const b of added.values()) grid.insert(b);
+    return grid;
   }
 
   /** The id the next `add` will hand out. */
@@ -394,7 +421,7 @@ export class BuildingStore {
     this.below = null;
     // A copy of a copy that wrote nothing: the store that answers for both.
     while (below.below) below = below.below;
-    below.grid ??= new BuildingGrid(below.items.values(), (b) => storedBounds(b));
+    below.grid ??= below.gridOf();
     this.grid = BuildingGrid.over(below.grid);
   }
 
