@@ -1,7 +1,7 @@
 import type { Vec2 } from '@core/vec2';
-import type { ZoneDensity, ZoneUse } from './zones';
+import { type ZoneDensity, type ZoneUse, zoneDensityName, zoneUseName } from './zones';
 
-/* A lot's record and the test of a point in it (`lots.ts` re-exports both). */
+/* A lot's record, the test of a point in it (`lots.ts` re-exports both) and the record as a store keeps it (`lotRecord`). */
 
 export interface Lot {
   readonly id: number;
@@ -11,6 +11,13 @@ export interface Lot {
   readonly density?: ZoneDensity;
   /** The building that grew on it, while it stands. */
   readonly building?: number;
+}
+
+/** A stored lot as the document keeps it: its corners its own (a stored record is never changed in place, and the data read may be), its zoning by name, its building only while it stands (`RoadDoc.fromJSON`; `editor/preparedCity.ts` and `LotStore.tableOf` write a city's lots into their table through it). */
+export function lotRecord(lot: Lot, standing: (id: number) => boolean): Lot {
+  const { building: _gone, ...free } = { ...lot, corners: lot.corners.map((q) => ({ x: q.x, y: q.y })),
+    ...(lot.use !== undefined ? { use: zoneUseName(lot.use) } : {}), ...(lot.density !== undefined ? { density: zoneDensityName(lot.density) } : {}) };
+  return lot.building !== undefined && standing(lot.building) ? { ...free, building: lot.building } : free;
 }
 
 export function insideLot(point: Vec2, l: Pick<Lot, 'corners'>): boolean {

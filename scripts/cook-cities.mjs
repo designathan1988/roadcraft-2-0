@@ -23,8 +23,9 @@ try {
     writeFileSync(join(dir, data), gzipSync(JSON.stringify(made.data), { level: 9 }));
     writeFileSync(join(dir, table), gzipSync(new Uint8Array(tableBytes(made.buildings)), { level: 9 }));
     const entry = { seed, data, table };
-    // The landscaping's and the lots' tables beside the buildings' (`prepareCity`): the page reads their records from them when asked, never holding them as objects.
-    for (const [name, buffer] of [['landscape', made.landscape], ['lots', made.lots]]) {
+    // The other kinds' tables beside the buildings' (`prepareCity`, `CITY_TABLES`): the page reads their records from them when asked, never holding them as objects.
+    for (const name of ['landscape', 'lots', 'poles', 'spans']) {
+      const buffer = made[name];
       if (!buffer) continue;
       const file = `${kind}-${seed}.${name}.gz`;
       writeFileSync(join(dir, file), gzipSync(new Uint8Array(tableBytes(buffer)), { level: 9 }));

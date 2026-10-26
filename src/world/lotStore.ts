@@ -3,7 +3,7 @@ import { ForkMap, forkWork } from '@core/forkMap';
 import { ChangeJournal, isStreaming, rectAround, rectsAround, type ChangeRect } from './changes';
 import { JournalCursor } from './derived';
 import { IdAllocator } from './ids';
-import { insideLot, type Lot } from './lotRecord';
+import { insideLot, lotRecord, type Lot } from './lotRecord';
 import { lotCentre } from './lotRings';
 import { PointFiling } from './pointFiling';
 import { TableItems } from './buildings/items';
@@ -329,9 +329,9 @@ export class LotStore {
     return sectionsOf(this.items, placeOf);
   }
 
-  /** Every lot as one table in the lots' order, its columns their centres (a city made off the page, `editor/smallCityMap.ts`); null: none. */
-  tableOf(): ArrayBufferLike | null {
-    const list = [...this.items.values()];
+  /** Every lot as one table in the lots' order, its columns their centres, each record as `RoadDoc.fromJSON` would read it from the file (`lotRecord`: its building only while it stands, `standing`) - a city made off the page (`editor/smallCityMap.ts`); null: none. */
+  tableOf(standing: (id: number) => boolean): ArrayBufferLike | null {
+    const list = [...this.items.values()].map((lot) => lotRecord(lot, standing));
     return list.length ? encodeRecords(list, placeOf).buffer : null;
   }
 

@@ -16,9 +16,10 @@ function hashText(text: string, h = 0x811c9dc5): number {
   return h >>> 0;
 }
 
-/** A prepared city as the page reads it: its data's text (the landscaping and the lots read back from their tables into their places, as the data held them before 2026-10-26) and every record of its buildings' table decoded, one number. */
+/** A prepared city as the page reads it: its data's text (the landscaping, the lots, the poles and the wires read back from their tables into their places, as the data held them before 2026-10-26) and every record of its buildings' table decoded, one number. */
 function cityHash(city: PreparedCity): number {
-  const data = { ...city.data, ...(city.landscape ? { landscape: tableRecords(city.landscape) } : {}), ...(city.lots ? { lots: tableRecords(city.lots) } : {}) };
+  const back = (buffer: ArrayBufferLike | null): unknown[] => (buffer ? tableRecords(buffer) : []);
+  const data = { ...city.data, landscape: back(city.landscape), lots: back(city.lots), poles: back(city.poles), poleSpans: back(city.spans) };
   let h = hashText(JSON.stringify(data));
   const table = new RecordTable(city.buildings), reader = table.reader();
   for (let row = 0; row < table.rows; row++) h = hashText(JSON.stringify(reader.record(row)), h);

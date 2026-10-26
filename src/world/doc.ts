@@ -6,6 +6,7 @@ import { cloneRoadSection, normalizeRoadSection, sameRoadSection, type RoadSecti
 import { isLot, lotCentre, type Lot } from './lots';
 import { OpenLots } from './openLots';
 import { LotStore } from './lotStore';
+import { lotRecord } from './lotRecord';
 import type { Vec2 } from '@core/vec2';
 import { type CurveShape, fitShapeToRadius } from '@core/bezier';
 import {
@@ -40,11 +41,11 @@ import { type SegmentDirection, casingHalf, roadProfile } from './roadTypes';
 import { BuildingStore } from './buildings/store';
 import { type BuildingSections, type TableSections, itemsOfSections, sectionsOf } from './buildings/sections';
 import { TableItems } from './buildings/items';
-import { type DocImage, dataOf, imageBytes, imageOf, packImage, unpackImage } from './docBinary';
-import { allocate, encodeRecords } from './buildings/recordTable';
+import { type DocImage, type DocTable, type DocTables, dataOf, imageBytes, imageOf, packImage, unpackImage } from './docBinary';
+import { type RowPlace, type TableRow, allocate, encodeRecords } from './buildings/recordTable';
 import type { SerializedBuilding } from './buildings/serialize';
 import type { Building, BuildingId } from './buildings/types';
-import { isZoneDensity, isZoneMark, isZoneUse, type Zone, type ZoneMark, zoneDensityName, zoneUseName } from './zones';
+import { isZoneDensity, isZoneMark, isZoneUse, type Zone, type ZoneMark } from './zones';
 import { normalizePerson, type PersonSpec } from '@people/spec';
 import { ChangeJournal, DOC_CHANGE_KINDS, TILE_LOADED, TILE_UNLOADED, isStreaming, rectAround, type ChangeRect, type DocChangeKind } from './changes';
 import { OWNER, TILE, TILE_COUNTED, tileIdBase, tileKey, tileOfKey, tileRect } from './tiles';
@@ -158,8 +159,10 @@ export class RoadDoc {
 
   /** The overhead utility network: poles and the wire runs between them. */
   // DO NOT write these maps directly.
-  private poleMap: Map<PoleId, UtilityPole> = new RecordMap();
-  private spanMap: Map<SpanId, UtilitySpan> = new RecordMap();
+  /** The utility poles and the wires between them. IN TABLES (`TableItems`), as the buildings, the landscaping and the lots: the table the map was opened from, a record decoded when it is read, the records written since over it. DO NOT hold them as objects: ~45,000 of each stood on the page of a 10 km city (2026-10-26). */
+  private poleMap: Map<PoleId, UtilityPole> = new TableItems<PoleId, UtilityPole>();
+  private spanMap: Map<SpanId, UtilitySpan> = new TableItems<SpanId, UtilitySpan>();
+  /** The poles by place and each pole's wires: a table's rows filed from its columns (a wire's ends in its place columns, `spanPlace`), no record decoded. */
   private poleIndex = new PoleIndex();
   get poles(): ReadonlyMap<PoleId, UtilityPole> { return this.poleMap; }
   get poleSpans(): ReadonlyMap<SpanId, UtilitySpan> { return this.spanMap; }
@@ -494,6 +497,80 @@ export class RoadDoc {
     else this.poleIndex.clear();
   }
 
+  /** The poles and the wires read from their tables (a city made off the page, `editor/preparedCity.ts`; a map's image): the tables the map's own, a record decoded when it is read; the index filed from their columns. Records of the file loaded before them stand over the tables. */
+  private loadPoleSections(poles: TableSections | undefined, spans: TableSections | undefined): void {
+    const over = <K extends number, V extends TableRow>(written: Map<K, V>, s: TableSections | undefined): Map<K, V> => {
+      if (!s) return written;
+      const items = itemsOfSections<K, V>(s, null);
+      if (written instanceof TableItems) items.before = written.before;
+      for (const [id, v] of written) if (!items.has(id)) items.set(id, v);
+      return items;
+    };
+    this.poleMap = over(this.poleMap, poles);
+    this.spanMap = over(this.spanMap, spans);
+    this.refilePoles();
+    let topPole = 0, topSpan = 0;
+    for (const id of this.poleMap.keys()) if (id > topPole) topPole = id;
+    for (const id of this.spanMap.keys()) if (id > topSpan) topSpan = id;
+    if (topPole > 0) this.poleIds.reserve(topPole);
+    if (topSpan > 0) this.spanIds.reserve(topSpan);
+  }
+
+  /** Another document's poles and wires taken as they are (`clone`, `replaceContents`): their tables shared and the records written over them copied, never a record of the tables decoded; the index filed again. A working copy's (`fork`) stay the maps its writes are recorded in (`takeFork`): written record by record. */
+  private takePolesFrom(source: RoadDoc): void {
+    if (this.poleMap instanceof ForkMap) {
+      this.clearPoleRecords();
+      for (const pole of source.poles.values()) this.putPoleRecord({ ...pole });
+      for (const span of source.poleSpans.values()) this.putSpanRecord({ ...span });
+      return;
+    }
+    const taken = <K extends number, V extends TableRow>(mine: Map<K, V>, theirs: Map<K, V>): TableItems<K, V> => {
+      const items = theirs instanceof TableItems ? theirs.copy() : TableItems.over<K, V>(null, [], [], theirs.values());
+      items.before = mine instanceof TableItems ? mine.before : null;
+      return items;
+    };
+    this.poleMap = taken(this.poleMap, source.poleMap);
+    this.spanMap = taken(this.spanMap, source.spanMap);
+    this.sharedIndices.delete('poles');
+    this.refilePoles();
+  }
+
+  /** @rebuild The index filed again from the poles and wires as they stand: a table's rows from its columns (no record decoded), the records written from themselves. */
+  private refilePoles(): void {
+    const index = new PoleIndex();
+    const poles = this.poleMap, spans = this.spanMap;
+    if (poles instanceof TableItems) {
+      const table = poles.table;
+      const { gone, replaced, added } = poles.writes();
+      if (table) {
+        for (let row = 0; row < table.size; row++) {
+          const id = table.idAt(row);
+          if (gone.has(id) || replaced.has(id)) continue;
+          const at = table.placeAt(row);
+          index.filePole(id, at.x, at.y);
+        }
+      }
+      for (const pole of replaced.values()) index.putPole(pole);
+      for (const pole of added.values()) index.putPole(pole);
+    } else for (const pole of poles.values()) index.putPole(pole);
+    if (spans instanceof TableItems) {
+      const table = spans.table;
+      const { gone, replaced, added } = spans.writes();
+      if (table) {
+        for (let row = 0; row < table.size; row++) {
+          const id = table.idAt(row);
+          if (gone.has(id) || replaced.has(id)) continue;
+          // A wire's ends stand in its place columns (`spanPlace`).
+          const ends = table.placeAt(row);
+          index.fileSpan(id, asPoleId(ends.x), asPoleId(ends.y));
+        }
+      }
+      for (const span of replaced.values()) index.putSpan(span);
+      for (const span of added.values()) index.putSpan(span);
+    } else for (const span of spans.values()) index.putSpan(span);
+    this.poleIndex = index;
+  }
+
   /** Strings wire between two existing poles. Returns null for a degenerate run. */
   addPoleSpan(a: PoleId, b: PoleId): UtilitySpan | null {
     if (a === b) return null;
@@ -709,14 +786,26 @@ export class RoadDoc {
     this.streetNameCount = null;
   }
 
-  /** The landscaping as buffers (`TableSections`): the table shared, the records written encoded - a whole map's undo image. */
-  landscapeSections(): TableSections {
-    return sectionsOf(this.landscapeMap);
+  /** The records of each kind kept in a table (`DOC_TABLES`) as buffers (`TableSections`): the table shared, the records written encoded - a whole map's undo image (`image`). */
+  tableSections(): DocTables {
+    return {
+      buildings: this.buildings.sections(),
+      landscape: sectionsOf(this.landscapeMap),
+      lots: this.lotStore.sections(),
+      poles: sectionsOf(this.poleMap),
+      spans: sectionsOf(this.spanMap, spanPlace),
+    };
   }
 
-  /** Every item of landscaping as one table in id order (a city made off the page, `editor/smallCityMap.ts`); null: none. */
-  landscapeTable(): ArrayBufferLike | null {
-    return this.landscapeMap.size ? encodeRecords(inIdOrder(this.landscapeMap.values())).buffer : null;
+  /** The records of one kind as one table, in the kind's order, as `fromJSON` would read them from the file (a city made off the page, `editor/smallCityMap.ts` buildCityTable); null: none. The buildings' go through their own writer (`PreparedCityWriter`). */
+  tableOf(kind: Exclude<DocTable, 'buildings'>): ArrayBufferLike | null {
+    const encoded = <T extends TableRow>(records: readonly T[], place: RowPlace<T> | null = null): ArrayBufferLike | null => (records.length ? encodeRecords(records, place).buffer : null);
+    switch (kind) {
+      case 'landscape': return encoded(inIdOrder(this.landscapeMap.values()).map((item) => landscapeRecord(savedLandscape(item), false)!));
+      case 'lots': return this.lotStore.tableOf((id) => this.buildings.has(id as BuildingId));
+      case 'poles': return encoded(inIdOrder(this.poleMap.values()).map((p) => loadedPole(savedPole(p))));
+      case 'spans': return encoded(inIdOrder(this.spanMap.values()).map((s) => ({ id: s.id, a: s.a, b: s.b })), spanPlace);
+    }
   }
 
   /** Removes a pole and every wire that reached it. */
@@ -2050,9 +2139,8 @@ export class RoadDoc {
     for (const [id, node] of this.nodes) copy.nodes.set(id, copyNode(node));
     copy.loose = this.loose.copy();
     for (const [id, segment] of this.segments) copy.segments.set(id, copySegment(segment));
-    for (const pole of this.poles.values()) copy.putPoleRecord({ ...pole });
-    for (const span of this.poleSpans.values()) copy.putSpanRecord({ ...span });
-    // The landscaping's table shared, as the buildings' and the lots' (never changed in place).
+    // The poles', the wires' and the landscaping's tables shared, as the buildings' and the lots' (never changed in place).
+    copy.takePolesFrom(this);
     copy.takeLandscapeFrom(this.landscapeMap);
     for (const barrier of this.barriers.values()) copy.putBarrierRecord({ ...barrier, points: barrier.points.map((q) => ({ ...q })) });
     copy.buildings.shareFrom(this.buildings);
@@ -2095,16 +2183,15 @@ export class RoadDoc {
 
   /** Replaces this instance in place while restoring allocator invariants. */
   /** `preparedBuildings`: its buildings prepared by a worker (`editor/preparedCity.ts`), filed as they are; `buildingTable`: its buildings' table (`prepareCity`), the store's source of truth as it is; `whole`: another map opened, replacing this one whole (`replaceWhole`), never compared with it record by record. */
+  /** `tables`: the other kinds' tables (`DOC_TABLES`: the landscaping's, the lots', the poles', the wires'), each the document's source of truth as it is. */
   replaceFromJSON(data: SerializedDoc, options: { readonly repair?: boolean; readonly preparedBuildings?: boolean; readonly buildingTable?: ArrayBufferLike;
-    readonly landscapeTable?: ArrayBufferLike; readonly lotTable?: ArrayBufferLike; readonly whole?: boolean } = {}): void {
-    const { buildingTable, landscapeTable, lotTable, whole, ...rest } = options;
-    const sections = (base: ArrayBufferLike): TableSections => ({ base, gone: new Float64Array(0), replaced: null, added: null });
-    const restored = RoadDoc.fromJSON(data, {
-      ...rest,
-      ...(buildingTable ? { buildingSections: sections(buildingTable) } : {}),
-      ...(landscapeTable ? { landscapeSections: sections(landscapeTable) } : {}),
-      ...(lotTable ? { lotSections: sections(lotTable) } : {}),
-    });
+    readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>>; readonly whole?: boolean } = {}): void {
+    const { buildingTable, tables, whole, ...rest } = options;
+    const sections: Partial<Record<DocTable, TableSections>> = {};
+    const base = (buffer: ArrayBufferLike): TableSections => ({ base: buffer, gone: new Float64Array(0), replaced: null, added: null });
+    for (const [name, buffer] of Object.entries(tables ?? {}) as [DocTable, ArrayBufferLike | null | undefined][]) if (buffer) sections[name] = base(buffer);
+    if (buildingTable) sections.buildings = base(buildingTable);
+    const restored = RoadDoc.fromJSON(data, { ...rest, sections });
     if (whole) this.replaceWhole(restored); else this.replaceWith(restored);
   }
 
@@ -2474,11 +2561,8 @@ export class RoadDoc {
       }
       for (const [id, segment] of source.segments) this.segments.set(id, copySegment(segment));
     }
-    if (moved('utilities')) {
-      this.clearPoleRecords();
-      for (const pole of source.poles.values()) this.putPoleRecord({ ...pole });
-      for (const span of source.poleSpans.values()) this.putSpanRecord({ ...span });
-    }
+    // The poles and wires taken as they are: their tables shared, the records written over them copied (DO NOT decode and copy every one of the map).
+    if (moved('utilities')) this.takePolesFrom(source);
     // The landscaping taken as it is: its table shared, the records written over it copied (DO NOT decode and copy every item of the map).
     if (moved('landscape')) this.takeLandscapeFrom(source.landscapeMap);
     if (moved('barriers') && (whole || !sameBarriers(this, source))) {
@@ -2612,19 +2696,19 @@ export class RoadDoc {
     return this.serialized('apart');
   }
 
-  /** `toJSON` with the buildings, the landscaping and the lots left apart (their lists written empty, in their places): their tables go beside it (`editor/smallCityMap.ts` buildCityTable: `landscapeTable`, `LotStore.tableOf`). */
+  /** `toJSON` with every kind kept in a table left apart (`DOC_TABLES`: the buildings, the landscaping, the lots, the poles and the wires; their lists written empty, in their places): their tables go beside it (`editor/smallCityMap.ts` buildCityTable: `tableOf`). */
   toJSONTablesApart(): SerializedDoc {
     return this.serialized('apart', true, true);
   }
 
-  /** The map as an image (`docBinary.ts`): each part's JSON on its own (a long list in runs), the buildings, the landscaping and the lots as their tables and what was written over them - no text of the whole map, the tables shared, never copied. */
+  /** The map as an image (`docBinary.ts`): each part's JSON on its own (a long list in runs), each kind kept in a table as its table and what was written over it (`tableSections`) - no text of the whole map, the tables shared, never copied. */
   image(): DocImage {
-    return imageOf(this.serialized(false, true, true), this.buildings.sections(), this.landscapeSections(), this.lotStore.sections());
+    return imageOf(this.serialized(false, true, true), this.tableSections());
   }
 
-  /** A map read back from its image (`image`), exactly as it was: its buildings, landscaping and lots read from their tables when asked. */
+  /** A map read back from its image (`image`), exactly as it was: its tables' records read when asked. */
   static fromImage(image: DocImage): RoadDoc {
-    return RoadDoc.fromJSON(dataOf(image) as unknown as SerializedDoc, { repair: false, buildingSections: image.buildings, landscapeSections: image.landscape, lotSections: image.lots });
+    return RoadDoc.fromJSON(dataOf(image) as unknown as SerializedDoc, { repair: false, sections: image.tables });
   }
 
   /** The map saved as binary sections (`docBinary.ts` packImage): deterministic, a map loaded from it saves to the very same bytes. */
@@ -2706,8 +2790,8 @@ export class RoadDoc {
       ...(withRecords && this.trees.length > 0 ? { trees: this.trees.map((t) => ({ ...t })) } : {}),
       ...this.worldPart('weather'),
       ...this.worldPart('clearings'),
-      poles: withRecords ? inIdOrder(this.poles.values()).map(savedPole) : [],
-      poleSpans: withRecords ? inIdOrder(this.poleSpans.values()).map(savedSpan) : [],
+      poles: withRecords && !tablesApart ? inIdOrder(this.poles.values()).map(savedPole) : [],
+      poleSpans: withRecords && !tablesApart ? inIdOrder(this.poleSpans.values()).map(savedSpan) : [],
       ...(withRecords && this.landscape.size > 0 ? { landscape: tablesApart ? [] : inIdOrder(this.landscape.values()).map(savedLandscape) } : {}),
       // Only when there are any, so a map without them serialises as before.
       ...(withRecords && this.barriers.size > 0 ? { barriers: inIdOrder(this.barriers.values()).map(savedBarrier) } : {}),
@@ -2753,9 +2837,11 @@ export class RoadDoc {
   }
 
   /** Builds a document from its serialized form. */
-  /** `landscapeSections`, `lotSections`: the landscaping and the lots as their tables (a city made off the page, a map's image): read when asked, never decoded whole; the file's records of them, if any, stand over the tables. */
+  /** `sections`: the records of each kind kept in a table (`DOC_TABLES`) as their tables (a city made off the page, a map's image): read when asked, never decoded whole; the file's records of the kind, if any, stand over the table. `buildingSections` is the buildings' alone. */
   static fromJSON(saved: SerializedDoc, options: { readonly repair?: boolean; readonly shareBuildings?: BuildingStore; readonly preparedBuildings?: boolean; readonly buildingSections?: BuildingSections;
-    readonly landscapeSections?: TableSections; readonly lotSections?: TableSections } = {}): RoadDoc {
+    readonly sections?: Partial<DocTables> } = {}): RoadDoc {
+    const sections = options.sections ?? {};
+    const buildingSections = options.buildingSections ?? sections.buildings;
     // A map saved in another world unit (every map before 2026-10-10: 0.4 m) in this build's.
     const data = rescaleSerializedDoc(saved);
     const repair = options.repair ?? true;
@@ -2880,6 +2966,8 @@ export class RoadDoc {
       doc.putSpanRecord({ id, a, b });
       doc.spanIds.reserve(s.id);
     }
+    // The poles and the wires in tables: the tables the map's own, nothing decoded; those of the file (above) over them.
+    if (sections.poles || sections.spans) doc.loadPoleSections(sections.poles, sections.spans);
     // Public transport, if the map has any; anything malformed is dropped.
     if (data.transit) doc.transit = normalizeTransit(data.transit);
     // The balance, if the map has paid for anything (absent: the starting balance).
@@ -2893,7 +2981,7 @@ export class RoadDoc {
       doc.landscapeIds.reserve(item.id);
     }
     // The landscaping in a table: the table the map's own, nothing decoded; the items of the file (above) over it.
-    if (options.landscapeSections) doc.loadLandscapeSections(options.landscapeSections);
+    if (sections.landscape) doc.loadLandscapeSections(sections.landscape);
     // Walls, fences and hedges, if the map has any; anything malformed is dropped.
     for (const raw of data.barriers ?? []) {
       const barrier = barrierRecord(raw, repair);
@@ -2903,7 +2991,7 @@ export class RoadDoc {
     }
     // Buildings, if the map has any; each one through `migrateBuilding`.
     if (options.shareBuildings) doc.buildings.shareFrom(options.shareBuildings);
-    else if (options.buildingSections) doc.buildings.loadSections(options.buildingSections);
+    else if (buildingSections) doc.buildings.loadSections(buildingSections);
     else if (data.buildings && options.preparedBuildings) doc.buildings.loadPrepared(data.buildings as unknown as readonly Building[]);
     else if (data.buildings) doc.buildings.load(data.buildings);
     // The ids already read by a set, NOT `doc.lots.some(...)` per record
@@ -2931,7 +3019,7 @@ export class RoadDoc {
     }
     const lotKeys = (data.lotKeys ?? []).filter((key): key is string => typeof key === 'string');
     // The lots in a table (a city made off the page, a map's image): the table the store's own, nothing decoded (its records were made consistent where it was written); the file's lots, if any, over it.
-    if (options.lotSections) doc.lotStore.loadSections(options.lotSections, lotKeys, lots); else doc.lotStore.load(lots, lotKeys);
+    if (sections.lots) doc.lotStore.loadSections(sections.lots, lotKeys, lots); else doc.lotStore.load(lots, lotKeys);
     // People, each brought into range; anything that is not one is dropped.
     const seen = new Set<number>();
     for (const raw of data.people ?? []) {
@@ -3152,13 +3240,7 @@ function migratedBuildings(raw: TileRecords['buildings']): Building[] {
   return [...store.all()];
 }
 
-/** A stored lot as a store keeps it: its own corners (a stored record is never changed in place, and the data read may be), its building only if it stands. */
-/** A stored lot as the document keeps it: its corners its own, its zoning by name, its building only while it stands (`editor/preparedCity.ts` writes a city's lots into their table through it). */
-export function lotRecord(lot: Lot, standing: (id: number) => boolean): Lot {
-  const { building: _gone, ...free } = { ...lot, corners: lot.corners.map((q) => ({ x: q.x, y: q.y })),
-    ...(lot.use !== undefined ? { use: zoneUseName(lot.use) } : {}), ...(lot.density !== undefined ? { density: zoneDensityName(lot.density) } : {}) };
-  return lot.building !== undefined && standing(lot.building) ? { ...free, building: lot.building } : free;
-}
+export { lotRecord } from './lotRecord';
 
 function lotKeyPlace(key: string): { x: number; y: number } | null {
   const [x, y] = key.slice(2).split(',').map(Number);
@@ -3743,6 +3825,10 @@ export const savedPole = (p: UtilityPole): SavedPole => ({ id: p.id, x: p.x, y: 
 type SavedPole = NonNullable<SerializedDoc['poles']>[number];
 /** A pole from a file: one saved before poles had a kind stood on a street, urban. */
 const loadedPole = (p: SavedPole): UtilityPole => ({ id: asPoleId(p.id), x: p.x, y: p.y, lamp: p.lamp ?? false, kind: p.kind ?? 'urban' });
+/** A stored pole as `fromJSON` reads one of the file (`repair`: stood on the world), for a city's table (`editor/preparedCity.ts`). */
+export const poleRecord = (p: SavedPole, repair: boolean): UtilityPole => { const at = repair ? onWorld(p) : p; return loadedPole({ ...p, x: at.x, y: at.y }); };
+/** Where a wire stands for its table's columns: its two poles' ids (`PoleIndex` files it from them, no record decoded). */
+export const spanPlace = (s: UtilitySpan): { x: number; y: number } => ({ x: s.a, y: s.b });
 export const savedSpan = (s: UtilitySpan): NonNullable<SerializedDoc['poleSpans']>[number] => ({ id: s.id, a: s.a, b: s.b });
 export const savedLandscape = (item: LandscapeItem): NonNullable<SerializedDoc['landscape']>[number] => ({ id: item.id, kind: item.kind, x: item.x, y: item.y,
   ...(item.signType ? { signType: item.signType } : {}), ...(item.text ? { text: item.text } : {}),

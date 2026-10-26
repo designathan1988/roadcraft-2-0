@@ -4,7 +4,7 @@ import { measureHitch } from '@core/hitch';
 import { watchDesktopShown } from './desktopShown';
 import { canQueueJobs, jobChannel, jobLanes, jobPoolStats, setJobWorkerMaker, setJobWorkerSetup, submitJob } from './jobs/jobPool';
 import type { CityGenAsk, CityGenReply } from './cityGen.worker';
-import { type OpenedCity, type OpenedTables, openedBuildings, openedTables, prepareCity, preparedCity } from './editor/preparedCity';
+import { CITY_TABLES, type CityTable, type OpenedCity, type OpenedTables, noCityTables, openedBuildings, openedTables, prepareCity, preparedCity } from './editor/preparedCity';
 import { COOKED_CITY_SEEDS, readCookedCity } from './editor/cookedCities';
 import { tableBytes, tableIn } from '@world/buildings/recordTable';
 import { desktopJobWorkers } from './desktopJobs';
@@ -256,7 +256,7 @@ function restoreBootSave(loaded: Awaited<ReturnType<Persistence['loadSessionAsyn
     doc.changes.causeNext('saved map loaded');
     performance.mark('boot:restore');
     // A large map's buildings made one table, as a generated city's are (`prepareCity`), and filed from it: DO NOT load them one object at a time - each was migrated and interned again (0.83 s of the large city's boot), and each written to a row of its own for the traffic's worker after (`refOf`, 0.5 s more).
-    const asTable = (map.buildings?.length ?? 0) >= TABLE_RESTORE_BUILDINGS ? (() => { const made = prepareCity(map); return preparedCity(made.data, made.buildings, made.landscape, made.lots); })() : null;
+    const asTable = (map.buildings?.length ?? 0) >= TABLE_RESTORE_BUILDINGS ? (() => { const made = prepareCity(map, !openedGenerated(map, null)); return preparedCity(made.data, made.buildings, made); })() : null;
     restoreInto(doc, asTable?.data ?? map, net, asTable ? openedTables(asTable) : null);
     performance.mark('boot:restored');
     doc.changes.causeNext('game');
@@ -914,7 +914,7 @@ function mutateBuilt(fn: () => boolean): boolean {
 }
 
 /** `snapshot`: the model's own undo/redo state, restored exactly. */
-/** `tables`: an imported map's tables (its buildings', landscaping's and lots'), prepared by the city's worker (`editor/preparedCity.ts`). */
+/** `tables`: an imported map's tables (its buildings' and the other kinds', `CITY_TABLES`), prepared by the city's worker (`editor/preparedCity.ts`). */
 function applySnapshot(data: ReturnType<RoadDoc['toJSON']> | null, source: 'snapshot' | 'import' = 'snapshot', tables: OpenedTables | null = null): void {
   if (!data) return;
   roadTool.cancel();
@@ -2053,23 +2053,20 @@ const CITY_PREFIX = CITY_HASH ? `city:${CITY_HASH}:` : null;
 if (CITY_PREFIX) forgetOtherDerived('city', CITY_PREFIX.slice('city:'.length, -1));
 // The next new cities made ahead from the start (`cityAhead`), once the boot's work is behind.
 queueMicrotask(() => citiesAheadLater());
-/** A kept city: its document without buildings, landscaping and lots, and their tables (`prepareCity`), as the worker answered them (a city kept before 2026-10-26 has no landscape or lots table: those records in its data). */
-interface KeptCity { readonly data: OpenedCity['data']; readonly buildings: ArrayBuffer; readonly landscape?: ArrayBuffer | null; readonly lots?: ArrayBuffer | null }
+/** A kept city: its document without the records kept in tables, its buildings' table and the other kinds' (`prepareCity`, `CITY_TABLES`), as the worker answered them (a city kept before 2026-10-26 has only the buildings' table: the other records in its data). */
+type KeptCity = { readonly data: OpenedCity['data']; readonly buildings: ArrayBuffer } & Partial<Record<CityTable, ArrayBuffer | null>>;
 
-/** A kept or shipped table back in shared memory, as the page's workers read it (`tableIn`); null stays none. */
-function tableInOrNone(buffer: ArrayBufferLike | null | undefined): ArrayBufferLike | null {
-  return buffer ? tableIn(buffer) : null;
-}
-
-/** A table as a plain copy for the store (`tableBytes`): a kept city's; null stays none. */
-function tableBytesOrNone(buffer: ArrayBufferLike | null | undefined): ArrayBuffer | null {
-  return buffer ? tableBytes(buffer) : null;
+/** The tables beside the buildings' of a kept, shipped or answered city, each through `each` (back in shared memory as the page's workers read it, `tableIn`; or as a plain copy for the store, `tableBytes`); one absent stays none. */
+function besideTables<R extends ArrayBufferLike>(city: Partial<Record<CityTable, ArrayBufferLike | null | undefined>>, each: (buffer: ArrayBufferLike) => R): Record<CityTable, R | null> {
+  const out = {} as Record<CityTable, R | null>;
+  for (const name of CITY_TABLES) { const buffer = city[name]; out[name] = buffer ? each(buffer) : null; }
+  return out;
 }
 
 /** The city's document made by the worker (the game's own generator), or read as an earlier session kept it (`CITY_PREFIX`); without a job queue (a test) it is made on the page, as before. */
 async function cityData(ask: CityGenAsk): Promise<OpenedCity> {
   if (!canQueueJobs()) {
-    return { data: ask.kind === 'large' ? buildLargeCityMap(ask.seed ?? 7, ask.radius) : buildSmallCityMap(ask.seed ?? 7), table: null, buildings: null, landscape: null, lots: null };
+    return { data: ask.kind === 'large' ? buildLargeCityMap(ask.seed ?? 7, ask.radius) : buildSmallCityMap(ask.seed ?? 7), table: null, buildings: null, ...noCityTables() };
   }
   // DO NOT grow the city again each time it is opened: the large city's generation was 6.4 s of the desktop's 7.4 s opening (2026-10-21), for a city the same seed and the same code make byte for byte.
   const key = CITY_PREFIX ? `${CITY_PREFIX}${ask.kind}:${ask.seed ?? 7}${ask.radius !== undefined ? `:r${Math.round(ask.radius)}` : ''}` : null;
@@ -2077,13 +2074,13 @@ async function cityData(ask: CityGenAsk): Promise<OpenedCity> {
   const making = key ? citiesAhead.get(key) : undefined;
   if (making) { performance.mark('city:ahead'); return openedOf(await making); }
   const kept = key ? await readDerived<KeptCity>(key).catch(() => undefined) : undefined;
-  if (kept?.data && kept.buildings instanceof ArrayBuffer) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), tableInOrNone(kept.landscape), tableInOrNone(kept.lots)); }
+  if (kept?.data && kept.buildings instanceof ArrayBuffer) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), besideTables(kept, tableIn)); }
   // Shipped with the game (the first new city of its size, `cookedCities.ts`): read, and kept as one grown here would be.
   const cooked = (ask.kind === 'large' || ask.kind === 'small') && ask.radius === undefined ? await readCookedCity(import.meta.env.BASE_URL, CITY_HASH, ask.kind, ask.seed ?? 7) : null;
   if (cooked) {
     performance.mark('city:cooked');
-    if (key) void keepDerivedDurably(key, { data: cooked.data, buildings: cooked.buildings, landscape: cooked.landscape, lots: cooked.lots } satisfies KeptCity);
-    return preparedCity(cooked.data, tableIn(cooked.buildings), tableInOrNone(cooked.landscape), tableInOrNone(cooked.lots));
+    if (key) void keepDerivedDurably(key, cooked satisfies KeptCity);
+    return preparedCity(cooked.data, tableIn(cooked.buildings), besideTables(cooked, tableIn));
   }
   if (key) performance.mark('city:made');
   return openedOf(await cityJob(ask, key, 0));
@@ -2094,8 +2091,8 @@ function openedOf(reply: CityGenReply): OpenedCity {
   if (!reply.data) throw new Error(reply.error ?? 'the city was not made');
   // Made in a job process (the desktop's), its tables came as plain copies: back in shared memory, as the page's workers read them (`tableIn`).
   return reply.buildings
-    ? preparedCity(reply.data, tableIn(reply.buildings), tableInOrNone(reply.landscape), tableInOrNone(reply.lots))
-    : { data: reply.data, table: null, buildings: null, landscape: null, lots: null };
+    ? preparedCity(reply.data, tableIn(reply.buildings), besideTables(reply, tableIn))
+    : { data: reply.data, table: null, buildings: null, ...noCityTables() };
 }
 
 /**
@@ -2134,7 +2131,7 @@ function cityJob(ask: CityGenAsk, key: string | null, priority: number): Promise
         if (!reply.data) { fail(new Error(reply.error ?? 'the city was not made')); return; }
         // Kept as it came (the store copies it now), for the next opening of this seed: committed to the disk (one write of some 12 MB, rare). DO NOT keep it relaxed: a game closed soon after lost it, and the city was grown again at the next opening.
         // The table is in shared memory where the page is isolated (`recordTable.ts` allocate), which no store keeps: a plain copy of it (`tableBytes`). DO NOT keep only a plain buffer as it came: the desktop's never was one, and no city was ever kept (2026-10-21).
-        if (key && reply.buildings) void keepDerivedDurably(key, { data: reply.data, buildings: tableBytes(reply.buildings), landscape: tableBytesOrNone(reply.landscape), lots: tableBytesOrNone(reply.lots) } satisfies KeptCity);
+        if (key && reply.buildings) void keepDerivedDurably(key, { data: reply.data, buildings: tableBytes(reply.buildings), ...besideTables(reply, tableBytes) } satisfies KeptCity);
         done(reply);
       },
       failed: (message) => fail(new Error(message)),
@@ -2171,7 +2168,7 @@ async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
   if (kept.has(key.slice(CITY_PREFIX.length)) || citiesAhead.has(key)) return;
   // The city shipped with the game for this seed (`cookedCities.ts`): kept from its files, DO NOT grow it again.
   const cooked = await readCookedCity(import.meta.env.BASE_URL, CITY_HASH, kind, seed);
-  if (cooked) { void keepDerivedDurably(key, { data: cooked.data, buildings: cooked.buildings, landscape: cooked.landscape, lots: cooked.lots } satisfies KeptCity); return; }
+  if (cooked) { void keepDerivedDurably(key, cooked satisfies KeptCity); return; }
   const made = cityJob({ id: cityAskId++, kind, seed }, key, 1_000_000);
   citiesAhead.set(key, made);
   void made.catch(() => {}).finally(() => { if (citiesAhead.get(key) === made) citiesAhead.delete(key); });
@@ -2225,7 +2222,7 @@ function openLargeCity(seed: number, radius?: number): Promise<void> {
   return openCityOffPage({ id: cityAskId++, kind: 'large', seed, ...(radius !== undefined ? { radius } : {}) });
 }
 
-/** `tables`: its buildings', landscaping's and lots' tables, prepared by the city's worker (`editor/preparedCity.ts`). */
+/** `tables`: its buildings' and the other kinds' tables (`CITY_TABLES`), prepared by the city's worker (`editor/preparedCity.ts`). */
 function openCity(data: ReturnType<typeof buildSmallCityMap>, large = false, tables: OpenedTables | null = null, bake: NetworkBake | null = null): void {
   history.begin(doc);
   // A large city opens at a district, its first world covering the view alone (`renderer.ts` openingBuild): the whole map's roads took tens of seconds the curtain showed nothing of.

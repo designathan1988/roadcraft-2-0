@@ -1,4 +1,5 @@
 import type { SerializedDoc } from '@world/doc';
+import type { CityTables } from './editor/preparedCity';
 import { buildCityTableOf } from './editor/smallCityMap';
 import type { JobScope } from './jobs/jobScope';
 
@@ -13,18 +14,18 @@ export interface CityGenAsk {
   readonly radius?: number;
 }
 
-/** `buildings`, `landscape`, `lots`: the city's buildings, landscaping and lots each as one table (`buildCityTable`, as `prepareCity` makes them), its `data` holding none: the page reads them from the tables (`preparedCity`). */
-export type CityGenReply = { readonly id: number; readonly data?: SerializedDoc; readonly buildings?: ArrayBufferLike; readonly landscape?: ArrayBufferLike | null; readonly lots?: ArrayBufferLike | null; readonly error?: string };
+/** `buildings` and the other kinds' (`CityTables`): the city's buildings, landscaping, lots, poles and wires each as one table (`buildCityTable`, as `prepareCity` makes them), its `data` holding none: the page reads them from the tables (`preparedCity`). */
+export type CityGenReply = { readonly id: number; readonly data?: SerializedDoc; readonly buildings?: ArrayBufferLike; readonly error?: string } & Partial<CityTables>;
 
 export function serve(scope: JobScope): void {
   scope.onmessage = (event: MessageEvent<CityGenAsk>) => {
     const ask = event.data;
     try {
       // DO NOT grow the whole city as objects and prepare it after (`prepareCity`): `buildCityTable` spills its buildings into tables as they grow.
-      const { data, buildings, landscape, lots } = buildCityTableOf(ask.kind, ask.seed ?? 7, ask.radius);
+      const { data, buildings, ...beside } = buildCityTableOf(ask.kind, ask.seed ?? 7, ask.radius);
       // The tables moved, not copied, where they are plain buffers (in shared memory they are posted as handles, MDN "SharedArrayBuffer").
-      const transfer = [buildings, landscape, lots].filter((b): b is ArrayBuffer => b instanceof ArrayBuffer);
-      scope.postMessage({ id: ask.id, data, buildings, landscape, lots } satisfies CityGenReply, transfer);
+      const transfer = [buildings, ...Object.values(beside)].filter((b): b is ArrayBuffer => b instanceof ArrayBuffer);
+      scope.postMessage({ id: ask.id, data, buildings, ...beside } satisfies CityGenReply, transfer);
     } catch (error) {
       scope.postMessage({ id: ask.id, error: String((error as Error)?.stack ?? error) } satisfies CityGenReply);
     }

@@ -50,14 +50,19 @@ export class PoleIndex {
 
   /** A pole put (new, or its record replaced where it may have moved). */
   putPole(pole: UtilityPole): void {
-    const key = cellOf(pole.x, pole.y);
-    const was = this.cellOfPole.get(pole.id);
+    this.filePole(pole.id, pole.x, pole.y);
+  }
+
+  /** A pole filed where it stands, by its id and place alone (a table's columns, no record decoded: `RoadDoc.refilePoles`). */
+  filePole(id: PoleId, x: number, y: number): void {
+    const key = cellOf(x, y);
+    const was = this.cellOfPole.get(id);
     if (was === key) return;
-    if (was !== undefined) this.unfile(pole.id, was);
-    this.cellOfPole.set(pole.id, key);
+    if (was !== undefined) this.unfile(id, was);
+    this.cellOfPole.set(id, key);
     const cell = this.own(this.cells, key);
-    if (cell) addTo(cell, pole.id);
-    else this.cells.set(key, [pole.id]);
+    if (cell) addTo(cell, id);
+    else this.cells.set(key, [id]);
   }
 
   deletePole(id: PoleId): void {
@@ -75,10 +80,15 @@ export class PoleIndex {
   }
 
   putSpan(span: UtilitySpan): void {
-    for (const end of [span.a, span.b]) {
+    this.fileSpan(span.id, span.a, span.b);
+  }
+
+  /** A span filed at both its poles, by its id and ends alone (a table's columns, no record decoded: `RoadDoc.refilePoles`). */
+  fileSpan(id: SpanId, a: PoleId, b: PoleId): void {
+    for (const end of [a, b]) {
       const at = this.own(this.spansOfPole, end);
-      if (at) addTo(at, span.id);
-      else this.spansOfPole.set(end, [span.id]);
+      if (at) addTo(at, id);
+      else this.spansOfPole.set(end, [id]);
     }
   }
 
