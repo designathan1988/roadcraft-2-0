@@ -1,15 +1,23 @@
 {
-  "hash": "da27ddf42549ebf9",
+  "hash": "452beb1e051ad3a6",
   "cities": {
     "large": {
       "seed": 7,
       "data": "large-7.json.gz",
-      "table": "large-7.table.gz"
+      "table": "large-7.table.gz",
+      "landscape": "large-7.landscape.gz",
+      "lots": "large-7.lots.gz",
+      "poles": "large-7.poles.gz",
+      "spans": "large-7.spans.gz"
     },
     "small": {
       "seed": 7,
       "data": "small-7.json.gz",
-      "table": "small-7.table.gz"
+      "table": "small-7.table.gz",
+      "landscape": "small-7.landscape.gz",
+      "lots": "small-7.lots.gz",
+      "poles": "small-7.poles.gz",
+      "spans": "small-7.spans.gz"
     }
   }
 }
