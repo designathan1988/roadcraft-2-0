@@ -1,4 +1,5 @@
 import type { Vec2 } from '@core/vec2';
+import type { SegmentId } from '@world/ids';
 import { type RailGraph, type TransitLine, type TransitStop, railGraph, railPath } from '@world/transit';
 import { m } from '@world/units';
 import { CellFiling } from '@world/cells';
@@ -282,6 +283,24 @@ export class TransitSim {
         const list = this.crossingsByLane.get(c.lanelet);
         if (list) list.push({ rail, crossing: c }); else this.crossingsByLane.set(c.lanelet, [{ rail, crossing: c }]);
       }
+    }
+  }
+
+  /** The buses on these roads taken off them, on by the timetable to the stop each was going to (the roads leave the micro window's, `SimWorld.rescopeSteps`). */
+  takeOff(w: SimWorld, segments: ReadonlySet<SegmentId>): void {
+    for (const bus of this.buses) {
+      const v = bus.id !== null ? w.vehicles.get(bus.id) : undefined;
+      if (!v) continue;
+      const lane = w.lanelet(v.lanelet);
+      const segment = lane?.segment ?? (lane ? w.connector(lane.id)?.inSegment : undefined);
+      if (segment === undefined || !segments.has(segment)) continue;
+      const line = this.lineOf(bus.line);
+      const goal = line ? this.stopPoint(w, line.stops[bus.next]!) : null;
+      const pose = vehiclePose(w, v, 1);
+      w.removeVehicle(v);
+      bus.id = null;
+      bus.dwell = 0;
+      bus.wait = goal && pose ? travelTime(Math.hypot(goal.x - pose.p.x, goal.y - pose.p.y), goal.speed) : BUS_SPACING;
     }
   }
 

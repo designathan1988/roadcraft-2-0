@@ -1,4 +1,4 @@
-import { rebindPeds, rebindVehicles } from './pipeline';
+import { rebindAgents, rebindPeds, rebindVehicles } from './pipeline';
 import type { SimWorld } from './world';
 import { WAITING } from '@world/conflictPoints';
 import type { PairMeasurer } from '@world/conflictTable';
@@ -9,16 +9,18 @@ export class TopologyCatchUp {
   constructor(private readonly measurer?: PairMeasurer) {}
 
   private vehicles: { revision: number; steps: Generator<void | typeof WAITING, void> } | null = null;
-  private moving: Generator<void | typeof WAITING, void> | null = null;
+  private moving: Generator<void | typeof WAITING, boolean> | null = null;
 
-  /** The micro window's move (`SimWorld.moveWindowSteps`), as far as it goes this frame without holding the simulation; none while the topology catches up. */
+  /** The micro window's move (`SimWorld.moveWindowSteps`), as far as it goes this frame without holding the simulation; none while the topology catches up. The roads held moved with it: the agents rebound to them. */
   stepWindow(sim: SimWorld, revision: number): void {
     if (sim.topologyRevision !== revision) return;
     if (!this.moving && !sim.windowMoving) return;
     this.moving ??= sim.moveWindowSteps(this.measurer);
     let next = this.moving.next();
     while (!next.done && next.value !== WAITING) next = this.moving.next();
-    if (next.done) this.moving = null;
+    if (!next.done) return;
+    this.moving = null;
+    if (next.value) rebindAgents(sim);
   }
 
   /** This frame's work towards `revision` (the network's `trafficRevision`). */

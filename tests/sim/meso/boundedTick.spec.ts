@@ -137,10 +137,10 @@ describe("the window's cars", () => {
     w.trafficIntensity = 10;
     meso.want(0, 0, m(250));
     for (let t = 0; t < Math.round(60 / DT); t++) step(w, { traffic: true, pedestrians: false });
-    const edge = new Set(meso.handoffLanes());
+    const edge = new Set(meso.handoffLanes(w));
     expect(edge.size).toBeGreaterThan(0);
     for (const id of edge) {
-      const slot = meso.slotOfLane(id)!;
+      const slot = meso.slotOfLane(w, id)!;
       expect(meso.model.isInside(slot), id).toBe(false);
     }
     let routed = 0;

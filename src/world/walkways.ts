@@ -308,6 +308,26 @@ export class Walkways {
   private readonly reads = new CellFiling<NodeId, NodeUnit>();
   private netState: object | null = null;
 
+  /**
+   * THE ROADS WHOSE FOOTWAYS ARE HELD: every road (null, a spec's whole map), or the micro window's (the game's, `SimWorld.useMeso`, the
+   * lane graph's `scope`): their footways, and the corners and crossings of the nodes every one of whose roads is held (`complete`) - a
+   * footway reaching a node with a road outside the window ends there, where the scenery's people come in and go out (`edgeEnds`).
+   */
+  scope: ReadonlySet<SegmentId> | null = null;
+
+  private inScope(segment: SegmentId): boolean {
+    return this.scope === null || this.scope.has(segment);
+  }
+
+  /** Whether every road at a node is held: only then are its corners and crossings built. */
+  private complete(doc: RoadDoc, nodeId: NodeId): boolean {
+    if (this.scope === null) return true;
+    const node = doc.node(nodeId);
+    if (!node) return false;
+    for (const seg of node.incident) if (!this.scope.has(seg)) return false;
+    return true;
+  }
+
   /** The walkways of the network as it is now. */
   update(net: Network): WalkGraph {
     if (this.netState === net.state) return this.graph;
@@ -317,18 +337,51 @@ export class Walkways {
   /** DO NOT round them on the page: the kerbs' outlines merged and grown round every corner of a generated city held the */
   *updateSteps(net: Network, measurer?: CornerMeasurer): Generator<void | typeof WAITING, WalkGraph> {
     if (this.netState === net.state) return this.graph;
-    const from = this.netState, state = net.state;
-    const plan = this.plan(net, measurer?.roundCorners !== undefined);
+    return yield* this.applySteps(net, this.plan(net, measurer?.roundCorners !== undefined), measurer);
+  }
+
+  /** The footways held moved to the roads of `next` (the micro window moved, `SimWorld.rescopeSteps`): those that left taken out, those that came built, with the corners and crossings at their ends. */
+  *rescopeSteps(net: Network, next: ReadonlySet<SegmentId>, measurer?: CornerMeasurer): Generator<void | typeof WAITING, WalkGraph> {
+    this.scope = next;
+    // Not built yet: the build to come holds the new roads.
+    if (this.netState === null) return this.graph;
+    const segments = new Set<SegmentId>();
+    for (const seg of this.segments.keys()) if (!next.has(seg)) segments.add(seg);
+    for (const seg of next) if (!this.segments.has(seg) && net.doc.segment(seg)) segments.add(seg);
+    if (!segments.size && this.netState === net.state) return this.graph;
+    return yield* this.applySteps(net, this.plan(net, measurer?.roundCorners !== undefined, segments), measurer);
+  }
+
+  /** A plan applied, its corners rounded by the workers first where there are some. */
+  private *applySteps(net: Network, plan: WalkPlan, measurer?: CornerMeasurer): Generator<void | typeof WAITING, WalkGraph> {
     if (!plan.asks.length) return this.apply(net, plan, null);
+    const from = this.netState, state = net.state, scope = this.scope;
     const lines = yield* answered(measurer!.roundCorners!(plan.asks.map((a) => a.ask)), 'the corners are rounded');
-    if (this.netState !== from || net.state !== state) return this.update(net);
+    // Moved on meanwhile (the network, or the roads held): planned again from what is.
+    if (this.netState !== from || net.state !== state || this.scope !== scope) return this.update(net);
     const rounded = new Map<NodeId, readonly (Float64Array | null)[]>();
     plan.asks.forEach((a, k) => { const made = lines?.[k]; if (made) rounded.set(a.node, made); });
     return this.apply(net, plan, rounded);
   }
 
-  /** What an update builds again, read and not changed (`updateSteps` waits on the workers with it) */
-  private plan(net: Network, ask: boolean): WalkPlan {
+  /** The footway ends at the nodes whose other roads are not held (the window's edge, `scope`): where the scenery's people come in and go out, as at a road's end (`sim/ambient/ambient.ts`). */
+  edgeEnds(): { readonly node: NodeId; readonly x: number; readonly y: number }[] {
+    const out: { node: NodeId; x: number; y: number }[] = [];
+    if (this.scope === null) return out;
+    for (const unit of this.segments.values()) {
+      for (const [k, nodeId] of unit.ends.entries()) {
+        if (this.nodeUnits.has(nodeId)) continue;
+        for (const raw of unit.raws) {
+          const p = k === 0 ? raw.first.p : raw.last.p;
+          out.push({ node: nodeId, x: p.x, y: p.y });
+        }
+      }
+    }
+    return out;
+  }
+
+  /** What an update builds again, read and not changed (`updateSteps` waits on the workers with it); `moved`: roads that came into the roads held or left them (`rescopeSteps`). */
+  private plan(net: Network, ask: boolean, moved: ReadonlySet<SegmentId> | null = null): WalkPlan {
     const doc = net.doc;
     const delta = this.netState === null ? null : net.changesSince(this.netState);
     const { rawSegs, nodes } = delta === null ? this.everything(doc) : { rawSegs: new Set<SegmentId>(), nodes: new Set<NodeId>() };
@@ -341,6 +394,7 @@ export class Walkways {
       }
       for (const rect of delta.rects) for (const id of this.reads.idsMeeting(rect)) nodes.add(id);
     }
+    if (moved) for (const id of moved) rawSegs.add(id);
     // A road's footways end at its nodes, before and now: their corners and crossings are made again.
     for (const id of rawSegs) {
       const before = this.segments.get(id);
@@ -352,12 +406,12 @@ export class Walkways {
     const cutSegs = new Set<SegmentId>(rawSegs);
     for (const id of nodes) for (const seg of doc.node(id)?.incident ?? []) cutSegs.add(seg);
     const shapes = new Map<SegmentId, readonly FootwayShape[]>();
-    for (const id of [...rawSegs].sort(ascending)) if (doc.segment(id)) shapes.set(id, footwayShapes(net, id));
+    for (const id of [...rawSegs].sort(ascending)) if (doc.segment(id) && this.inScope(id)) shapes.set(id, footwayShapes(net, id));
     const asks: { node: NodeId; ask: CornerAsk }[] = [];
     if (ask) {
       for (const id of [...nodes].sort(ascending)) {
         const node = doc.node(id);
-        if (!node) continue;
+        if (!node || !this.complete(doc, id)) continue;
         const here = endsAt(doc, id, (seg) => rawSegs.has(seg) ? shapes.get(seg) ?? [] : this.segments.get(seg)?.raws ?? [], () => -1);
         const corners = cornersOf(net, id, here);
         const decks = new Set(corners.filter((c) => c.from.way.structure === c.to.way.structure).map((c) => c.from.way.structure));
@@ -397,7 +451,7 @@ export class Walkways {
       this.reads.remove(id);
     }
     for (const [id, shapes] of plan.shapes) this.segments.set(id, this.footways(doc, id, shapes));
-    for (const id of [...nodes].sort(ascending)) if (doc.node(id)) this.buildNode(net, id, rounded?.get(id) ?? null);
+    for (const id of [...nodes].sort(ascending)) if (doc.node(id) && this.complete(doc, id)) this.buildNode(net, id, rounded?.get(id) ?? null);
     for (const id of [...cutSegs].sort(ascending)) {
       const unit = this.segments.get(id);
       if (unit) this.cut(doc, id, unit);
@@ -406,10 +460,12 @@ export class Walkways {
     return g;
   }
 
-  /** @rebuild Every road and node, those built and those there now. */
+  /** @rebuild Every road and node (of the roads held, `scope`), those built and those there now. */
   private everything(doc: RoadDoc): { rawSegs: Set<SegmentId>; nodes: Set<NodeId> } {
-    const rawSegs = new Set<SegmentId>([...this.segments.keys(), ...doc.segments.keys()]);
-    const nodes = new Set<NodeId>([...this.nodeUnits.keys(), ...doc.nodes.keys()]);
+    const rawSegs = new Set<SegmentId>([...this.segments.keys(), ...(this.scope ?? doc.segments.keys())]);
+    const nodes = new Set<NodeId>(this.nodeUnits.keys());
+    if (this.scope === null) for (const id of doc.nodes.keys()) nodes.add(id);
+    else for (const id of rawSegs) { const seg = doc.segment(id); if (seg) { nodes.add(seg.a); nodes.add(seg.b); } }
     return { rawSegs, nodes };
   }
 

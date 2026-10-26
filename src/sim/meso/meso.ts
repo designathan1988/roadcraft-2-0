@@ -1,38 +1,40 @@
 import { m } from '@world/units';
 import { CELL } from '@world/cells';
+import type { SegmentId } from '@world/ids';
 import type { LaneletId } from '@world/lanelets';
+import { type LinkSpec, linkSpec } from './linkSpec';
 import type { BodyClass } from '@world/conflictPoints';
 import { segmentLine } from '@world/geometry';
 import { DT, FLEET_CEILING } from '../params';
 import type { SimWorld } from '../world';
-import { spawnVehicleAt, ENTRY_RATE } from '../vehicles/spawn';
+import { spawnVehicleAt } from '../vehicles/spawn';
 import { mayRequestSearch } from '../routing/searchScratch';
 import { TRAFFIC } from '../ambient/ambient';
 import { MesoModel } from './model';
 import { DemandCells } from './demand';
-import { MESO_INSIDE, MESO_ONE_WAY, MESO_PRESENT, MICRO_RADIUS, ML, type MesoDelta, MesoDeltaBuilder, followView } from './memory';
-import { linkId, reverseLink } from './tileLinks';
+import { MICRO_RADIUS, type MesoDelta, followView } from './memory';
+import { linkId, linkSegment, reverseLink } from './tileLinks';
+import { MesoPublisher, type PublishedLinks } from './mesoPublish';
+import { MesoRates } from './mesoRates';
 import { SlotIndex, Threads, grown } from './slots';
 
-/** THE MESO TRAFFIC IN THE SIMULATION: the world's flows (`model.ts`) over the lane graph's roads, and the micro window they hand their cars to and take them back from */
+/** THE MESO TRAFFIC IN THE SIMULATION: the world's flows (`model.ts`) over the document's roads, and the micro window they hand their cars to and take them back from */
 // The cost of a tick is bounded, not the map's size: a step's work (the rates, the model's phases, the publish) is spread over the
 // ticks of its second, `MESO_WORK_PER_TICK` links a tick (Factorio's work in buckets, FFF #421); a step owed while one is under way
 // waits for it (the far traffic slows, the tick does not grow). The page is sent only the links that changed (`MesoDelta`).
+// DO NOT read the links off the lane graph: it holds the window's roads alone (`SimWorld.useMeso`). A link is a directed road of the
+// document (`linkSpec`: its lanes, trimmed length, speed, stop line from the road's profile and the network's trims, as the lane graph
+// builds its lanes from them); the lanes are asked of the graph only where the window holds them (`lanesOf`: the cars made, counted
+// and taken back, the turns weighed by the movements).
 
 /** Seconds of the city between two steps of the meso model. */
 const MESO_DT = 1;
 /** Links (and nodes) of meso work a tick: rates, the model's four phases and the publish together, about six units a link a step (measured: under 1 ms a tick at 200,000 links). A step of about 40,000 links keeps up with the clock at 60 ticks a second; past it the far traffic runs slower than the clock, the tick never longer. */
 const MESO_WORK_PER_TICK = 4096;
-/** A trip's mean length, for the share of a link's traffic that ends its trip on it and how often its street's lots send one out. */
-const TRIP_LENGTH = m(3000);
 /** Most cars made in the window a tick, as the edge entries admit them (`vehicles/spawn.ts` ADMIT_PER_TICK). */
 const ADMIT_PER_TICK = 4;
 /** How far ahead of a link's start a car handed in at its upstream end is made. */
 const ENTRY_CLEARANCE = m(0.6);
-/** The serial of a slot's line wraps here: a Float32 holds it whole (`memory.ts` ML.shape). */
-const SHAPE_WRAP = (1 << 24) - 1;
-/** A link's speed is sent again when it moved by more than this share (the far cars' pace: a few percent is not seen). */
-const SPEED_STEP = 0.1;
 /** Handoff lanes tried for a new car before it goes without a destination (its lookahead drives it, the window's edge takes it back). */
 const HANDOFF_TRIES = 4;
 /** A node's word (`nodes`): a turning circle, then the roads meeting at it counted in steps of `ROAD`. */
@@ -40,8 +42,7 @@ const BULB = 1;
 const ROAD = 4;
 /** What a step's work is doing (`job`). */
 const IDLE = 0, RATES = 1, MODEL = 2, PUBLISH = 3;
-/** Numbers kept a slot of what the page was last sent (`sent`): its rounded count and queue, speed, length, lanes, flags. */
-const SENT = 6;
+const NONE: readonly LaneletId[] = Object.freeze([]);
 
 /** The world's 250 m cell holding a point, as `CellFiling` keys it: the window finds its links by it. */
 const cellOfPoint = (x: number, y: number): number => (Math.floor(x / CELL) + 32768) * 65536 + (Math.floor(y / CELL) + 32768);
@@ -50,6 +51,8 @@ export class Meso {
   model = new MesoModel(MESO_DT);
   private demand = new DemandCells();
   private clock = 0;
+  /** The network's state the links were last brought up to, and the lane graph's the turns were. */
+  private netSeen: object | null = null;
   private graphSeen: object | null = null;
   /** Each link its dense slot, the slots freed taken again (a link's id is a double). */
   private index = new SlotIndex();
@@ -59,9 +62,6 @@ export class Meso {
   private cap = 0;
   /** Each slot's link (NaN: none). */
   private linkAt = new Float64Array(0);
-  /** Each link lane's slot, and each live slot's lanes. */
-  private laneSlot = new Map<LaneletId, number>();
-  private laneLists: (LaneletId[] | undefined)[] = [];
   /** Each slot's middle (x, y) and its demand cell (`DemandCells.cellOf`, dense; -1: none). */
   private mid = new Float64Array(0);
   private cellOf = new Int32Array(0);
@@ -82,7 +82,6 @@ export class Meso {
   private lines = new Float32Array(0);
   private oneWay = new Uint8Array(0);
   private dirty = new Uint8Array(0);
-  private shapeSerial = 0;
   /** The micro window: where it stands, and where it was asked to go (`want`). */
   private micro = { x: 0, y: 0, r: 0 };
   private wanted: { x: number; y: number; r: number } | null = null;
@@ -104,24 +103,21 @@ export class Meso {
   budget = MESO_WORK_PER_TICK;
   /** Steps the clock owed while one was under way, let go (the far traffic ran slower than the clock), since the start. */
   late = 0;
-  /** The page's delta under way, what each slot was last sent as, and whether the next publish is whole. */
-  private readonly out = new MesoDeltaBuilder();
-  private sent = new Float32Array(0);
-  private wholeDue = true;
+  /** What the page is sent (`mesoPublish.ts`). */
+  private readonly publisher = new MesoPublisher();
 
   /** Everything of the model forgotten (another map, the simulation started over): the window kept (entered again over the new map's links at the next step). */
   reset(): void {
     this.model = new MesoModel(MESO_DT);
     this.demand = new DemandCells();
     this.clock = 0;
+    this.netSeen = null;
     this.graphSeen = null;
     this.index = new SlotIndex();
     this.slotTop = 0;
     this.freeSlots = [];
     this.cap = 0;
     this.linkAt = new Float64Array(0);
-    this.laneSlot = new Map();
-    this.laneLists = [];
     this.mid = new Float64Array(0);
     this.cellOf = new Int32Array(0);
     this.endFrom = new Float64Array(0);
@@ -145,8 +141,8 @@ export class Meso {
     this.job = IDLE;
     this.cursor = 0;
     this.owed = false;
-    this.sent = new Float32Array(0);
-    this.wholeDue = true;
+    this.publisher.reset();
+    this.published = { model: this.model, linkAt: this.linkAt, oneWay: this.oneWay, lines: this.lines, dirty: this.dirty };
     this.windowMoves++;
     // The window stands where it was asked to: entered again over the new map's links at the next step.
     this.wanted ??= { ...this.micro };
@@ -155,12 +151,12 @@ export class Meso {
 
   /** The page's copy of the links is new (its first window, or it lost deltas): the next publish sends every link. */
   requestWhole(): void {
-    this.wholeDue = true;
+    this.publisher.requestWhole();
   }
 
   /** The links changed since the last call, for the page (null: nothing new). */
   takeDelta(): MesoDelta | null {
-    return this.out.take();
+    return this.publisher.takeDelta();
   }
 
   /** The micro window asked to stand round (x, y), moved at the next step; `r` the most it grows to (`follow`). */
@@ -175,7 +171,47 @@ export class Meso {
     return this.micro.r > 0 ? this.micro : null;
   }
 
-  /** Stage 2 (`pipeline.ts`): the links brought up to the lane graph, cars made in the window, and a share of the step's work. */
+  /** The world moves the window (`SimWorld.useMeso`): the lane graph holds the window's roads, built before the window moves onto them (`wantedWindow`, `windowMoved`); off, the window moves itself at each step. */
+  driven = false;
+
+  /** Where the window would move to now (`want`, `followView`); null: it stays. */
+  wantedWindow(): { readonly x: number; readonly y: number; readonly r: number } | null {
+    return this.wanted;
+  }
+
+  /** The roads of `to` are the lane graph's: the window moves there now (`SimWorld.rescopeSteps`). */
+  windowMoved(w: SimWorld, to: { readonly x: number; readonly y: number; readonly r: number }): void {
+    this.sync(w);
+    this.settle(w);
+    this.moveWindow(w, to);
+  }
+
+  /**
+   * Whoever drives on these roads is the meso's again, as `takeBack` makes a car that drove out of the window: taken off the micro
+   * simulation and counted on the road's link (the roads leave the lane graph, `SimWorld.rescopeSteps`). The buses are their timetable's
+   * (`transit.ts` takeOff), not the meso's.
+   */
+  takeBackFrom(w: SimWorld, segments: ReadonlySet<SegmentId>): void {
+    const left = new Map<number, number>();
+    for (const seg of segments) {
+      for (const id of w.graph.linksOfSegment(seg)) {
+        const slot = this.slotOfLane(w, id);
+        for (const vid of [...w.rt(id).order]) {
+          const v = w.vehicles.get(vid);
+          if (!v || v.free || v.lanelet !== id || v.archetype.shape === 'bus') continue;
+          w.removeVehicle(v);
+          this.owned.delete(vid);
+          if (slot === undefined || !this.model.has(slot)) continue;
+          if (this.model.isInside(slot)) left.set(slot, (left.get(slot) ?? 0) + 1);
+          else this.model.microExit(slot);
+        }
+      }
+    }
+    // A link inside the window whose road leaves the graph: its cars are the model's again, as when it leaves the window.
+    for (const [slot, k] of left) this.leave(w, slot, k);
+  }
+
+  /** Stage 2 (`pipeline.ts`): the links brought up to the document and the lane graph, cars made in the window, and a share of the step's work. */
   step(w: SimWorld, traffic: boolean): void {
     if (!traffic) return;
     this.scale = w.trafficIntensity * w.demandMultiplier;
@@ -183,7 +219,8 @@ export class Meso {
     this.settle(w);
     // Following the view, judged against the window as it stands: DO NOT judge against the page's ask (`want`, its most each frame), the window jumped to it and lost its hysteresis.
     if (w.focus && this.most > 0) this.wanted = followView(this.micro, w.focus, this.most);
-    if (this.wanted) this.moveWindow(w, this.wanted);
+    // Driven by the world, the window moves once its roads are the lane graph's (`windowMoved`).
+    if (this.wanted && !this.driven) this.moveWindow(w, this.wanted);
     this.admit(w);
     this.clock += DT;
     if (this.clock + 1e-9 >= MESO_DT) {
@@ -196,9 +233,13 @@ export class Meso {
     if (this.job !== IDLE) this.work(w, this.budget);
   }
 
-  /** The slot of a link lane, if it has one. */
-  slotOfLane(id: LaneletId): number | undefined {
-    return this.laneSlot.get(id);
+  /** The slot of a link lane of the graph (a bus lane has none, as the model counts no bus lane), if its road is in the model. */
+  slotOfLane(w: SimWorld, id: LaneletId): number | undefined {
+    const lane = w.graph.lanelets.get(id);
+    if (!lane || lane.kind !== 'link' || lane.segment === undefined || lane.use === 'bus') return undefined;
+    const seg = w.doc.segment(lane.segment);
+    if (!seg) return undefined;
+    return this.slotOfLink(linkId(lane.segment, seg.a === lane.from ? 0 : 1));
   }
 
   /** The slot of a link (`tileLinks.ts` linkId), if it is in the model. */
@@ -210,6 +251,29 @@ export class Meso {
   /** The link a slot holds (NaN: none). */
   linkOfSlot(slot: number): number {
     return slot < this.cap ? this.linkAt[slot]! : Number.NaN;
+  }
+
+  /** The graph's lanes of a slot's link (none where the graph does not hold its road: outside the window), in id order. */
+  private lanesOf(w: SimWorld, slot: number): readonly LaneletId[] {
+    if (!this.placed[slot]) return NONE;
+    const from = this.endFrom[slot]!;
+    let out: LaneletId[] | null = null;
+    for (const id of w.graph.linksOfSegment(this.endSeg[slot]! as SegmentId)) {
+      const lane = w.graph.lanelets.get(id);
+      if (lane && lane.from === from && lane.use !== 'bus') (out ??= []).push(id);
+    }
+    return out ? out.sort() : NONE;
+  }
+
+  /** Whether the graph holds a slot's lanes (its road is the window's). */
+  private hasLanes(w: SimWorld, slot: number): boolean {
+    if (!this.placed[slot]) return false;
+    const from = this.endFrom[slot]!;
+    for (const id of w.graph.linksOfSegment(this.endSeg[slot]! as SegmentId)) {
+      const lane = w.graph.lanelets.get(id);
+      if (lane && lane.from === from && lane.use !== 'bus') return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------ slots
@@ -238,15 +302,14 @@ export class Meso {
     this.lines = grown(this.lines, next * 6);
     this.oneWay = grown(this.oneWay, next);
     this.dirty = grown(this.dirty, next);
-    this.sent = grown(this.sent, next * SENT);
-    while (this.laneLists.length < next) this.laneLists.push(undefined);
+    this.publisher.reserve(next);
     for (const t of [this.cells, this.outAt, this.inAt]) t.reserve(next);
     this.cap = next;
+    this.published = { model: this.model, linkAt: this.linkAt, oneWay: this.oneWay, lines: this.lines, dirty: this.dirty };
   }
 
-  private isLive(slot: number): boolean {
-    return this.laneLists[slot] !== undefined;
-  }
+  /** The tables the publisher reads (`mesoPublish.ts`), made once per growth of them: DO NOT make one a tick. */
+  private published: PublishedLinks = { model: this.model, linkAt: this.linkAt, oneWay: this.oneWay, lines: this.lines, dirty: this.dirty };
 
   /** The roads meeting at `node` (distinct segments). */
   private roadsAt(node: number): number {
@@ -308,12 +371,6 @@ export class Meso {
     this.touchedNodes.add(to);
   }
 
-  private touchEnds(slot: number): void {
-    if (!this.placed[slot]) return;
-    this.touchedNodes.add(this.endFrom[slot]!);
-    this.touchedNodes.add(this.endTo[slot]!);
-  }
-
   /** A slot's place: its middle filed for the window, its demand cell, its line (start, middle, end) for the page. */
   private placeLine(slot: number, line: readonly number[], oneWay: boolean): void {
     const x = line[2]!, y = line[3]!;
@@ -328,10 +385,10 @@ export class Meso {
 
   /** A link gone from the world: what was on it leaves the model, its slot free. */
   private dropSlot(slot: number): void {
+    // Its micro cars went with the road: what was handed to it and not made is the model's again, and goes with the link.
+    if (this.model.isInside(slot)) this.model.leaveWindow(slot, 0);
     if (this.placed[slot]) this.unplaceEnds(slot);
     this.model.dropLink(slot);
-    for (const id of this.laneLists[slot] ?? []) this.laneSlot.delete(id);
-    this.laneLists[slot] = undefined;
     this.cells.remove(slot);
     this.pendingSlots.delete(slot);
     this.fill.delete(slot);
@@ -343,75 +400,83 @@ export class Meso {
     this.freeSlots.push(slot);
   }
 
-  // ------------------------------------------------------------ the links, by the lane graph's log
+  // ------------------------------------------------------------ the links, by the document, and the turns, by the lane graph
 
-  /** DO NOT read every lane of the map for an edit: only those the topology's log names. */
+  /** DO NOT read every road of the map for an edit: only those the network's changes name; nor the lanes of the map: only the graph's changes, for the turns. */
   private sync(w: SimWorld): void {
-    if (this.graphSeen === w.topologyLog.state) return;
-    const changes = w.topologyLog.since(this.graphSeen);
-    this.graphSeen = w.topologyLog.state;
-    const lanes = new Set<LaneletId>();
-    if (changes === null) {
-      // @rebuild The lane graph built whole: every lane, those known and those there now.
-      for (const id of this.laneSlot.keys()) lanes.add(id);
-      for (const id of w.graph.lanelets.keys()) lanes.add(id);
-    } else {
-      for (const change of changes) {
-        for (const id of change.lanelets) lanes.add(id);
-        for (const node of change.junctions) this.touchedNodes.add(node);
+    const net = w.net;
+    if (this.netSeen !== net.state) {
+      const delta = this.netSeen === null ? null : net.changesSince(this.netSeen);
+      this.netSeen = net.state;
+      // The land use of the hour, for the new links' first cars (`relink`).
+      this.demand.sync(w.buildings, w.doc.changes);
+      this.demand.atHour((w.city.minutes(w) % 1440) / 60);
+      if (delta === null) this.relinkAll(w);
+      else {
+        // A road, and every road at a node that changed (its line, its end, the roads meeting there).
+        const segments = new Set<number>(delta.segments);
+        for (const node of delta.nodes) for (const seg of w.doc.node(node)?.incident ?? []) segments.add(seg);
+        for (const seg of [...segments].sort((a, b) => a - b)) this.relink(w, seg as SegmentId);
       }
     }
-    // The land use of the hour, for the new links' first cars (`relink`).
-    this.demand.sync(w.buildings, w.doc.changes);
-    this.demand.atHour((w.city.minutes(w) % 1440) / 60);
-    const touched = new Set<number>();
-    for (const id of lanes) {
-      const was = this.laneSlot.get(id);
-      if (was !== undefined) {
-        touched.add(was);
-        this.laneSlot.delete(id);
-        const list = this.laneLists[was];
-        if (list) { const at = list.indexOf(id); if (at >= 0) list.splice(at, 1); }
+    if (this.graphSeen !== w.topologyLog.state) {
+      const changes = w.topologyLog.since(this.graphSeen);
+      this.graphSeen = w.topologyLog.state;
+      if (changes === null) {
+        // @rebuild The lane graph built whole: every link's turns, and whether each has its lanes.
+        for (const node of this.nodes.keys()) this.touchedNodes.add(node);
+        for (let slot = 0; slot < this.slotTop; slot++) if (this.model.has(slot)) this.refreshInside(w, slot);
+      } else {
+        for (const change of changes) {
+          for (const node of change.junctions) this.touchedNodes.add(node);
+          // A road whose lanes came or went: its links' cars are the micro simulation's while the window holds them.
+          for (const seg of change.segments) {
+            for (const dir of [0, 1] as const) {
+              const slot = this.slotOfLink(linkId(seg, dir));
+              if (slot !== undefined) this.refreshInside(w, slot);
+            }
+          }
+        }
       }
-      const lane = w.graph.lanelets.get(id);
-      if (!lane || lane.kind !== 'link' || lane.segment === undefined || lane.use === 'bus') continue;
-      const seg = w.doc.segment(lane.segment);
-      if (!seg) continue;
-      const slot = this.slotFor(linkId(lane.segment, seg.a === lane.from ? 0 : 1));
-      this.laneSlot.set(id, slot);
-      let list = this.laneLists[slot];
-      if (!list) this.laneLists[slot] = list = [];
-      list.push(id);
-      touched.add(slot);
     }
-    for (const slot of [...touched].sort((a, b) => a - b)) this.relink(w, slot);
   }
 
-  /** One slot made again from its lanes; with none left, it goes. */
-  private relink(w: SimWorld, slot: number): void {
-    const lanes = this.laneLists[slot]?.filter((id) => w.graph.lanelets.has(id)) ?? [];
-    // Its ends' turns and exits worked out again (`settle`).
-    this.touchEnds(slot);
-    if (!lanes.length) {
-      this.laneLists[slot] = undefined;
-      // Its micro cars went with the lanes: what was handed to it and not made is the model's again, and goes with the link.
-      if (this.model.isInside(slot)) this.model.leaveWindow(slot, 0);
-      this.dropSlot(slot);
-      return;
+  /** @rebuild Every road of the document, and every link whose road is gone. */
+  private relinkAll(w: SimWorld): void {
+    for (let slot = 0; slot < this.slotTop; slot++) {
+      const link = this.linkAt[slot]!;
+      if (!Number.isNaN(link) && !w.doc.segment(linkSegment(link) as SegmentId)) this.dropSlot(slot);
     }
-    lanes.sort();
-    this.laneLists[slot] = lanes;
-    const first = w.graph.lanelets.get(lanes[0]!)!;
-    const segment = first.segment as number;
-    const seg = w.doc.segment(first.segment!)!;
-    const a = w.doc.node(seg.a)!, b = w.doc.node(seg.b)!;
-    this.placeEnds(slot, first.from as number, first.to as number, segment);
-    for (const end of [a, b]) if (end.end === 'bulb') this.flag(end.id, BULB);
-    const line = segmentLine({ x: a.x, y: a.y }, { x: b.x, y: b.y }, seg.curve);
-    const mid = line.sampleAt(line.length / 2).p;
-    this.placeLine(slot, [a.x, a.y, mid.x, mid.y, b.x, b.y], seg.direction !== 'both');
-    this.setSpec(w, slot);
-    const inside = this.inWindow(mid.x, mid.y);
+    for (const seg of [...w.doc.segments.keys()].sort((a, b) => a - b)) this.relink(w, seg);
+  }
+
+  /** One road's two links made again from the document; a way it carries nothing goes. */
+  private relink(w: SimWorld, segId: SegmentId): void {
+    const seg = w.doc.segment(segId);
+    for (const dir of [0, 1] as const) {
+      const link = linkId(segId, dir);
+      const spec = seg ? linkSpec(w, seg, dir === 0) : null;
+      if (!spec) {
+        const had = this.index.get(link);
+        if (had >= 0) this.dropSlot(had);
+        continue;
+      }
+      const slot = this.slotFor(link);
+      this.placeEnds(slot, spec.from, spec.to, segId);
+      const a = w.doc.requireNode(seg!.a), b = w.doc.requireNode(seg!.b);
+      for (const end of [a, b]) if (end.end === 'bulb') this.flag(end.id, BULB);
+      const line = segmentLine({ x: a.x, y: a.y }, { x: b.x, y: b.y }, seg!.curve);
+      const mid = line.sampleAt(line.length / 2).p;
+      this.placeLine(slot, [a.x, a.y, mid.x, mid.y, b.x, b.y], seg!.direction !== 'both');
+      this.setSpec(slot, spec);
+      this.refreshInside(w, slot);
+    }
+  }
+
+  /** A slot inside the window while its middle is in it and the graph holds its lanes (the cars are made on them). */
+  private refreshInside(w: SimWorld, slot: number): void {
+    if (!this.model.has(slot)) return;
+    const inside = this.inWindow(this.mid[2 * slot]!, this.mid[2 * slot + 1]!) && this.hasLanes(w, slot);
     if (inside && !this.model.isInside(slot)) this.enter(slot);
     else if (!inside && this.model.isInside(slot)) this.leave(w, slot);
   }
@@ -419,30 +484,26 @@ export class Meso {
   // ------------------------------------------------------------ the numbers and the turns
 
   /** A node where the world ends: one road, not a turning circle (`RoadDoc.mapEdge`). */
-  private edgeAt(node: number): boolean {
-    return this.roadsAt(node) === 1 && !this.flagged(node, BULB);
-  }
+  private readonly edgeAt = (node: number): boolean => this.roadsAt(node) === 1 && !this.flagged(node, BULB);
 
-  /** A live slot's numbers from its lanes (`lanelets.ts`); its exit over the roads met at its end. */
-  private setSpec(w: SimWorld, slot: number): void {
-    const lanes = this.laneLists[slot];
-    if (!lanes?.length) return;
-    let length = 0, vFree = 0, controlled = false;
-    for (const id of lanes) {
-      const lane = w.graph.lanelets.get(id)!;
-      length += lane.length;
-      vFree = Math.max(vFree, lane.speedLimit);
-      controlled ||= lane.controlled;
-    }
-    const to = w.graph.lanelets.get(lanes[0]!)!.to as number;
+  /** A live slot's numbers from the document (`linkSpec`); its exit over the roads met at its end. */
+  private setSpec(slot: number, spec: LinkSpec): void {
     const had = this.model.has(slot);
-    this.model.setLink(slot, { to, lanes: lanes.length, length: length / lanes.length, vFree, controlled, exit: this.edgeAt(to) });
+    this.model.setLink(slot, { to: spec.to, lanes: spec.lanes, length: spec.length, vFree: spec.vFree, controlled: spec.controlled, exit: this.edgeAt(spec.to) });
     if (!had) {
       // A slot taken again starts with no trips of the link it held before: its rates come with the next step's (`ratesIn`).
       this.model.setGeneration(slot, 0);
       this.model.setSinkShare(slot, 0);
-      this.seedNew(slot, length / lanes.length);
+      this.seedNew(slot, spec.length);
     }
+  }
+
+  /** A slot's numbers read again off the document (its end's roads changed: `settle`). */
+  private respec(w: SimWorld, slot: number): void {
+    if (!this.placed[slot]) return;
+    const seg = w.doc.segment(this.endSeg[slot]! as SegmentId);
+    const spec = seg ? linkSpec(w, seg, seg.a === this.endFrom[slot]) : null;
+    if (spec) this.setSpec(slot, spec); else this.dropSlot(slot);
   }
 
   /** A new link starts as a street of its land use stands at this hour (in free flow): the map is full from its first step. */
@@ -461,23 +522,23 @@ export class Meso {
     this.touchedNodes = new Set();
     const ins = new Set<number>();
     for (const node of nodes) for (const i of this.model.inLinks(node)) ins.add(i);
-    for (const i of ins) this.setSpec(w, i);
+    for (const i of ins) this.respec(w, i);
     for (const i of ins) this.returns(w, i);
   }
 
-  /** A link's turns: the links its lanes' movements lead onto (weighted by how many); a U-turn only when nothing else. */
+  /** A link's turns: the links its lanes' movements lead onto (weighted by how many) where the window holds them; by the roads' lanes elsewhere; a U-turn only when nothing else. */
   private returns(w: SimWorld, slot: number): void {
     if (!this.model.has(slot)) return;
     const node = this.model.toAt(slot);
     const outs = this.outAt.list(node).filter((o) => this.model.has(o));
-    const lanes = this.laneLists[slot];
+    const lanes = this.lanesOf(w, slot);
     const back = this.index.get(reverseLink(this.linkAt[slot]!));
     const weight = new Map<number, number>();
-    if (lanes?.length && outs.every((o) => this.isLive(o))) {
+    if (lanes.length && outs.every((o) => this.hasLanes(w, o))) {
       for (const id of lanes) {
         for (const cid of w.graph.exitsOf(id)) {
           const c = w.connector(cid);
-          const j = c ? this.laneSlot.get(c.toLane) : undefined;
+          const j = c ? this.slotOfLane(w, c.toLane) : undefined;
           if (j === undefined) continue;
           weight.set(j, (weight.get(j) ?? 0) + 1);
         }
@@ -492,14 +553,14 @@ export class Meso {
 
   // ------------------------------------------------------------ the micro window
 
-  /** Whether a point is inside the micro window as it stands (its links' cars are the micro simulation's). */
-  insideWindow(x: number, y: number): boolean {
-    return this.inWindow(x, y);
+  /** Whether a point is inside the micro window as it stands (its links' cars are the micro simulation's), the window grown by `pad`. */
+  insideWindow(x: number, y: number, pad = 0): boolean {
+    return this.inWindow(x, y, pad);
   }
 
-  private inWindow(x: number, y: number): boolean {
+  private inWindow(x: number, y: number, pad = 0): boolean {
     const win = this.micro;
-    return win.r > 0 && Math.hypot(x - win.x, y - win.y) < win.r;
+    return win.r > 0 && Math.hypot(x - win.x, y - win.y) < win.r + pad;
   }
 
   /** The slots whose middle is in the rectangle, by the cells it covers, added to `out`. */
@@ -517,20 +578,15 @@ export class Meso {
   }
 
   /** DO NOT look at every link of the map: only those filed where the window was or will be. */
-  private moveWindow(w: SimWorld, to: { x: number; y: number; r: number }): void {
+  private moveWindow(w: SimWorld, to: { readonly x: number; readonly y: number; readonly r: number }): void {
     this.wanted = null;
     const was = this.micro;
     const look = new Set<number>();
     if (was.r > 0) this.slotsIn(was.x - was.r, was.y - was.r, was.x + was.r, was.y + was.r, look);
     if (to.r > 0) this.slotsIn(to.x - to.r, to.y - to.r, to.x + to.r, to.y + to.r, look);
-    this.micro = { ...to };
+    this.micro = { x: to.x, y: to.y, r: to.r };
     this.windowMoves++;
-    for (const slot of [...look].sort((a, b) => a - b)) {
-      if (!this.model.has(slot)) continue;
-      const inside = this.inWindow(this.mid[2 * slot]!, this.mid[2 * slot + 1]!) && this.isLive(slot);
-      if (inside === this.model.isInside(slot)) continue;
-      if (inside) this.enter(slot); else this.leave(w, slot);
-    }
+    for (const slot of [...look].sort((a, b) => a - b)) this.refreshInside(w, slot);
   }
 
   /** A link comes into the window: its cars are to be made along it. */
@@ -543,10 +599,10 @@ export class Meso {
     this.pendingSlots.add(slot);
   }
 
-  /** A link leaves the window: the micro simulation's cars on it (those the meso made) taken off and counted on it again. */
-  private leave(w: SimWorld, slot: number): void {
-    let k = 0;
-    for (const id of this.laneLists[slot] ?? []) {
+  /** A link leaves the window: the micro simulation's cars on it (those the meso made) taken off and counted on it again; `taken`: cars taken off it already (`takeBackFrom`). */
+  private leave(w: SimWorld, slot: number, taken = 0): void {
+    let k = taken;
+    for (const id of this.lanesOf(w, slot)) {
       for (const vid of [...w.rt(id).order]) {
         const v = w.vehicles.get(vid);
         if (!v || !this.owned.has(vid) || v.lanelet !== id) continue;
@@ -566,6 +622,7 @@ export class Meso {
   private windowMoves = 0;
   private handoffAt = -1;
   private handoffNodes = -1;
+  private handoffGraph: object | null = null;
   private handoff: LaneletId[] = [];
 
   /**
@@ -573,20 +630,21 @@ export class Meso {
    * Found from the window's own links (those inside, the roads out of their end nodes), never from the map's: the cost follows the
    * window's size, not the city's.
    */
-  handoffLanes(): readonly LaneletId[] {
-    if (this.handoffAt === this.windowMoves && this.handoffNodes === this.nodesChanged) return this.handoff;
+  handoffLanes(w: SimWorld): readonly LaneletId[] {
+    if (this.handoffAt === this.windowMoves && this.handoffNodes === this.nodesChanged && this.handoffGraph === w.topologyLog.state) return this.handoff;
     this.handoffAt = this.windowMoves;
     this.handoffNodes = this.nodesChanged;
+    this.handoffGraph = w.topologyLog.state;
     const slots = new Set<number>();
     for (const s of this.inside) {
       if (!this.model.has(s)) continue;
       const outs = this.outAt;
       for (let o = outs.head(outs.group(this.model.toAt(s))); o >= 0; o = outs.after(o)) {
-        if (this.model.has(o) && !this.model.isInside(o) && this.laneLists[o]?.length) slots.add(o);
+        if (this.model.has(o) && !this.model.isInside(o)) slots.add(o);
       }
     }
     const lanes: LaneletId[] = [];
-    for (const o of [...slots].sort((a, b) => a - b)) lanes.push(...this.laneLists[o]!);
+    for (const o of [...slots].sort((a, b) => a - b)) lanes.push(...this.lanesOf(w, o));
     this.handoff = lanes;
     return lanes;
   }
@@ -597,7 +655,7 @@ export class Meso {
    * window. Null: none it may reach (its lookahead drives it, and the edge takes it back all the same).
    */
   readonly handoffDestination = (w: SimWorld, start: LaneletId, body: BodyClass): LaneletId | null => {
-    const lanes = this.handoffLanes();
+    const lanes = this.handoffLanes(w);
     if (!lanes.length) return null;
     const rng = w.rng.meso;
     for (let k = 0; k < HANDOFF_TRIES; k++) {
@@ -616,8 +674,10 @@ export class Meso {
     let tries = ADMIT_PER_TICK;
     for (const slot of this.pendingSlots) {
       if (tries <= 0 || w.vehicles.size >= ceiling) return;
-      const lanes = this.laneLists[slot];
-      if (!lanes?.length || !this.model.isInside(slot)) { this.pendingSlots.delete(slot); this.fill.delete(slot); continue; }
+      if (!this.model.isInside(slot)) { this.pendingSlots.delete(slot); this.fill.delete(slot); continue; }
+      // The graph does not hold its lanes yet (the window moving onto them): its cars wait.
+      const lanes = this.lanesOf(w, slot);
+      if (!lanes.length) continue;
       while (tries > 0 && this.model.pending(slot) >= 1 && w.vehicles.size < ceiling) {
         // A new car's trip search waits for the next tick past the tick's budget: its slot keeps its place (Aimsun's entry retried at the next step).
         if (!mayRequestSearch(w)) return;
@@ -639,20 +699,20 @@ export class Meso {
     }
   }
 
-  /** The meso's cars that drove out of the window, taken off the micro simulation onto the link they reached. */
+  /** Whoever drove out of the window onto a link of the meso (its own cars, the lots' and the works' too; the buses are their timetable's): taken off the micro simulation onto the link they reached. */
   private takeBack(w: SimWorld): void {
-    for (const id of [...this.owned]) {
-      const v = w.vehicles.get(id as never);
-      if (!v) { this.owned.delete(id); continue; }
-      if (v.free) continue;
-      const lane = w.lanelet(v.lanelet);
-      if (!lane || lane.kind !== 'link') continue;
-      const slot = this.laneSlot.get(lane.id);
+    for (const id of [...w.occupied]) {
+      const slot = this.slotOfLane(w, id);
       if (slot === undefined || !this.model.has(slot) || this.model.isInside(slot)) continue;
-      w.removeVehicle(v);
-      this.owned.delete(id);
-      this.model.microExit(slot);
+      for (const vid of [...w.rt(id).order]) {
+        const v = w.vehicles.get(vid);
+        if (!v || v.free || v.lanelet !== id || v.archetype.shape === 'bus') continue;
+        w.removeVehicle(v);
+        this.owned.delete(vid);
+        this.model.microExit(slot);
+      }
     }
+    for (const id of this.owned) if (!w.vehicles.has(id as never)) this.owned.delete(id);
   }
 
   /** The micro simulation's vehicles on each link inside the window (all of them: buses and the lots' cars take room too). */
@@ -660,7 +720,7 @@ export class Meso {
     for (const slot of this.counted) this.model.setMicro(slot, 0);
     const counts = new Map<number, number>();
     for (const id of w.occupied) {
-      const slot = this.laneSlot.get(id);
+      const slot = this.slotOfLane(w, id);
       if (slot === undefined || !this.model.isInside(slot)) continue;
       counts.set(slot, (counts.get(slot) ?? 0) + w.rt(id).order.length);
     }
@@ -676,11 +736,7 @@ export class Meso {
     this.countMicro(w);
     this.demand.sync(w.buildings, w.doc.changes);
     this.demand.atHour((w.city.minutes(w) % 1440) / 60);
-    // Each cell's numbers once a step, into arrays by its dense index: DO NOT ask the demand once a link (`ratesIn` reads arrays only).
-    const cells = this.demand.cells;
-    if (this.cellCars.length < cells) { this.cellCars = new Float64Array(Math.max(cells, this.cellCars.length * 2)); this.cellWeight = new Float64Array(this.cellCars.length); }
-    for (let c = 0; c < cells; c++) { this.cellCars[c] = this.demand.carsPer100m(c); this.cellWeight[c] = this.demand.weight(c); }
-    this.cellsRead = cells;
+    this.rates.readCells(this.demand);
     this.job = RATES;
     this.cursor = 0;
   }
@@ -691,7 +747,7 @@ export class Meso {
     while (left > 0 && this.job !== IDLE) {
       if (this.job === RATES) {
         const end = Math.min(this.model.slots, this.cursor + left);
-        this.ratesIn(this.cursor, end);
+        this.rates.ratesIn(this.model, this.cursor, end, this.cellOf, this.placed, this.endFrom, this.edgeAt, this.nodesChanged, this.scale);
         left -= end - this.cursor;
         this.cursor = end;
         if (end >= this.model.slots) this.job = MODEL;
@@ -702,97 +758,20 @@ export class Meso {
         for (const slot of this.model.handed) this.pendingSlots.add(slot);
         this.job = PUBLISH;
         this.cursor = 0;
-        if (this.wholeDue) { this.wholeDue = false; this.out.startWhole(); this.sent.fill(0); }
+        this.publisher.begin();
       } else {
         const end = Math.min(this.model.slots, this.cursor + left);
-        this.publishIn(this.cursor, end);
+        this.publisher.publishIn(this.cursor, end, this.published);
         left -= end - this.cursor;
         this.cursor = end;
         if (end < this.model.slots) continue;
-        this.out.end(this.model.slots, w.clock.time, this.micro.x, this.micro.y, this.micro.r);
+        this.publisher.end(this.model.slots, w.clock.time, this.micro.x, this.micro.y, this.micro.r);
         this.job = IDLE;
       }
     }
   }
 
-  /** Each slot's cell demand and trips from off the world, written by `ratesIn` for `MesoModel.setRates`: typed arrays by slot and by dense cell, no Map on the step. */
-  private slotCars = new Float64Array(0);
-  private slotWeight = new Float64Array(0);
-  private slotEntry = new Float64Array(0);
-  private cellCars = new Float64Array(64);
-  private cellWeight = new Float64Array(64);
-  private cellsRead = 0;
-  /** Each slot's start at the map's edge, and the node map's change it was found at (`nodesChanged`, bumped by every change of `nodes` and every slot placed or let go). */
-  private slotEdge = new Uint8Array(0);
-  private slotEdgeAt = new Uint32Array(0);
+  /** The rates of the links (`mesoRates.ts`), and the node map's change (`nodesChanged`, bumped by every change of `nodes` and every slot placed or let go). */
+  private readonly rates = new MesoRates();
   private nodesChanged = 1;
-
-  /** Each link's trips in [`from`, `to`): from off the world at an entry (`vehicles/spawn.ts` ENTRY_RATE a lane), and its street's own by the land use at this hour. */
-  private ratesIn(from: number, to: number): void {
-    const model = this.model;
-    if (this.slotCars.length < model.slots) {
-      let size = Math.max(256, this.slotCars.length);
-      while (size < model.slots) size *= 2;
-      this.slotCars = grown(this.slotCars, size); this.slotWeight = grown(this.slotWeight, size); this.slotEntry = grown(this.slotEntry, size);
-      this.slotEdge = grown(this.slotEdge, size); this.slotEdgeAt = grown(this.slotEdgeAt, size);
-    }
-    for (let slot = from; slot < to; slot++) {
-      if (!model.has(slot)) continue;
-      const cell = this.cellOf[slot]!;
-      const known = cell >= 0 && cell < this.cellsRead;
-      this.slotCars[slot] = known ? this.cellCars[cell]! : 0;
-      this.slotWeight[slot] = known ? this.cellWeight[cell]! : 0;
-      // Whether its start is the map's edge, as last found while no node changed (`nodesChanged`): no map asked by a node id each step.
-      if (this.slotEdgeAt[slot] !== this.nodesChanged) { this.slotEdgeAt[slot] = this.nodesChanged; this.slotEdge[slot] = this.placed[slot] && this.edgeAt(this.endFrom[slot]!) ? 1 : 0; }
-      this.slotEntry[slot] = this.slotEdge[slot] ? ENTRY_RATE * model.lanesAt(slot) : 0;
-    }
-    // Balanced with the share ending here: the street holds the ambient's density in free flow.
-    model.setRates(this.slotEntry, this.slotCars, this.slotWeight, m(100), TRIP_LENGTH, this.scale, from, to);
-  }
-
-  // ------------------------------------------------------------ the page's delta
-
-  /** `flowInto`'s numbers. */
-  private readonly flow = { count: 0, queued: 0, speed: 0 };
-
-  /** The links in [`from`, `to`) whose drawn numbers changed since they were last sent, appended to the delta (`MesoDelta`). */
-  private publishIn(from: number, to: number): void {
-    const model = this.model, sent = this.sent, out = this.out;
-    for (let slot = from; slot < to; slot++) {
-      const o = slot * SENT;
-      if (!model.has(slot)) {
-        // Gone since it was sent: sent once more, as no link.
-        if (sent[o + 5] !== 0) {
-          const at = out.push(slot, Number.NaN), r = out.recordsNow;
-          r.fill(0, at, at + ML.shape + 1);
-          sent[o + 5] = 0;
-        }
-        continue;
-      }
-      const flow = this.flow;
-      model.flowInto(slot, flow);
-      const flags = MESO_PRESENT | (model.isInside(slot) ? MESO_INSIDE : 0) | (this.oneWay[slot] ? MESO_ONE_WAY : 0);
-      const count = Math.round(flow.count), queued = Math.round(flow.queued), length = model.lengthAt(slot), lanes = model.lanesAt(slot);
-      const line = this.dirty[slot] === 1 || sent[o + 5] === 0;
-      const was = sent[o + 2]!;
-      if (!line && sent[o + 5] === flags && sent[o] === count && sent[o + 1] === queued && sent[o + 3] === Math.fround(length) && sent[o + 4] === lanes
-        && Math.abs(flow.speed - was) <= SPEED_STEP * Math.max(was, m(1))) continue;
-      sent[o] = count; sent[o + 1] = queued; sent[o + 2] = flow.speed; sent[o + 3] = length; sent[o + 4] = lanes; sent[o + 5] = flags;
-      const at = out.push(slot, this.linkAt[slot]!), r = out.recordsNow;
-      r[at + ML.count] = flow.count;
-      r[at + ML.queued] = flow.queued;
-      r[at + ML.speed] = flow.speed;
-      r[at + ML.length] = length;
-      r[at + ML.lanes] = lanes;
-      r[at + ML.flags] = flags;
-      for (let k = 0; k < 6; k++) r[at + ML.ax + k] = this.lines[slot * 6 + k]!;
-      if (line) {
-        this.shapeSerial = (this.shapeSerial % SHAPE_WRAP) + 1;
-        r[at + ML.shape] = this.shapeSerial;
-        this.dirty[slot] = 0;
-      } else {
-        r[at + ML.shape] = 0;
-      }
-    }
-  }
 }

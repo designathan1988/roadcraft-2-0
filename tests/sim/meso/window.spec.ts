@@ -57,7 +57,7 @@ describe('the micro window', () => {
         const v = w.vehicles.get(id as never)!;
         const lane = w.lanelet(v.lanelet);
         if (!lane || lane.kind !== 'link') continue;
-        const slot = meso.slotOfLane(lane.id);
+        const slot = meso.slotOfLane(w, lane.id);
         if (slot !== undefined) expect(meso.model.isInside(slot), `vehicle ${id} on ${lane.id}`).toBe(true);
       }
     }

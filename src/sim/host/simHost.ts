@@ -146,8 +146,8 @@ export class SimHost {
     sim.followCity = true;
     sim.ambient.enabled = true;
     sim.ambient.source = ambient;
-    // The whole map's traffic in the meso model; the micro simulation only in its window round the view (`meso/meso.ts`).
-    sim.meso = this.meso;
+    // The whole map's traffic in the meso model; the micro simulation only in its window round the view (`meso/meso.ts`), whose roads alone the lane graph and the walkways hold (`SimWorld.useMeso`).
+    sim.useMeso(this.meso);
     this.sim = sim;
     this.conflictPool = new ConflictPool(prefix, this.lanes?.conflicts.length ? this.lanes.conflicts : null);
     this.topology = new TopologyCatchUp(this.conflictPool);

@@ -11,8 +11,11 @@ function reachableExits(w: SimWorld, start: LaneletId, body: BodyClass): readonl
   return exits.includes(start) ? exits.filter((id) => id !== start) : exits;
 }
 
-/** Chooses one reachable trip endpoint, once, when a vehicle enters the city. */
+/** Chooses one reachable trip endpoint, once, when a vehicle enters the city: with the meso traffic, a lane just past the micro window's edge (the meso drives on from there, `meso.ts` takeBack), a road end of the map otherwise. */
 export function chooseVehicleDestination(w: SimWorld, start: LaneletId, body: BodyClass): LaneletId | null {
+  // DO NOT send a car of the window to a road end of the whole map: it drove the map in the micro simulation, outside the window.
+  const handoff = w.meso?.handoffDestination(w, start, body);
+  if (handoff) return handoff;
   const exits = reachableExits(w, start, body);
   if (exits.length === 0) return null;
   return exits[Math.floor(w.rng.route.float() * exits.length)] ?? exits[0] ?? null;

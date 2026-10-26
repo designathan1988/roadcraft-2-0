@@ -29,6 +29,13 @@ export function segmentLine(a: Vec2, b: Vec2, curve: CurveShape | null): Polylin
   return Polyline.fromPoints(flattenSegment(a, b, curve));
 }
 
+/** The middle of a road's line (`segmentLine`): what the meso files a road by (`sim/meso/meso.ts`), and what the micro window holds a road by (`SimWorld.scopeOf`). */
+export function segmentMiddle(doc: RoadDoc, seg: RoadSegment): Vec2 {
+  const a = doc.requireNode(seg.a), b = doc.requireNode(seg.b);
+  const line = segmentLine({ x: a.x, y: a.y }, { x: b.x, y: b.y }, seg.curve);
+  return line.sampleAt(line.length / 2).p;
+}
+
 /** Centreline oriented so that it starts at `from`. */
 export function orientedPolyline(
   doc: RoadDoc,

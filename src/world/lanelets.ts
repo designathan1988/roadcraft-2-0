@@ -4,7 +4,7 @@ import type { Vec2 } from '@core/vec2';
 import { MIN_RIBBON } from '@core/scalar';
 import { Digest } from '@core/digest';
 import type { NodeId, SegmentId } from './ids';
-import type { JunctionControl, RoadDoc, RoadNode } from './doc';
+import type { JunctionControl, RoadDoc, RoadNode, RoadSegment } from './doc';
 import type { Network } from './network';
 import { laneOffset, laneWidth, roadProfile, travelLanes } from './roadTypes';
 import { PARKING_DEPTH } from './parking';
@@ -149,6 +149,33 @@ export class LaneletGraph {
 
   revision = -1;
 
+  /**
+   * THE ROADS THIS GRAPH HOLDS: every road of the document (null, a spec's whole map), or the roads of the micro window alone (the
+   * game's, `SimWorld.useMeso`): their links, and the junctions at the nodes every one of whose roads is held (`complete`) - a node
+   * with a road outside the window has no junction, its inbound lanes end there, and the meso takes what reaches them (`meso.ts`
+   * takeBack). The window moves by `rescopeSteps`: a change like an edit's (`GraphChange`), followed by whatever follows the graph.
+   */
+  scope: ReadonlySet<SegmentId> | null = null;
+
+  /** Whether a road is one this graph holds. */
+  private inScope(segment: SegmentId): boolean {
+    return this.scope === null || this.scope.has(segment);
+  }
+
+  /** Whether every road at a node is held: only then is its junction built (its legs all there). */
+  complete(doc: RoadDoc, nodeId: NodeId): boolean {
+    if (this.scope === null) return true;
+    const node = doc.node(nodeId);
+    if (!node) return false;
+    for (const seg of node.incident) if (!this.scope.has(seg)) return false;
+    return true;
+  }
+
+  /** The roads whose links this graph holds now. */
+  segmentsHeld(): Iterable<SegmentId> {
+    return this.bySegment.keys();
+  }
+
   /** The link lanelets of each (segment, direction), by the geometry and trims they were built from */
   private linkCache = new Map<string, Lanelet[]>();
   /** The key each lanelet of this build was made under (`buildLinks`). */
@@ -198,18 +225,81 @@ export class LaneletGraph {
     const { segments, junctions } = this.reach(doc, delta);
     const out = this.takeOut(segments, junctions);
     // In again, from the document as it is: the segments' links, then the junctions' connectors.
-    for (const seg of [...segments].sort((a, b) => a - b)) {
-      if (!doc.segment(seg)) continue;
-      this.buildSegmentLinks(doc, net, seg, this.linkCache, this.linkCache);
-      for (const id of this.bySegment.get(seg) ?? []) out.lanes.add(id);
-    }
+    this.buildAgain(doc, net, segments, out);
     for (const nodeId of [...junctions].sort((a, b) => a - b)) {
       const node = doc.node(nodeId);
-      if (!node) continue;
+      if (!node || !this.complete(doc, nodeId)) continue;
       this.buildJunction(doc, net, nodeId, node, this.junctionCache, this.junctionCache, (n) => out.before.get(n));
       for (const cid of this.junctions.get(nodeId)?.connectors ?? []) out.lanes.add(cid);
     }
     return this.letGo(net, segments, junctions, out);
+  }
+
+  /** The links of the roads held among `segments`, built again from the document (`updateSteps`, `rescopeSteps`). */
+  private buildAgain(doc: RoadDoc, net: Network, segments: ReadonlySet<SegmentId>, out: TakenOut): void {
+    for (const seg of [...segments].sort((a, b) => a - b)) {
+      if (!doc.segment(seg) || !this.inScope(seg)) continue;
+      this.buildSegmentLinks(doc, net, seg, this.linkCache, this.linkCache);
+      for (const id of this.bySegment.get(seg) ?? []) out.lanes.add(id);
+    }
+  }
+
+  /**
+   * The graph brought to hold the roads of `next` alone (the micro window moved, `SimWorld.moveWindowSteps`): the roads that left
+   * taken out, those that came built with the junctions at their ends - off the page where there is a `builder`, as a whole build's
+   * (`junctionsOffPage`). What came or went, as an edit's change (null: nothing); the graph must stand for the network as it is.
+   */
+  *rescopeSteps(doc: RoadDoc, net: Network, next: ReadonlySet<SegmentId>, builder: JunctionMeasurer | null = null): Generator<void | typeof WAITING, GraphChange | null, void> {
+    this.scope = next;
+    // Not built yet: the build to come holds the new roads.
+    if (this.netState === null) return null;
+    const segments = new Set<SegmentId>();
+    for (const seg of this.bySegment.keys()) if (!next.has(seg)) segments.add(seg);
+    for (const seg of next) if (!this.bySegment.has(seg) && doc.segment(seg)) segments.add(seg);
+    if (!segments.size) return null;
+    const junctions = this.endsOf(doc, segments);
+    const out = this.takeOut(segments, junctions);
+    this.buildAgain(doc, net, segments, out);
+    const nodes: [NodeId, RoadNode][] = [];
+    for (const nodeId of [...junctions].sort((a, b) => a - b)) {
+      const node = doc.node(nodeId);
+      if (node && this.complete(doc, nodeId)) nodes.push([nodeId, node]);
+    }
+    const before = (n: NodeId): JunctionCache | undefined => out.before.get(n);
+    const offPage = builder?.buildJunctions ? yield* this.junctionsOffPage(doc, net, this.junctionCache, this.junctionCache, before, builder, nodes) : false;
+    if (!offPage) for (const [nodeId, node] of nodes) this.buildJunction(doc, net, nodeId, node, this.junctionCache, this.junctionCache, before);
+    for (const [nodeId] of nodes) for (const cid of this.junctions.get(nodeId)?.connectors ?? []) out.lanes.add(cid);
+    return this.letGo(net, segments, junctions, out);
+  }
+
+  /** The nodes at the ends of these roads, in the document and in this graph's lanes of them. */
+  private endsOf(doc: RoadDoc, segments: ReadonlySet<SegmentId>): Set<NodeId> {
+    const junctions = new Set<NodeId>();
+    for (const seg of segments) {
+      const now = doc.segment(seg);
+      if (now) { junctions.add(now.a); junctions.add(now.b); }
+      for (const id of this.bySegment.get(seg) ?? []) {
+        const lane = this.lanelets.get(id);
+        if (lane?.from !== undefined) junctions.add(lane.from);
+        if (lane?.to !== undefined) junctions.add(lane.to);
+      }
+    }
+    return junctions;
+  }
+
+  /** This graph holds the roads `from` holds (the preparation graph after the window moved, `SimWorld.moveWindowSteps`): the roads that differ taken from it, built here where it lacks one. */
+  followScope(from: LaneletGraph, doc: RoadDoc, net: Network): void {
+    this.scope = from.scope;
+    if (this.netState === null) return;
+    const segments = new Set<SegmentId>();
+    for (const seg of this.bySegment.keys()) if (!from.bySegment.has(seg)) segments.add(seg);
+    for (const seg of from.bySegment.keys()) if (!this.bySegment.has(seg)) segments.add(seg);
+    if (!segments.size) return;
+    const junctions = this.endsOf(doc, segments);
+    for (const nodeId of from.endsOf(doc, segments)) junctions.add(nodeId);
+    const out = this.takeOut(segments, junctions);
+    this.copyFrom(from, doc, net, segments, junctions, out);
+    this.letGo(net, segments, junctions, out);
   }
 
   /** DO NOT seed this graph's caches from `from` and `update` it */
@@ -222,22 +312,40 @@ export class LaneletGraph {
     }
     const { segments, junctions } = this.reach(doc, delta);
     const out = this.takeOut(segments, junctions);
+    this.copyFrom(from, doc, net, segments, junctions, out);
+    return this.letGo(net, segments, junctions, out);
+  }
+
+  /** The links of `segments` and the junctions of `junctions` this graph holds, taken from `from` as it has them (objects and all); built here where it lacks one this graph holds (the two scoped apart meanwhile). */
+  private copyFrom(from: LaneletGraph, doc: RoadDoc, net: Network, segments: ReadonlySet<SegmentId>, junctions: ReadonlySet<NodeId>, out: TakenOut): void {
     for (const seg of [...segments].sort((a, b) => a - b)) {
-      if (!doc.segment(seg)) continue;
-      for (const id of from.bySegment.get(seg) ?? []) {
-        const lane = from.lanelets.get(id)!, key = from.laneletKeys.get(id)!;
-        this.lanelets.set(id, lane);
-        this.laneletKeys.set(id, key);
-        this.linkCache.set(key, from.linkCache.get(key)!);
-        push(this.inbound, lane.to!, id);
-        push(this.outbound, lane.from!, id);
-        push(this.bySegment, seg, id);
-        out.lanes.add(id);
+      if (!doc.segment(seg) || !this.inScope(seg)) continue;
+      const lanes = from.bySegment.get(seg);
+      // Built here only where the two graphs hold different roads (a window): the same document gives both the same roads otherwise.
+      if (!lanes) { if (this.scope !== null) this.buildSegmentLinks(doc, net, seg, this.linkCache, this.linkCache); }
+      else {
+        for (const id of lanes) {
+          const lane = from.lanelets.get(id)!, key = from.laneletKeys.get(id)!;
+          this.lanelets.set(id, lane);
+          this.laneletKeys.set(id, key);
+          this.linkCache.set(key, from.linkCache.get(key)!);
+          push(this.inbound, lane.to!, id);
+          push(this.outbound, lane.from!, id);
+          push(this.bySegment, seg, id);
+        }
       }
+      for (const id of this.bySegment.get(seg) ?? []) out.lanes.add(id);
     }
     for (const nodeId of [...junctions].sort((a, b) => a - b)) {
-      const junction = doc.node(nodeId) ? from.junctions.get(nodeId) : undefined;
-      if (!junction) continue;
+      const node = doc.node(nodeId);
+      if (!node || !this.complete(doc, nodeId)) continue;
+      const junction = from.junctions.get(nodeId);
+      if (!junction) {
+        if (this.scope === null) continue;
+        this.buildJunction(doc, net, nodeId, node, this.junctionCache, this.junctionCache, (n) => out.before.get(n));
+        for (const cid of this.junctions.get(nodeId)?.connectors ?? []) out.lanes.add(cid);
+        continue;
+      }
       for (const cid of junction.connectors) {
         const connector = from.connectors.get(cid)!;
         this.lanelets.set(cid, from.lanelets.get(cid)!);
@@ -249,7 +357,6 @@ export class LaneletGraph {
       const key = from.junctionKeyOf.get(nodeId);
       if (key !== undefined) { this.junctionCache.set(key, from.junctionCache.get(key)!); this.junctionKeyOf.set(nodeId, key); }
     }
-    return this.letGo(net, segments, junctions, out);
   }
 
   /** Whether this graph stands for the network as it is now, finished: no junction on stand-in turns (`adopt`). */
@@ -435,12 +542,28 @@ export class LaneletGraph {
   }
 
   private *buildLinks(doc: RoadDoc, net: Network, previous: Map<string, Lanelet[]>, next: Map<string, Lanelet[]>): Generator<void, void, void> {
-    const ids = [...doc.segments.keys()].sort((a, b) => a - b);
+    const ids = [...this.scope ?? doc.segments.keys()].filter((id) => doc.segment(id)).sort((a, b) => a - b);
 
     for (const segId of ids) {
       yield;
       this.buildSegmentLinks(doc, net, segId, previous, next);
     }
+  }
+
+  /** The nodes whose junctions a whole build makes: every node of the document, or (a window) those of its roads with every road held, in id order. */
+  private nodesToBuild(doc: RoadDoc): Iterable<[NodeId, RoadNode]> {
+    if (this.scope === null) return doc.nodes;
+    const ids = new Set<NodeId>();
+    for (const seg of this.scope) {
+      const s = doc.segment(seg);
+      if (s) { ids.add(s.a); ids.add(s.b); }
+    }
+    const out: [NodeId, RoadNode][] = [];
+    for (const id of [...ids].sort((a, b) => a - b)) {
+      const node = doc.node(id);
+      if (node && this.complete(doc, id)) out.push([id, node]);
+    }
+    return out;
   }
 
   /** The link lanelets of one segment, both directions (`buildLinks`), under the keys they were built from. */
@@ -456,33 +579,7 @@ export class LaneletGraph {
       const lpd = travelLanes(rt, seg.direction);
       const from = forward ? seg.a : seg.b;
       const to = forward ? seg.b : seg.a;
-
-      // A link ends at the STOP LINE, not at the junction mouth, leaving room for the crossing in between.
-      const startTrim = net.stopLineDistance(segId, from);
-      const endTrim = net.stopLineDistance(segId, to);
-
-      const full = orientedPolyline(doc, seg, from);
-      const total = full.length;
-
-      // Consume the accessor's answer, do not re-derive it.
-      const wanted = startTrim + endTrim;
-      const room = Math.max(0, total - MIN_RIBBON);
-      // What gives way is the approach zones, never the mouths
-      const mouthStart = Math.min(startTrim, net.mouthDistance(segId, from));
-      const mouthEnd = Math.min(endTrim, net.mouthDistance(segId, to));
-      const approach = wanted - mouthStart - mouthEnd;
-      const spare = room - mouthStart - mouthEnd;
-      let s0: number, s1: number;
-      if (wanted > room && spare >= 0 && approach > 0) {
-        const k = spare / approach;
-        s0 = mouthStart + (startTrim - mouthStart) * k;
-        s1 = Math.max(s0 + MIN_RIBBON, total - mouthEnd - (endTrim - mouthEnd) * k);
-      } else {
-        const k = wanted > room && wanted > 0 ? room / wanted : 1;
-        s0 = startTrim * k;
-        s1 = Math.max(s0 + MIN_RIBBON, total - endTrim * k);
-      }
-      const centreTrimmed = full.sub(s0, Math.min(s1, total));
+      const { full, s0, s1, centre: centreTrimmed } = linkCentre(doc, net, seg, from, to);
 
       // EVERYTHING of the document this lanelet — and any junction it runs into — is made of.
       const section = seg.section;
@@ -550,8 +647,9 @@ export class LaneletGraph {
       }
       return previousAt.get(nodeId);
     };
-    if (builder?.buildJunctions && (yield* this.junctionsOffPage(doc, net, previous, next, before, builder))) return;
-    for (const [nodeId, node] of doc.nodes) {
+    const nodes = this.nodesToBuild(doc);
+    if (builder?.buildJunctions && (yield* this.junctionsOffPage(doc, net, previous, next, before, builder, nodes))) return;
+    for (const [nodeId, node] of nodes) {
       yield;
       this.buildJunction(doc, net, nodeId, node, previous, next, before);
     }
@@ -559,11 +657,13 @@ export class LaneletGraph {
 
   /** DO NOT build a whole build's junctions on the page when there are workers */
   private *junctionsOffPage(doc: RoadDoc, net: Network, previous: Map<string, JunctionCache>, next: Map<string, JunctionCache>,
-    before: (node: NodeId) => JunctionCache | undefined, builder: JunctionMeasurer): Generator<void | typeof WAITING, boolean, void> {
+    before: (node: NodeId) => JunctionCache | undefined, builder: JunctionMeasurer, nodes: Iterable<[NodeId, RoadNode]>): Generator<void | typeof WAITING, boolean, void> {
     const asked: { nodeId: NodeId; node: RoadNode; input: JunctionInput }[] = [];
     const asks: JunctionAsk[] = [];
     const sent = { lanes: new Map<LaneletId, LaneAsk>(), legs: new Map<SegmentId, JunctionLeg>() };
-    for (const [nodeId, node] of doc.nodes) {
+    let looked = 0;
+    for (const [nodeId, node] of nodes) {
+      looked++;
       const input = this.junctionInput(doc, nodeId, node);
       if (!input) continue;
       asked.push({ nodeId, node, input });
@@ -571,7 +671,7 @@ export class LaneletGraph {
     }
     const answers = asks.length ? yield* answered(builder.buildJunctions!(asks), 'the junctions are built') : [];
     if (!answers) return false;
-    laneletWork.nodes += doc.nodes.size;
+    laneletWork.nodes += looked;
     for (let k = 0; k < asked.length; k++) {
       const { nodeId, node, input } = asked[k]!, answer = answers[k]!;
       if (this.takeKnown(nodeId, node, input, answer.key, previous, next)) continue;
@@ -814,6 +914,42 @@ export class LaneletGraph {
   }
 }
 
+/** A road's centre from `from` to `to`, trimmed to its links' span: what its link lanes are offset from (`buildSegmentLinks`), and the length of the meso's link of it (`sim/meso/meso.ts`). */
+export function linkCentre(doc: RoadDoc, net: Network, seg: RoadSegment, from: NodeId, to: NodeId): { readonly full: Polyline; readonly s0: number; readonly s1: number; readonly centre: Polyline } {
+  const segId = seg.id;
+  // A link ends at the STOP LINE, not at the junction mouth, leaving room for the crossing in between.
+  const startTrim = net.stopLineDistance(segId, from);
+  const endTrim = net.stopLineDistance(segId, to);
+
+  const full = orientedPolyline(doc, seg, from);
+  const total = full.length;
+
+  // Consume the accessor's answer, do not re-derive it.
+  const wanted = startTrim + endTrim;
+  const room = Math.max(0, total - MIN_RIBBON);
+  // What gives way is the approach zones, never the mouths
+  const mouthStart = Math.min(startTrim, net.mouthDistance(segId, from));
+  const mouthEnd = Math.min(endTrim, net.mouthDistance(segId, to));
+  const approach = wanted - mouthStart - mouthEnd;
+  const spare = room - mouthStart - mouthEnd;
+  let s0: number, s1: number;
+  if (wanted > room && spare >= 0 && approach > 0) {
+    const k = spare / approach;
+    s0 = mouthStart + (startTrim - mouthStart) * k;
+    s1 = Math.max(s0 + MIN_RIBBON, total - mouthEnd - (endTrim - mouthEnd) * k);
+  } else {
+    const k = wanted > room && wanted > 0 ? room / wanted : 1;
+    s0 = startTrim * k;
+    s1 = Math.max(s0 + MIN_RIBBON, total - endTrim * k);
+  }
+  return { full, s0, s1, centre: full.sub(s0, Math.min(s1, total)) };
+}
+
+/** Whether a road carries traffic from `a` to `b` (forward) or from `b` to `a`. */
+export function allowsDirection(direction: 'both' | 'aToB' | 'bToA', forward: boolean): boolean {
+  return direction === 'both' || (direction === 'aToB') === forward;
+}
+
 /** A lane's centre between the cross-sections at its two ends. */
 export function clipToEndSections(points: readonly Vec2[], startTangent: Vec2, endTangent: Vec2): Vec2[] {
   if (points.length < 3) return points.slice();
@@ -822,10 +958,6 @@ export function clipToEndSections(points: readonly Vec2[], startTangent: Vec2, e
   while (to >= from && (points[to]!.x - last.x) * endTangent.x + (points[to]!.y - last.y) * endTangent.y > 0) to--;
   while (from <= to && (points[from]!.x - first.x) * startTangent.x + (points[from]!.y - first.y) * startTangent.y < 0) from++;
   return [first, ...points.slice(from, to + 1), last];
-}
-
-function allowsDirection(direction: 'both' | 'aToB' | 'bToA', forward: boolean): boolean {
-  return direction === 'both' || (direction === 'aToB') === forward;
 }
 
 /** `value` taken out of the list at `key`; the list gone when empty. */

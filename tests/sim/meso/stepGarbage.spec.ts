@@ -47,7 +47,7 @@ describe("the meso's steps", () => {
     let meso = 0;
     const walk = (node: Sampled, inMeso: boolean): void => {
       const file = node.callFrame.url.split('/').pop() ?? '';
-      const here = file.startsWith('meso.ts') || file.startsWith('model.ts') || (!node.callFrame.url && inMeso);
+      const here = file.startsWith('meso') || file.startsWith('model.ts') || (!node.callFrame.url && inMeso);
       if (here) meso += node.selfSize;
       for (const child of node.children) walk(child, here);
     };
