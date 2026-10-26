@@ -16,6 +16,11 @@ export interface SizedCaster {
   readonly instances?: { colour(): number; shadow(): number };
   /** Its shape in a cascade of `texel` and in the colour pass, when the camera chooses the colour's (`poleLayer.ts`): the cascade's by its texel alone, so the shadow does not follow the camera's level. */
   readonly levels?: { shadow(texel: number): BufferGeometry; colour(): BufferGeometry };
+  /** Drawn into the cascades alone, none of it in the colour pass (`poleStores.ts`): hidden between the passes and shown for a cascade's pass
+   *  where it casts, as a building part's caster (`partCells.ts` castInto). Its maker keeps it hidden and says in `userData.shadowOnly` whether
+   *  it holds anything (the casters' signature reads it hidden then, `renderer.ts` casterChanges). DO NOT leave it visible with no instance in
+   *  colour: three still set up its program and uniforms in every colour pass - 46 of the 278 draws of a frame drew nothing (audit P46). */
+  readonly shadowOnly?: boolean;
 }
 
 const casters = new Set<SizedCaster>();
@@ -43,9 +48,17 @@ export function castCastersInto(texel: number | null): void {
     if (c.counts) instanced.count = texel === null ? c.counts.colour() : c.counts.shadow();
     if (c.instances) (c.mesh.geometry as InstancedBufferGeometry).instanceCount = texel === null ? c.instances.colour() : c.instances.shadow();
     if (c.levels) c.mesh.geometry = texel === null ? c.levels.colour() : c.levels.shadow(texel);
-    if (texel === null) { c.mesh.castShadow = c.casts; continue; }
+    if (texel === null) {
+      c.mesh.castShadow = c.casts;
+      if (c.shadowOnly) c.mesh.visible = false;
+      continue;
+    }
     const holds = !instanced.isInstancedMesh || instanced.count > 0;
     c.mesh.castShadow = c.casts && holds && c.radius() >= texel * (c.texels ?? 1);
+    if (c.shadowOnly) {
+      const drawn = !c.instances || (c.mesh.geometry as InstancedBufferGeometry).instanceCount > 0;
+      c.mesh.visible = c.mesh.castShadow && drawn && c.mesh.userData['shadowOnly'] === true;
+    }
   }
 }
 

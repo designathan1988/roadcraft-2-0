@@ -213,13 +213,16 @@ export class PartStore {
     mesh.receiveShadow = false;
     mesh.count = 0;
     mesh.onBeforeShadow = noteShadow;
+    // Hidden between the passes, shown for a cascade's pass (`castBySize` shadowOnly): none of it is drawn in colour.
+    mesh.visible = false;
+    mesh.userData['shadowOnly'] = false;
     // Cast into a cascade where the part's pieces cover a texel (`shadowCasters.ts`), at the shape each cascade's texel asks: the camera's
     // choices never the shadow's. None drawn in colour: `colour` draws them. DO NOT set its casting from the last cascade three drew: with the
     // far cascades drawn every other frame, the casters' signature saw the poles come and go at every frame (`utility-arms` 2,366 changes,
     // `npm run diagnose`, 2026-10-22).
     this.uncast?.();
     this.uncast = castBySize({
-      mesh, casts: this.spec.castShadow, radius: () => Math.sqrt(this.bounds.cover),
+      mesh, casts: this.spec.castShadow, radius: () => Math.sqrt(this.bounds.cover), shadowOnly: true,
       counts: { colour: () => 0, shadow: () => this.count },
       levels: { shadow: (texel) => this.spec.levels[this.levelFor(texel)]!.geometry, colour: () => this.spec.levels[0]!.geometry },
     });
@@ -321,9 +324,10 @@ export class PartStore {
   flush(): void {
     const mesh = this.mesh;
     if (!mesh) return;
-    // In the scene while it holds any piece; drawn into the cascades alone: none in colour whether or not a cascade was drawn since (a tier
-    // without shadows never puts the casters back, `sunCascades.ts` restore), its pieces for a cascade's pass alone (`castBySize` counts).
-    mesh.visible = this.count > 0;
+    // Read by the casters' signature while it holds any piece; drawn into the cascades alone: hidden in colour whether or not a cascade was
+    // drawn since (a tier without shadows never puts the casters back, `sunCascades.ts` restore), its pieces for a cascade's pass alone
+    // (`castBySize` counts and shadowOnly).
+    mesh.userData['shadowOnly'] = this.count > 0;
     mesh.count = 0;
     const matrices = mesh.instanceMatrix;
     if (this.whole || this.written.length * 2 > this.count) {
@@ -538,9 +542,12 @@ export class WireStore {
     mesh.castShadow = true;
     mesh.name = 'utility-wires-cast';
     mesh.onBeforeShadow = noteShadow;
+    // Hidden between the passes, shown for a cascade's pass (`castBySize` shadowOnly): none of it is drawn in colour.
+    mesh.visible = false;
+    mesh.userData['shadowOnly'] = false;
     // Cast into a cascade whose texel the wire's width spans (`castBySize`), as the parts; none drawn in colour (`buckets` draw them).
     this.uncast = castBySize({
-      mesh, casts: true, radius: () => WIRE_WIDTH, instances: { colour: () => 0, shadow: () => this.count * SPAN_WIRES },
+      mesh, casts: true, radius: () => WIRE_WIDTH, shadowOnly: true, instances: { colour: () => 0, shadow: () => this.count * SPAN_WIRES },
     });
     this.group.add(mesh);
     this.mesh = mesh;
@@ -607,7 +614,8 @@ export class WireStore {
   flush(): void {
     const mesh = this.mesh, buffer = this.buffer;
     if (!mesh || !buffer) return;
-    mesh.visible = this.count > 0;
+    // Read by the casters' signature while it holds any wire; hidden in colour, shown for a cascade's pass (`castBySize` shadowOnly).
+    mesh.userData['shadowOnly'] = this.count > 0;
     if (this.whole || this.written.length * 2 > this.count) {
       buffer.clearUpdateRanges();
       buffer.needsUpdate = true;

@@ -23,35 +23,44 @@ export function hookProfiler(renderer: WebGLRenderer): void {
     return setAttribute.call(this, name, attribute);
   } as typeof setAttribute;
 
-  // What goes to the GPU, on this renderer's context only.
+  // What goes to the GPU, on this renderer's context only. Each wrapper a function of its own name: the CPU profile files a call's time
+  // (the driver's upload under it) by its function, and an arrow assigned to a property is "(anonymous)" there (the Lab's Code tab:
+  // "hot anonymous", 3.2 s of a session under `profilerHooks.ts:36`, audit 2026-10-25).
   const gl = renderer.getContext() as WebGL2RenderingContext;
   const bytesOf = (data: unknown): number => (data && typeof data === 'object' && 'byteLength' in data ? Number((data as ArrayBufferView).byteLength) : typeof data === 'number' ? data : 0);
   const bufferData = gl.bufferData.bind(gl) as (...a: unknown[]) => void;
-  (gl as unknown as { bufferData: (...a: unknown[]) => void }).bufferData = (...a: unknown[]): void => {
+  function bufferDataCounted(...a: unknown[]): void {
     // Closed (the HUD hidden, the default): nothing worked out per call.
     if (profiler.enabled) profiler.count('upload.buffer', bytesOf(a[1]));
     bufferData(...a);
-  };
+  }
+  (gl as unknown as { bufferData: (...a: unknown[]) => void }).bufferData = bufferDataCounted;
   const bufferSubData = gl.bufferSubData.bind(gl) as (...a: unknown[]) => void;
-  (gl as unknown as { bufferSubData: (...a: unknown[]) => void }).bufferSubData = (...a: unknown[]): void => {
+  function bufferSubDataCounted(...a: unknown[]): void {
     if (!profiler.enabled) { bufferSubData(...a); return; }
     const view = a[2] as ArrayBufferView | undefined;
     const length = typeof a[4] === 'number' && view && 'BYTES_PER_ELEMENT' in view ? a[4] * Number((view as Float32Array).BYTES_PER_ELEMENT) : bytesOf(view);
     profiler.count('upload.buffer', length);
     bufferSubData(...a);
-  };
+  }
+  (gl as unknown as { bufferSubData: (...a: unknown[]) => void }).bufferSubData = bufferSubDataCounted;
   for (const name of ['texImage2D', 'texSubImage2D', 'texImage3D', 'texSubImage3D', 'compressedTexImage2D'] as const) {
     const original = (gl[name] as (...a: unknown[]) => void).bind(gl);
-    (gl as unknown as Record<string, (...a: unknown[]) => void>)[name] = (...a: unknown[]): void => {
-      if (!profiler.enabled) { original(...a); return; }
-      // The pixels' bytes: a typed array's own, or an image's width × height as RGBA8.
-      const source = a.find((v) => v !== null && typeof v === 'object');
-      const bytes = source === undefined ? 0 : ArrayBuffer.isView(source) ? source.byteLength
-        : 'width' in source && 'height' in source ? Number(source.width) * Number(source.height) * 4 : 0;
-      profiler.count('upload.texture', bytes);
-      original(...a);
-    };
+    (gl as unknown as Record<string, (...a: unknown[]) => void>)[name] = textureUploadCounted(original);
   }
+}
+
+/** `original`, a texture upload of the context, counted while the profiler is open. */
+function textureUploadCounted(original: (...a: unknown[]) => void): (...a: unknown[]) => void {
+  return function textureUploadCountedCall(...a: unknown[]): void {
+    if (!profiler.enabled) { original(...a); return; }
+    // The pixels' bytes: a typed array's own, or an image's width × height as RGBA8.
+    const source = a.find((v) => v !== null && typeof v === 'object');
+    const bytes = source === undefined ? 0 : ArrayBuffer.isView(source) ? source.byteLength
+      : 'width' in source && 'height' in source ? Number(source.width) * Number(source.height) * 4 : 0;
+    profiler.count('upload.texture', bytes);
+    original(...a);
+  };
 }
 
 function wrap<T extends object, K extends keyof T>(proto: T, key: K, before: () => void): void {

@@ -583,7 +583,32 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     return out.sort((a, b) => a.d - b.d || a.key - b.key).map((w) => w.key);
   };
 
-  const inSquare = (key: CellKey, s: PropSquare): boolean => s.k >= 0 && Math.max(Math.abs(columnOf(key) - s.cx), Math.abs(rowOf(key) - s.cy)) <= s.k;
+  /** Each class's last choice of blocks and the view it was made for: what `wantedBlocks` reads (the view's matrix, its frustum's planes,
+   *  its point, its ground) and the reach. A view that stands asks the same blocks: DO NOT walk them again every frame - at the city's whole
+   *  view a class's reach (the camera's far plane, ~18 km) spans ~2,300 blocks of 1 km, each measured and tested against the frustum, four
+   *  times a frame with the gardens and the furniture (the Lab's Diagnosis, 2026-10-25: `wantedBlocks` a CPU cause at rest). */
+  const SEEN = 16 + 24 + 4;
+  const asked = far.map(() => ({ seen: new Float64Array(SEEN).fill(NaN), keys: [] as CellKey[], set: new Set<CellKey>() }));
+  const scratch = new Float64Array(SEEN);
+  /** The blocks class `cls` wants for view `v`: the last choice when the view and the reach are those it was made for (`fresh` false). */
+  const blocksFor = (cls: number, v: PropView, reach: number): { keys: readonly CellKey[]; set: ReadonlySet<CellKey>; fresh: boolean } => {
+    const last = asked[cls]!;
+    scratch.set(v.view.elements, 0);
+    for (let i = 0; i < 6; i++) {
+      const plane = v.frustum.planes[i]!;
+      scratch[16 + i * 4] = plane.normal.x; scratch[17 + i * 4] = plane.normal.y; scratch[18 + i * 4] = plane.normal.z; scratch[19 + i * 4] = plane.constant;
+    }
+    scratch[40] = v.x; scratch[41] = v.y; scratch[42] = v.ground; scratch[43] = reach;
+    let same = true;
+    for (let i = 0; i < SEEN && same; i++) same = scratch[i] === last.seen[i];
+    if (same) return { keys: last.keys, set: last.set, fresh: false };
+    last.seen.set(scratch);
+    last.keys = wantedBlocks(v, reach);
+    last.set = new Set(last.keys);
+    return { keys: last.keys, set: last.set, fresh: true };
+  };
+
+  const inSquare =(key: CellKey, s: PropSquare): boolean => s.k >= 0 && Math.max(Math.abs(columnOf(key) - s.cx), Math.abs(rowOf(key) - s.cy)) <= s.k;
   let busy = false;
   /** Whether the last `ringsIn` left rings of the square it was asked for unplaced. */
   let ringsShort = false;
@@ -662,7 +687,9 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       const reaches = [view.reach, largestSmall > 0 ? reachFor(view, largestSmall, leastSmall * (1 - HYSTERESIS)) : -1];
       busy = ringsShort;
       far.forEach((f, cls) => {
-        f.want(wantedBlocks(view, reaches[cls]!));
+        // The same blocks as last frame: the cache's wanted list is the one it was given then (nothing else gives it one).
+        const blocks = blocksFor(cls, view, reaches[cls]!);
+        if (blocks.fresh) f.want(blocks.keys);
         let first = true;
         for (const key of f.wantedKeys) {
           if (f.has(key)) continue;
@@ -672,7 +699,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         }
         f.trim(null);
         // A block held but not wanted (out of the reach, out of the frustum) draws nothing.
-        const wanted = new Set(f.wantedKeys);
+        const wanted = blocks.set;
         // Pictures not taken yet would be blank (the near cells draw their plants whole meanwhile).
         const pictured = !spec.pictures || spec.pictures.ready();
         for (const [key, block] of heldFar[cls]!) {

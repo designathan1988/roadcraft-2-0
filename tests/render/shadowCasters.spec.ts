@@ -38,6 +38,34 @@ describe('casters by size and by cascade', () => {
     expect(small.castShadow).toBe(false);
   });
 
+  it('hides a caster drawn into the cascades alone between the passes, shown for a cascade where it holds instances and casts', () => {
+    const geometry = new BoxGeometry(), material = new MeshBasicMaterial();
+    const held = new InstancedMesh(geometry, material, 4);
+    const none = new InstancedMesh(geometry, material, 4);
+    let count = 3;
+    // As the poles' stores make them (`poleStores.ts`): hidden, `userData.shadowOnly` saying whether they hold any piece.
+    for (const mesh of [held, none]) { mesh.visible = false; mesh.count = 0; }
+    held.userData['shadowOnly'] = true;
+    none.userData['shadowOnly'] = false;
+    const offs = [
+      castBySize({ mesh: held, casts: true, radius: () => m(1), shadowOnly: true, counts: { colour: () => 0, shadow: () => count } }),
+      castBySize({ mesh: none, casts: true, radius: () => m(1), shadowOnly: true, counts: { colour: () => 0, shadow: () => 0 } }),
+    ];
+    castCastersInto(m(0.1));
+    expect([held.visible, held.count, held.castShadow]).toEqual([true, 3, true]);
+    expect([none.visible, none.castShadow]).toEqual([false, false]);
+    // A cascade whose texel the pieces are under: not drawn into it.
+    castCastersInto(m(5));
+    expect([held.visible, held.castShadow]).toEqual([false, false]);
+    // Between the passes: in no colour pass, its casting as its maker set it (what the casters' signature reads).
+    castCastersInto(null);
+    expect([held.visible, held.count, held.castShadow]).toEqual([false, 0, true]);
+    count = 0;
+    castCastersInto(m(0.1));
+    expect(held.visible).toBe(false);
+    for (const off of offs) off();
+  });
+
   it('keeps a plant off the view only where its shadow can fall into it, away from the sun', () => {
     const kit = createSceneryKit();
     const half = m(100);

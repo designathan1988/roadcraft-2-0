@@ -230,15 +230,18 @@ export function createPalettePass(anim: ClassAnimation, parent: Int16Array, join
   const quad = new BufferGeometry();
   quad.setAttribute('position', new Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3));
   const camera = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  const sceneOf = (shader: ShaderMaterial): Scene => {
+  /** A pass's scene: its quad named, so a frame's capture (the Lab's Frame tab) tells the crowd's animation passes apart. */
+  const sceneOf = (shader: ShaderMaterial, name: string): Scene => {
     const mesh = new Mesh(quad, shader);
+    mesh.name = name;
     mesh.frustumCulled = false;
     const made = new Scene();
+    made.name = name;
     made.add(mesh);
     return made;
   };
-  const scene = sceneOf(material);
-  const blendScene = blendMaterial ? sceneOf(blendMaterial) : null;
+  const scene = sceneOf(material, 'crowd-animation');
+  const blendScene = blendMaterial ? sceneOf(blendMaterial, 'crowd-animation-blend') : null;
   // DO NOT build it at its first draw: a loop over every bone's parents, a second and more in the frame where the first person of a class came (2026-10-16).
   // Built for a target of its own kind, not the shared page (another pass may make that page anew meanwhile).
   const compileTarget = makeTarget(width, 1);

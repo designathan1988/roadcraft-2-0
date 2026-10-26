@@ -339,4 +339,39 @@ describe('the far blocks\' street props', () => {
     expect(got.missing).toBe(0);
     expect(sum(got.submitted)).toBeLessThan(sum(got.inView));
   });
+
+  it('choose a still view\'s blocks once, and a moved view\'s as a layer new to it chooses them', () => {
+    const make = (): ReturnType<typeof createPropLayer> => createPropLayer({
+      name: 'blocks', version: 1, kinds: [], margin: m(40), changes: ['landscape'], pad: 0, pictures: null, pictureOf: [],
+      place: () => ({ packs: new Map(), growing: false }),
+    });
+    // The whole small city from above, as the Home view frames it: a far plane of kilometres, a few hundred blocks.
+    const camera = new PerspectiveCamera(35, 16 / 9, m(1), m(9000));
+    camera.position.set(-m(1500), m(1800), m(1500));
+    camera.lookAt(0, 0, 0);
+    const look = (layer: ReturnType<typeof createPropLayer>): void => {
+      camera.updateMatrixWorld();
+      const view = new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+      lookProps([layer], propView(camera, new Frustum().setFromProjectionMatrix(view), 540, 0));
+    };
+    const layer = make();
+    const wide = layer.far[0]!;
+    let asked = 0;
+    const want = wide.want.bind(wide);
+    wide.want = (keys) => { asked++; want(keys); };
+    look(layer);
+    const first = [...wide.wantedKeys];
+    expect(first.length).toBeGreaterThan(10);
+    look(layer);
+    look(layer);
+    expect(asked).toBe(1);
+    expect([...wide.wantedKeys]).toEqual(first);
+    camera.position.x += m(2500);
+    look(layer);
+    expect(asked).toBe(2);
+    const fresh = make();
+    look(fresh);
+    expect([...wide.wantedKeys]).toEqual([...fresh.far[0]!.wantedKeys]);
+    expect([...wide.wantedKeys]).not.toEqual(first);
+  });
 });
