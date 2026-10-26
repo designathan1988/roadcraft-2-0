@@ -56,13 +56,15 @@ export function desktopSaves(): DesktopStores | null {
     if (event.source !== window || event.data !== PORT_MESSAGE || !given) return;
     asked.shift()?.(given);
   });
-  const nextPort = (): Promise<MessagePort> => new Promise<MessagePort>((resolve, reject) => {
-    const take = (given: MessagePort): void => { clearTimeout(timer); resolve(given); };
-    const timer = setTimeout(() => { const at = asked.indexOf(take); if (at >= 0) asked.splice(at, 1); reject(new Error('the saves writer did not answer')); }, CONNECT_MS);
+  /** The next port the shell hands; `patient`: waited for whatever it takes (a job worker's), else given up after `CONNECT_MS` (the page's own, `open`). DO NOT give a worker's up on a timer: the shell answers every ask in order, and a page held by its opening ran the timers past the ports already come - ten job workers of a 10 km city's opening were left with no port to the saves (2026-10-26). */
+  const nextPort = (patient: boolean): Promise<MessagePort> => new Promise<MessagePort>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const take = (given: MessagePort): void => { if (timer !== null) clearTimeout(timer); resolve(given); };
+    if (!patient) timer = setTimeout(() => { const at = asked.indexOf(take); if (at >= 0) asked.splice(at, 1); reject(new Error('the saves writer did not answer')); }, CONNECT_MS);
     asked.push(take);
     connect();
   });
-  const open = (): Promise<MessagePort> => (port ??= nextPort().then((given) => {
+  const open = (): Promise<MessagePort> => (port ??= nextPort(false).then((given) => {
     given.onmessage = (answer: MessageEvent<Answer>) => {
       const done = waiting.get(answer.data.id);
       waiting.delete(answer.data.id);
@@ -109,7 +111,7 @@ export function desktopSaves(): DesktopStores | null {
     delete: (key) => parts.write([], [key]),
   };
   // A worker's own port, once the old browser-storage map was copied (`migrate`): it reads and writes the folder as the page does.
-  const connectWorker = async (): Promise<MessagePort> => { await ready(); return nextPort(); };
+  const connectWorker = async (): Promise<MessagePort> => { await ready(); return nextPort(true); };
   return { store, parts, connect: connectWorker, onLost: (listener) => { lost.push(listener); } };
 }
 

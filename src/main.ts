@@ -7,7 +7,7 @@ import type { CityGenAsk, CityGenReply } from './cityGen.worker';
 import { CITY_TABLES, type CityTable, type OpenedCity, type OpenedTables, noCityTables, openedBuildings, openedTables, prepareCity, preparedCity } from './editor/preparedCity';
 import { COOKED_CITY_SEEDS, readCookedCity } from './editor/cookedCities';
 import { tableBytes, tableFormat, tableIn } from '@world/buildings/recordTable';
-import { desktopJobWorkers } from './desktopJobs';
+import { desktopJobThreads, desktopJobWorkers } from './desktopJobs';
 import { desktopSimWorker } from './desktopSim';
 import { profileOf } from '@world/roads/profile';
 import { profiler } from '@core/profiler';
@@ -207,7 +207,7 @@ const persistence = desktopStores ? new Persistence(undefined, desktopStores.sto
 /** DO NOT read or write the desktop's tiles through the page: each job worker is handed a port of its own to the saves writer, before its first job (`editor/workerParts.ts`), and a new one when the writer started again. */
 /** On the desktop the long job workers (the tiles' maker, the growth) run in the shell's job processes, a V8 cage each (`desktopJobs.ts`); before any worker is made. */
 const desktopJobs = desktopJobWorkers();
-if (desktopJobs) setJobWorkerMaker((long) => desktopJobs(long) as Worker | null);
+if (desktopJobs) setJobWorkerMaker((long) => desktopJobs(long) as Worker | null, desktopJobThreads());
 if (desktopStores) {
   const workers: Worker[] = [];
   const handPort = (worker: Worker): void => {
@@ -672,7 +672,7 @@ performance.mark('boot:surfaces-read');
 // The traffic's worker, given the map as it opened and the conflict zones measured in earlier sessions.
 const engineFlags = new URLSearchParams(location.search);
 // Its lots' bays and conflict pairs on this page's pool, talked to straight (DO NOT let the worker open a pool of its own: more isolates in the one V8 cage).
-const simLanes = (service: 'bays' | 'conflicts'): MessagePort[] => Array.from({ length: jobLanes(4) }, () => jobChannel(service, () => sim.laneLost(service)));
+const simLanes = (service: 'bays' | 'conflicts'): MessagePort[] => Array.from({ length: jobLanes(4, service) }, () => jobChannel(service, () => sim.laneLost(service)));
 // DO NOT wait for the traffic's worker to stand before the world is built: its map read and its traffic laid out took 1.8 s of a reopened city's boot, the page idle meanwhile (2026-10-21). Its messages queue behind its `init` and each frame waits for its answer (`SimClient.frame`): the town is built while it starts, the traffic comes in when it stands.
 void sim.start(0x2024, await keptZones, ZONES_PREFIX, engineFlags.get('ambient') === 'view' ? 'view' : 'edges',
   typeof MessageChannel === 'undefined' || typeof Worker === 'undefined' ? null : { bays: simLanes('bays'), conflicts: simLanes('conflicts') })

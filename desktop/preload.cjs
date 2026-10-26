@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('roadcraftDesktop', {
   connectSaves: () => ipcRenderer.send('saves:connect'),
   // A long job worker's port in a job process (`src/desktopJobs.ts`), handed on as the saves' is.
   connectJobs: () => ipcRenderer.send('jobs:connect'),
+  // How many job threads the machine runs (`main.cjs` JOB_THREADS): read once, as the page's pool is set up.
+  jobThreads: () => ipcRenderer.sendSync('jobs:threads'),
   // The simulation's port in the simulation process (`src/desktopSim.ts`), handed on the same way.
   connectSim: () => ipcRenderer.send('sim:connect'),
   // The lab recorder's report written into the data folder (`src/lab/recorder/deliver.ts`): the folder it went to, or null.

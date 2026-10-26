@@ -18,7 +18,8 @@ const LONG_RUNNING: readonly JobService[] = ['growth', 'cityGen', 'networkBake']
 /** Services whose worker no queued job runs on (where another worker can take it), all on one worker (never one each: the short side has two, the V8 cage's count, `jobWorkers`): the save's writes are a few short awaits, and each waited for the job running on its worker - under load a write took past a reload, the edit lost (conf15, conf22). */
 const KEPT_CLEAR: readonly JobService[] = ['save'];
 /** Lanes whose messages hold all they read (no shared buffer the job keeps reading: `roadTilePool.ts` hands each share its roads, the ground asked back by `need`), served on the desktop by the long workers of the job processes, outside the page's cage. DO NOT keep the road tiles to the page's short workers there: the lanes were `laneWorkers` of them, ONE on the desktop, and a large city's opening waited 5.6 s on that one worker for its road surfaces while six job processes stood idle (2026-10-21). */
-const PROCESS_LANES: readonly JobService[] = ['roadTiles'];
+/** And every lane whose messages hold what they read (no buffer of the page's memory read live, no store of the page's origin): the roads' blocks, their far levels and the network's far roads, the simulation's lots' bays and conflict pairs (`main.ts` simLanes), the plates' land (`flatGround`: its relief and its square), the plates' ecology, the terrain's light, the fractures, the people's levels. The page keeps the citizens' bake (`citizenBake`: it fetches the bodies from the page's assets by their path), the save and the derived cache's writer (its IndexedDB), the ground's shapes and pads (`groundShape`: the buildings' table rows by reference, a whole table copied to cross) and the lanes that read the shared ground (`roadStations`, `landStroke`). DO NOT leave them to the page's short side: a 10 km city's opening queued 155 of their messages on its one lane worker while 22 cores stood idle (2026-10-26). */
+const PROCESS_LANES: readonly JobService[] = ['roadTiles', 'roadCoarse', 'roadFar', 'bays', 'conflicts', 'flatGround', 'ecology', 'terrainLight', 'fracture', 'peopleLod'];
 /** Whether `service`'s lanes go to the job processes' workers (`PROCESS_LANES`): on the desktop, with a long side of more than one. */
 const inProcesses = (service: JobService): boolean => PROCESS_LANES.includes(service) && system.makeWorker !== null && longWorkers() > 1;
 const keptClear = (host: Host): boolean => KEPT_CLEAR.some((service) => host.services.has(service));
@@ -28,10 +29,15 @@ const otherKinds = (host: Host): number => { let n = 0; for (const service of ho
 /** Workers set apart for the long-running services: the pool less two kept for every other kind, one at least (the desktop's, in job processes outside the page's cage).
  *  In a browser one: the long-running services have one lane (`growthPool.ts`), and a second long worker of the page's four took no lane, while the traffic's, the roads' and the ground's lanes and the save were crowded on the other two, the save waiting behind a batch of conflicts or bays (JOB-02). */
 export function longWorkers(): number {
-  const n = jobWorkers();
   if (!system.makeWorker) return 1;
+  // The desktop's: the threads its job processes run, a weaker machine's played on this one fewer (its threads less the page's and the simulation's).
+  if (system.processThreads !== null) return Math.max(1, WEAK_MACHINE.threads ? Math.min(system.processThreads, WEAK_MACHINE.threads - 2) : system.processThreads);
+  const n = jobWorkers();
   return n >= 3 ? n - 2 : 1;
 }
+
+/** The page's own workers on the desktop: the save's, and one for the lanes that read the page's memory (`PROCESS_LANES` names the rest). */
+const DESKTOP_PAGE_WORKERS = 2;
 
 /** Workers for every other kind (the traffic's lanes, the cells, the far levels, the roads, the ground): the rest of the pool, one at least. */
 export const shortWorkers = (): number => Math.max(1, jobWorkers() - longWorkers());
@@ -268,6 +274,8 @@ class JobSystem {
   setup: ((worker: Worker) => void) | null = null;
   /** Where a worker of a side is made instead of a page's Worker (`setJobWorkerMaker`: the desktop's utility process for the long side); null: the page's. */
   makeWorker: ((long: boolean) => Worker | null) | null = null;
+  /** The job threads the desktop's processes run (`setJobWorkerMaker`: the shell's count from the machine's cores and memory); null in a browser. */
+  processThreads: number | null = null;
   /** Tiles of the map waiting for the long side's lanes (`tilesWaiting`): its workers take no queued job meanwhile. */
   tilesWaiting = false;
   /** The worker that ran the last job of each affinity (`JobSpec.affinity`), while it lives. */
@@ -275,9 +283,10 @@ class JobSystem {
 }
 const system = new JobSystem();
 
-/** Where the pool's workers are made, by side (`long`: tiles and growth); null from it: the page's own Worker. On the desktop the long side goes to a utility process outside the renderer's V8 cage (`jobs/processWorker.ts`), whose `terminate` ends that thread; the short side stays the page's own. */
-export function setJobWorkerMaker(make: ((long: boolean) => Worker | null) | null): void {
+/** Where the pool's workers are made, by side (`long`: tiles and growth); null from it: the page's own Worker. On the desktop the long side goes to a utility process outside the renderer's V8 cage (`jobs/processWorker.ts`), whose `terminate` ends that thread; the short side stays the page's own. `threads`: how many the processes run (the shell's, by the machine). */
+export function setJobWorkerMaker(make: ((long: boolean) => Worker | null) | null, threads: number | null = null): void {
   system.makeWorker = make;
+  system.processThreads = make ? threads : null;
 }
 
 /** Told to every worker of the pool, those made and those to come, before its first job: on the desktop, the port it reads and writes the tiles through (`editor/workerParts.ts`). */
@@ -292,6 +301,8 @@ export function jobWorkers(): number {
   const cores = WEAK_MACHINE.threads ?? ((typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 0) || 2);
   // Inside the simulation's worker (no document): its own few, for the lots' bays and the junctions' pairs.
   if (typeof document === 'undefined') return Math.max(1, Math.min(2, cores - 2));
+  // The desktop's: its job processes' threads (each process a cage of its own) and the page's few, DO NOT bounded by the page's cage.
+  if (system.processThreads !== null) return longWorkers() + DESKTOP_PAGE_WORKERS;
   const share = system.makeWorker ? POOL_CAGE_SHARE : PAGE_POOL_CAGE_SHARE;
   const byCage = Math.floor((CAGE_BYTES * share) / WORKER_HEAP_BYTES);
   return Math.max(1, Math.min(cores - 2, byCage));
@@ -621,12 +632,22 @@ const RERANK_MOVE = 64;
 const focusDistance = (x: number, y: number): number => Math.hypot(x - system.focusX, y - system.focusY);
 
 /** DO NOT pin a lane by a hash of its service, nor put a long-running service's lane on a worker of the other kinds (or the other way round): the traffic's conflict pairs waited behind tile after tile and the city's clock stood still (the long lanes were placed last, on the workers the traffic's lanes already held) */
+/** Whether a worker hosts a lane of the job processes' (`PROCESS_LANES`). */
+const hostsProcessLane = (host: Host): boolean => { for (const service of host.services.keys()) if (PROCESS_LANES.includes(service)) return true; return false; };
+/** The long workers the job processes' lanes may take: half the long side, the rest kept free of lanes for the long jobs (a city's growth, the cells' jobs: `hostFor` gives a long-running job only a worker with no lane). */
+const processLaneHosts = (): number => Math.max(1, Math.floor(longWorkers() / 2));
+
 function place(service: JobService): Host {
   const long = LONG_RUNNING.includes(service) || inProcesses(service);
+  // A lane of the job processes' goes to the workers that host them once they are as many as they may be (`processLaneHosts`).
+  const processLane = inProcesses(service);
+  const laneHosts = processLane ? system.workers.filter((w) => w.long && hostsProcessLane(w)).length : 0;
+  const hostsFull = processLane && laneHosts >= processLaneHosts();
   let best: Host | null = null;
   let bestScore = Infinity;
   for (const w of system.workers) {
     if (w.long !== long) continue;
+    if (hostsFull && !hostsProcessLane(w)) continue;
     // Lanes of a kind on different workers, then the least loaded; the kept-clear services' worker kept to them, on a worker of their own where there is one.
     // The kept-clear lanes together on their worker (never a worker each: the pool's workers are the jobs').
     const clear = KEPT_CLEAR.includes(service);
@@ -637,7 +658,7 @@ function place(service: JobService): Host {
   // A worker with nothing on it scores 0: one is made for the lane while its side has room, as if every worker were there.
   // A kept-clear lane goes to their own worker once there is one, not to a new worker.
   const own = best !== null && KEPT_CLEAR.includes(service) && keptClear(best) && otherKinds(best) === 0;
-  const roomForLane = long || KEPT_CLEAR.includes(service) || system.workers.filter((w) => !w.long).length < laneWorkers();
+  const roomForLane = (long && !hostsFull) || KEPT_CLEAR.includes(service) || (!long && system.workers.filter((w) => !w.long).length < laneWorkers());
   if (best === null || (bestScore > 0 && !own && roomForLane)) best = grow(long) ?? best;
   // A pool of one worker: the two sides share it.
   if (!best) best = system.workers.reduce<Host | null>((a, w) => (a === null || w.ports < a.ports ? w : a), null);

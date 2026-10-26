@@ -61,7 +61,7 @@ export class BayPool implements BayWorkers {
   private start(): Lane[] | null {
     if (this.lanes || this.broken) return this.lanes;
     if (typeof Worker === 'undefined') { this.broken = true; return null; }
-    const count = this.ports ? this.ports.length : jobLanes(MOST_LANES);
+    const count = this.ports ? this.ports.length : jobLanes(MOST_LANES, 'bays');
     const lanes: Lane[] = [];
     try {
       for (let k = 0; k < count; k++) {

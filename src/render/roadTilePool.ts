@@ -124,7 +124,7 @@ export class RoadTilePool implements RoadTiler {
 
   private startCoarse(): Lane[] | null {
     if (this.coarseLanes || this.broken) return this.coarseLanes;
-    this.coarseLanes = this.open('roadCoarse', jobLanes(MOST_LANES));
+    this.coarseLanes = this.open('roadCoarse', jobLanes(MOST_LANES, 'roadCoarse'));
     return this.coarseLanes;
   }
 

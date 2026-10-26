@@ -1,4 +1,4 @@
-import { jobPort } from '../jobs/jobPool';
+import { jobLanes, jobPort } from '../jobs/jobPool';
 import type { ReliefVersion } from '@world/terrain';
 import type { PlateMesh } from './plateMesh';
 
@@ -21,7 +21,8 @@ interface Job {
 }
 interface Lane { readonly worker: Worker; busy: (Job & { id: number }) | null }
 
-const LANES = 2;
+/** The most lanes the land takes (`jobLanes`: on the desktop, the job processes'). */
+const LANES = 4;
 let lanes: Lane[] | null = null;
 let broken = false;
 const queue: Job[] = [];
@@ -33,7 +34,7 @@ function start(): Lane[] | null {
   if (typeof Worker === 'undefined') { broken = true; return null; }
   try {
     lanes = [];
-    for (let k = 0; k < LANES; k++) {
+    for (let k = 0; k < jobLanes(LANES, 'flatGround'); k++) {
       const worker = jobPort('flatGround');
       const lane: Lane = { worker, busy: null };
       worker.onmessage = (event: MessageEvent<{ id: number; mesh?: PlateMesh; error?: string }>) => {

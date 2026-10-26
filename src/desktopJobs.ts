@@ -3,7 +3,7 @@ import { isRecordTable } from '@world/buildings/recordTable';
 
 /** THE DESKTOP'S JOB PROCESSES: the long-running job workers (the tiles' maker, the growth) in utility processes of the shell (`desktop/jobs.cjs`), each process a V8 cage of its own, so a 20 km map's tile workers no longer fill the page's (V8 pointer compression: one cage a process, the page and its workers sharing it); none in a browser */
 
-interface JobsBridge { connectJobs(): void }
+interface JobsBridge { connectJobs(): void; jobThreads(): number }
 
 /** The window messages the preload hands on (`desktop/preload.cjs`): a thread's port, and a process stopped (its threads' ports dead). */
 interface PortMessage { readonly roadcraftJobsPort: number }
@@ -43,4 +43,12 @@ export function desktopJobWorkers(): ((long: boolean) => WorkerLike | null) | nu
     }), isRecordTable);
     return made;
   };
+}
+
+/** How many job threads the shell's processes run (`desktop/main.cjs` JOB_THREADS: the machine's cores less the page's and the simulation's, within its memory); null where the page has no desktop shell, or one that does not tell. */
+export function desktopJobThreads(): number | null {
+  const bridge = (window as unknown as { roadcraftDesktop?: Partial<JobsBridge> }).roadcraftDesktop;
+  if (!bridge || typeof bridge.jobThreads !== 'function') return null;
+  const threads = bridge.jobThreads();
+  return Number.isInteger(threads) && threads > 0 ? threads : null;
 }

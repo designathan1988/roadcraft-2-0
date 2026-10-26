@@ -260,6 +260,8 @@ function serveIpc() {
     }
   });
   // A long job worker's own line to a thread of a job process (`jobs.cjs`, `src/desktopJobs.ts`), as the saves' is: the processes taken in turn.
+  // The job threads the page's pool may make (`JOB_THREADS`), asked once as the page starts (`preload.cjs`).
+  ipcMain.on('jobs:threads', (event) => { event.returnValue = fromGame(event) ? JOB_THREADS : 0; });
   ipcMain.on('jobs:connect', (event) => {
     if (!fromGame(event) || !event.senderFrame) return;
     const at = nextJobs++ % JOB_PROCESSES;
@@ -283,8 +285,20 @@ function serveIpc() {
   });
 }
 
-/** THE JOB PROCESSES (`jobs.cjs`): the page's long job workers (the tiles' maker, the growth) as threads of utility processes, each process a V8 cage of its own (Electron `utilityProcess`; V8 pointer compression, one cage a process): a 20 km map's tile workers no longer fill the page's. Two, the long workers shared between them. */
-const JOB_PROCESSES = 2;
+/** A job thread at its busiest, bytes (a tile's or a city's growth worker, 450-650 MB of V8 heap measured on the 10 km city, `src/jobs/jobPool.ts` PAGE_WORKER_PEAK_BYTES). */
+const JOB_THREAD_PEAK = 600 * 2 ** 20;
+/** Of the machine's memory, what the job threads may take at their busiest together: the page, the GPU's buffers, the simulation and the system keep the rest. */
+const JOB_RAM_SHARE = 0.35;
+/** Threads a job process holds: its V8 cage is 4 GB (pointer compression, one cage a process), four threads at their peak and room for its collections. */
+const THREADS_PER_PROCESS = 4;
+/**
+ * THE JOB THREADS THIS MACHINE RUNS (`src/jobs/jobPool.ts` setJobWorkerMaker, handed to the page by `jobs:threads`): its cores less the
+ * page's and the simulation's, within its memory. DO NOT size them by the page's V8 cage: the job threads are in processes of their own,
+ * and the 10 km city's opening ran every lane on one worker of the page while 22 cores stood idle (2026-10-26).
+ */
+const JOB_THREADS = Math.max(1, Math.min(os.availableParallelism() - 2, Math.floor((os.totalmem() * JOB_RAM_SHARE) / JOB_THREAD_PEAK)));
+/** THE JOB PROCESSES (`jobs.cjs`): the page's job workers as threads of utility processes, each process a V8 cage of its own (Electron `utilityProcess`; V8 pointer compression, one cage a process), `THREADS_PER_PROCESS` threads each: a 20 km map's workers no longer fill the page's. */
+const JOB_PROCESSES = Math.max(1, Math.ceil(JOB_THREADS / THREADS_PER_PROCESS));
 /** The job threads' code, built for Node beside the game (`scripts/vite/desktop-jobs.config.ts`). */
 const JOB_HOST = path.join(GAME, 'desktop-jobs', 'jobHost.mjs');
 const jobs = [];
