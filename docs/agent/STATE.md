@@ -13,11 +13,96 @@ Entry point and method of work: `docs/agent/README.md`. Rules: `docs/agent/memor
   `medianShapes`) meshed AS THE DETAIL'S SURFACES by `pieceBundle` (`render/networkFarPieces.ts` farPieceCells), every vertex the detail's
   attributes, drawn by `materials.roadRoot` (the road material's own shader). The old coarse builder, its worker and its own material are gone.
   Photos: reports/in-game/2026-10-27-one-road/03 (near, 3 s: median, lanes, crossings, texture), 04 (far).
+- NEXT (same order, one category at a time, inventory first): buildings (their load-state stand-ins: base prisms -> plate -> tile -> mass ->
+  facade -> cell detail, shown by what has landed, not by screen size), trees (near trees / far forest cards), street furniture and props
+  (impostor ladder 48/16/1.5 px; cells not built show nothing), people (impostors), poles and wires (blocks not built show nothing), the road
+  stand-in of a road just built (`roadStandIn.ts`), terrain levels.
 - Then every other category the same way (inventory first: buildings' LOD ladder, cars, trees, props/furniture, people, poles/wires,
   terrain, water): find every stand-in shown by load state and make the form a function of the view alone.
 - Done and committed this evening: 3c172ebd (squares' walks paved), e08a35a3 (far roads' crossings), 8e1e9f25 (car level by its own
   screen size; poles turned by the document's nearest road). Uncommitted: the far level's asphalt grain (roadEdges/materials/
   networkFarRoads/renderer) - to be replaced by the single-form root.
+
+## BUILDINGS' LOD: DIAGNOSIS AND PLAN (2026-10-27, the owner's order: the far levels must be the originals, no placeholder, one form per view)
+- Today six forms, only one of them the original: L0 detail (the building itself); L1 facade level (`facadeLevel.ts`: walls re-emitted as runs of
+  bays drawn by a shader); the cell's masses (`massing.ts`: blocks with shader windows, FAR_ERROR 1.5 m); the 1 km tile and the 2 km plate
+  (`massLevels.ts`, the plate's roofs flattened to boxes, PLATE_DETAIL); the base prisms (`massBase.ts`) drawn under every cell nothing finer
+  has landed. Which one shows also depends on load state (the base under cells not landed, a tile held while its cells land) and on the frame
+  and memory budgets (`frameBudget.ts` error scale, `massCells.ts` cap stepping fine -> facade -> masses): not on the view alone.
+- NO BAKING (the owner, 2026-10-27: the buildings are made by the city as it grows). The way for procedurally generated buildings: the far
+  level evaluates THE SAME FACADE GRAMMAR the detail is generated from, per pixel in the shader, over the building's real masses: F-shade,
+  Haegler, Wonka, Mueller Arisona, Van Gool, Mueller, "Grammar-based Encoding of Facades", EGSR 2010 (https://diglib.eg.org/items/c323b1b7-2ba8-4be3-8575-c0808924e2bf,
+  https://onlinelibrary.wiley.com/doi/10.1111/j.1467-8659.2010.01745.x): "evaluating procedural descriptions at render time uses less memory than
+  the generation of intermediate geometry"; and the levels made by the grammar itself, its terminals swapped for lighter ones (Mueller, Wonka,
+  Haegler, Ulmer, Van Gool, "Procedural Modeling of Buildings", SIGGRAPH 2006, https://www.researchgate.net/publication/220183823_Procedural_Modeling_of_Buildings).
+- So: ONE facade encoding for every level past the detail (the facade level's, `facadeLevel.ts`: the detail's own bays, its pane per bay as
+  `emitBay` picks it, its frames' colour, its doors, shutters and streaks), carried by every mass vertex of the cell, the tile, the plate and the
+  base; every level's geometry the building's own blocks and roofs (no box, no flattened roof); one shader for all of them; the level picked by
+  screen error alone; the shader masses' cruder grid (`massingMaterial.ts`), the boxes and the prisms' own paint removed.
+- Code facts found (2026-10-27): the facade level L1 already is that encoding: `buildingMesh.ts` emitFacadeRuns lays a face's like bays as one
+  quad a run (a storey of like bays, like storeys over the base), each vertex carrying the run's kind (`facadeKind`: which pane `emitBay`
+  puts), its opening in the bay (a0, a1, h0, h1), its frames' colour, its streak and office flag, drawn by `facadeLevel.ts`. The masses
+  (`program.ts` MassRecorder, `massing.ts`) carry only a storey/bay/glass-share/sill-head grid (`BaseGrid`, `massingMaterial.ts`): another,
+  cruder grammar. Steps: (1) the mass stage written from the same runs (`emitFacadeRuns` into the far sink and the mass recorder alike), its
+  walls the runs' quads with the runs' encoding; (2) the masses, tiles, plates and base drawn by the facade level's shader; (3) the levels picked
+  by screen error alone (no budget swap, no base under unloaded cells); (4) `massingMaterial.ts` and `BaseGrid` removed.
+- THE CONCRETE DESIGN (decided 2026-10-27): every level past the detail written in THE FACADE LEVEL'S OWN VERTEX FORMAT and drawn by ITS OWN
+  MATERIAL: the shells' (`cellArrays.ts` ShellArrays: position on the cell's grid, octahedral normal, paint = rgb + finish id + wear, so the
+  finishes' textures `finishes.ts`), and for walls the runs' (`facade` bay width and storey height, `grid` u, v, kind + flip, volume * 4 +
+  side, `opening` a0, a1, h0, h1, trim rgb, office), drawn by `facadeLevel.ts` exactly as the L1 cell draws them. The mass stage records, per
+  bay, what `emitFacadeRuns` reads (`recordBlock`: the bay's component kind `facadeKind`, its opening `openingOf`, its streak `streakOf`, its
+  wall's finish and paint, its trim colour, its bay index and level), so `massing.ts` writes the same runs the facade level lays, per level
+  with its reliefs under the level's error laid flat; its other faces (roofs, parapets, lots) with their finish id. The tile, the plate and the
+  base are the same writer over their buildings. Then `massingMaterial.ts`, `BaseGrid`, the base prisms' own format and the plate's boxes go.
+- DONE (steps a-d, committed): the cell masses, the 1 km tile and the 2 km plate are written in the facade level's own format and drawn by
+  its own materials. `program.ts`: MassLook (rgb + finish index) in every face (FACE_FLOATS 13) and bay (BAY_FLOATS 21: the facade level's
+  kind, opening, paint, bay index, level, joined bays, volume, grime foot), no palette of its own (a tile's job held 400 programs' objects:
+  `cellJobMemory.spec.ts`). `buildingMesh.ts` MassShellWriter / writeMassShell: one far Shell fed the program's faces and its bays as the
+  facade level's runs (stamps, u/v, storeys stacked as `emitFacadeRuns`), reliefs under the level's error laid flat. `cellArrays.ts` CellMass
+  (position on the grid, octahedral normal, paint, facadeSize/facadeCell/facadeOpening+facadeTrim interleaved; shells' triangles then runs'),
+  `MassAppender` writing each building straight into its cell's arrays, `concatMass` (associative: slices joined = level made whole, byte for
+  byte, `cellSlices.spec.ts`). `massCells.ts` cellMesh: two groups drawn by [kit.shellMaterial, kit.facade]. `massing.ts` MassWriter and its
+  window grid removed. gpuOnly/gpuLedger handle interleaved buffers (one upload, counted once).
+- DONE (step e, committed): the base is the plate's own level laid cell by cell: the 'massBase' job runs the same writer at `PLATE_DETAIL`
+  (`cellWork.ts`, each building into its cell's `MassAppender`), `massBase.ts` joinBase joins the cells (`concatMass`, the plate's very bytes,
+  `massBase.spec.ts`) and keeps each cell's shells' and runs' index runs (`BASE_CELL_STRIDE` 6); `massCells.ts` draws it with `cellMesh` (the
+  shells' and the facade's materials), `syncBases` leaving out the cells a finer level draws in both groups. Gone: the prisms, the base's paint
+  and grid (`BaseGrid`, `recordBase`, `prisms`/`slabs`/`grids` in the program), `massingMaterial.ts` (its pulse and room look kept in
+  `facadePulse.ts` for the facade level), `kit.massing`, `kit.massingBase`. Cost: the base now weighs what the plate weighs (it never lets go).
+- DONE (step f, committed): the plate has no job nor mesh of its own: its base is it. `massCells.ts` keeps the plate as a level of the choice
+  (Cesium's replacement from the top), `standsFor` reading its base's mesh, `landBase` giving the plate its error, top and box; a plate drawn
+  whole is its base drawing all its cells (`drawnBy` null under it, `syncBases`), never let go for the budget. `massLevels.ts` plans plates,
+  never asks them ('massPlate' gone from `JobKind`, `cellPool.ts`, `cellWork.ts`), a plate's `outdated` its base's. One copy of L3 on the GPU.
+- KEPT, DECIDED: the frame's error scale (`frameBudget.ts`) and the detail's byte cap (`massCells.ts` cap) still move the screen error a level
+  is picked by under load. Every level now is the same form (the facade level's format, materials, paints and runs; a coarser one only leaves
+  out what spans under its pixels), so the budget moves no placeholder in; taking it out unmeasured risks the frame on a mid PC.
+- MEASURED 2026-10-27 (far sheet, reports/far-sheet/2026-10-27-now, same tower every level): the masonry tower's wall at 2000 m is
+  L0 119,105,88 / L1 125,112,99 / masses, tile, plate, base 94,91,82; roof L0 87 / masses 64. The masses' paints, openings and run kinds
+  equal the L1's (checked vertex means). What the masses lack is the facade's ELEMENTS: balconies, floor slabs, stone bands and pilasters,
+  sills (L1: 180 stone shell vertices plus the instanced parts; masses: 12). From afar they lighten and warm the wall; without them the tower
+  is darker, greyer and plain: the owner's "LOD different from the original". FIX TO DO: the mass stage records each element run per storey
+  (kind, depth, height band, paint), and the far levels draw them: the deep ones (balconies, slabs over the error) as their own boxes, the
+  rest as bands in the facade shader's grammar (F-shade terminals), so a level from afar keeps the original's covers and colours.
+  Also slower: the base now weighs what the plate does and is made for the whole map at the opening.
+- THE FIX BEING WRITTEN (2026-10-27, F-shade's far terminal: the masses are drawn past DETAIL_REACH 1.4 km, where a 1 m element is under a
+  pixel, so what reaches the screen is the elements' cover and colour over the wall): `massWalk` lays no bay, so (1) a `CoverProbe`
+  (`buildingMesh.ts`): a LevelShell that lays nothing and sums, for one bay run through the real `emitBay`, the frontal area and colour of every
+  face standing out of the wall (not the wall's own paint) and of every part `Emitter.put` lays (not SHADER_DRAWN: glass, frame, door,
+  shutter, which the facade shader draws), memoised by the bay's key (component, size, paints, neighbours, geometry); (2) `recordBlock` asks it
+  for every bay and records the cover (share, rgb) in the bay (BAY_FLOATS + 4, joined only when alike); (3) the run's vertices carry it
+  (`facadeCover`, Uint8 x4: rgb, share; 0 on the detail's and the L1's runs, whose elements are real); (4) `facadeLevel.ts` mixes the wall
+  toward the cover colour by its share as the bay falls under the pixels (`facadeSub`), as it does the windows. Then the far sheet again.
+- DONE 2026-10-27 (f6e59aa2, d067bf3c, 218f27bd): the facade's elements in the far levels (CoverShell over each bay's own emitBay, each
+  side's mean on the runs' `facadeCover`, roofs measured from above), the masses' shells by the original's shell material (the far program drew
+  roofs 30 % darker), the levels chosen once a frame by the view (no error scale fitted by load: 2-6 whole choices a frame of a drag gone),
+  the covers kept once a kind of bay per worker (opening 150 s -> 92 s; 84 s before the covers). Far sheet (2000 m, masonry): wall 107,101,89
+  and roof 91,87,80 against the detail's 119,105,88 and 87,84,78 (were 94,91,82 and 65). Photo: reports/in-game/2026-10-27-one-building/12-city-far.png.
+  NOT MEASURED: the frame time of a camera drag in the large city after these changes.
+- NEXT: (g) one game pass with photos (near, district, far, the whole map) of the buildings at every zoom; then push.
+- FOUND, NOT OURS: `tests/render/buildingsVisibleSame.spec.ts` "lays every shell triangle where HEAD laid it" fails on house/cut0 (12
+  triangles not in its baseline); it fails the same at c97ff615, before this session, and passes at a6c86e62.
+- FOUND, NOT OURS: `tests/render/cellAffinity.spec.ts` "runs a square's masses at every level on one worker" fails (both tiles go to the
+  second worker); it fails the same at a6c86e62, before this work.
 
 ## The owner's standing orders (latest first, 2026-10-27)
 - Everything about the project is recorded INSIDE the project (this folder), never only in a user's Claude files.

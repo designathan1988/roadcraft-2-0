@@ -125,7 +125,7 @@ async function tour(tier: QualityLevel): Promise<{ stops: Stop[]; frames: number
   const stop = (name: string): void => {
     const { holes, by } = buildingCensus(city);
     const { missing, nearMB, farMB, networkMB, roadsMB } = roadCensus(city, roads);
-    const masses = ['plate masses', 'tile masses', 'cell masses', 'base masses'] as const;
+    const masses = ['tile masses', 'cell masses', 'base masses'] as const;
     stops.push({
       name, holes: holes.slice(0, 12), by, baseMB: gpuLedger.bytes('base masses') / MIB,
       massesMB: masses.reduce((sum, cls) => sum + gpuLedger.bytes(cls), 0) / MIB, evictions: city.scene.buildingLevels()['evictions'] ?? 0,

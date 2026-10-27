@@ -87,8 +87,12 @@ describe('the far level of a building', () => {
       const mass = massesOf(b, () => 0);
       if (!mass) continue;
       const far: number[] = [], fineFar: number[] = [], near: number[] = [];
-      samples(mass.position, mass.index, far);
-      samples(mass.position, mass.index, fineFar, FINE);
+      // Its shells and its runs of bays (`massShells`), each fragment sampled.
+      for (const f of [...Object.values(mass.shells), ...Object.values(mass.runs ?? {})]) {
+        if (!f) continue;
+        samples(f.position, f.index, far);
+        samples(f.position, f.index, fineFar, FINE);
+      }
       // The detailed building whole: its plain faces and its walls laid as runs of bays (`emitFacadeRuns` near).
       const detail = emitChunk(b, () => 0);
       for (const shell of [...Object.values(detail.shells), ...Object.values(detail.runs ?? {})]) if (shell) samples(shell.position, shell.index, near);

@@ -23,7 +23,6 @@ import { SHELL_NORMAL } from './cellArrays';
 import { createFurnitureGeometries, createFurnitureMaterial, furnitureTones } from './furnitureKit';
 import type { FurnitureKind } from '@world/buildings/interior';
 import { NIGHT_LUMINANCE, lightPoolTexture, luminanceOf } from '../lightLevels';
-import { createMassingMaterial } from './massingMaterial';
 import { posePart } from './partPose';
 import { type FacadePanes, createFacadeMaterial } from './facadeLevel';
 import { CARD, CARD_ATTRIBUTE, prefilterThinParts, twoSided } from './thinParts';
@@ -160,10 +159,6 @@ export interface BuildingKit {
   readonly dimParts: MeshStandardMaterial;
   /** Each finish's colour from afar (`finishes.ts` `finishAlbedo`), for the far level of the buildings. */
   readonly finishTone: Readonly<Record<Finish, readonly [number, number, number]>>;
-  /** Buildings seen from afar, their windows drawn by the shader (`massing.ts`, `massingMaterial.ts`). */
-  readonly massing: MeshStandardMaterial;
-  /** The base's, the top level's (`massBase.ts`): each face shaded by its slope, a colour a triangle. */
-  readonly massingBase: MeshStandardMaterial;
   /** The facade level (L1): the shells with their openings drawn by the shader, every finish (`facadeLevel.ts`). */
   readonly facade: MeshStandardMaterial;
   /** The detail level's runs of bays: the near shell's maps and wear, its openings closed by their own panes (`facadeLevel.ts` `covered`). */
@@ -635,8 +630,6 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
 
   // How bright a lit window glows from afar: set with the detailed panes' (`setNight`).
   const massingNight = { value: 0 };
-  const massing = createMassingMaterial({ roomsAwake, massingNight, roomDaylight });
-  const massingBase = createMassingMaterial({ roomsAwake, massingNight, roomDaylight }, true);
   // The facade level's walls: the shell's every finish, its openings drawn with the panes', doors' and frames' looks (`facadeLevel.ts`).
   const panes = { glass: material.glass, glassDark: material.glassDark, door: material.door, shutter: material.shutter, frame: material.frame } as FacadePanes;
   // The facade level stands past the detail's reach (`massCells.ts` FINE_PIXELS, ~280 m at 1080p), where a finish's 15 cm features are half a pixel: its walls drawn by the shell's far program, its windows, frames and panes as they are. DO NOT give it the near program: its maps, normal frame and wear weighed on every wall of every facade cell of the view for texture no pixel resolved.
@@ -645,7 +638,7 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
   const facadeNear = createFacadeMaterial(createShellMaterial({}, anisotropy), panes, { roomsAwake, massingNight, roomDaylight }, 'building-facade-near');
   // A ruin's pieces: the drawn models with what the wall or the next piece hid put back (`BuildingKit.whole`).
   const whole: Record<PartKind, BufferGeometry> = { ...geometry, railing: railingGeometry(true) };
-  const unique = new Set<Material>([...Object.values(material), shell, ruinShell, farShell, dimShell, facade, facadeNear, ghostShell, ghostParts, dimParts, massing, massingBase]);
+  const unique = new Set<Material>([...Object.values(material), shell, ruinShell, farShell, dimShell, facade, facadeNear, ghostShell, ghostParts, dimParts]);
   // LEVELS OF DETAIL: each kind's finest, then lighter ones by what they leave out (a frame's depth, a blade's thickness)
   const levels = {} as Record<PartKind, PartLevel[]>;
   for (const kind of PART_KINDS) levels[kind] = [{ geometry: geometry[kind], triangles: trianglesOf(geometry[kind]), error: [0, 0, 0] }];
@@ -726,8 +719,6 @@ objectNormal = shellUnfold(${SHELL_NORMAL});
     ghostParts,
     dimShell,
     dimParts,
-    massing,
-    massingBase,
     facade,
     facadeNear,
     finishTone: finishAlbedo(),

@@ -51,7 +51,7 @@ function difference(a: unknown, b: unknown): string {
   return '';
 }
 
-/** Three cells of one tile (t:0,0), one plate (p:0,0) and one base (b:0,0), a few presets each. */
+/** Three cells of one tile (t:0,0) and one base (b:0,0, its plate's level), a few presets each. */
 const CELLS = ['0,0', '1,0', '0,1'] as const;
 function town(): Map<string, Building[]> {
   const byCell = new Map<string, Building[]>();
@@ -79,7 +79,7 @@ describe('a square level joined from its cells\' slices', () => {
     vi.unstubAllGlobals();
   });
 
-  it('re-joins the tile, the plate and the base of an edited building from its cell alone, every other cell read as kept', async () => {
+  it('re-joins the tile and the base (the plate\'s level) of an edited building from its cell alone, every other cell read as kept', async () => {
     const { CellPool } = await import('@render/buildings/cellPool');
     const { MassLevels } = await import('@render/buildings/massLevels');
     const store = new MemorySlices();
@@ -91,10 +91,11 @@ describe('a square level joined from its cells\' slices', () => {
     for (const [cell, list] of byCell) levels.touch(cell, packed(list));
     levels.flush(env);
     await CellWorker.drainAll();
-    expect([...masses.keys()].sort()).toEqual(['p:0,0', 't:0,0']);
+    // No job of the plate's: its base is it (`massBase.ts`).
+    expect([...masses.keys()].sort()).toEqual(['t:0,0']);
     expect([...bases.keys()]).toEqual(['b:0,0']);
-    // Each cell's slice of each level kept: three cells, three levels.
-    expect(store.kept.size).toBe(CELLS.length * 3);
+    // Each cell's slice of each level kept: three cells, two levels.
+    expect(store.kept.size).toBe(CELLS.length * 2);
 
     /** A level as every building of it walked at once on the page, no slice (the join's reference). */
     const reference = (kind: JobKind, key: string, cells: Map<string, Building[]>): CellResult => {
@@ -108,7 +109,6 @@ describe('a square level joined from its cells\' slices', () => {
     };
     // The levels joined from slices are the levels made whole, byte for byte.
     expect(difference(masses.get('t:0,0'), reference('massTile', 't:0,0', byCell).mass)).toBe('');
-    expect(difference(masses.get('p:0,0'), reference('massPlate', 'p:0,0', byCell).mass)).toBe('');
     expect(difference(bases.get('b:0,0'), reference('massBase', 'b:0,0', byCell).base)).toBe('');
 
     // One building of cell 1,0 edited (moved two metres): its cell filed again, its levels asked again.
@@ -123,7 +123,7 @@ describe('a square level joined from its cells\' slices', () => {
     levels.flush(env);
     await CellWorker.drainAll();
     const jobs = CellWorker.made.flatMap((w, k) => w.jobs.slice(ranBefore[k]));
-    expect(jobs.map((j) => j.kind).sort()).toEqual(['massBase', 'massPlate', 'massTile']);
+    expect(jobs.map((j) => j.kind).sort()).toEqual(['massBase', 'massTile']);
     const editedKeys = edited.map((b) => String(b.id)).sort();
     for (const job of jobs) {
       // Only the edited cell's buildings sent; the two other cells handed as their kept slices.
@@ -131,16 +131,15 @@ describe('a square level joined from its cells\' slices', () => {
       expect(job.spans).toEqual([{ cell: '1,0', count: edited.length }]);
       expect(job.slices!.map((s) => s.cell).sort()).toEqual(['0,0', '0,1']);
     }
-    // No building of another cell walked or read: each of the three levels read the edited cell's buildings, no more; the moved one walked.
-    expect(reads()).toBe(3 * edited.length);
+    // No building of another cell walked or read: each of the two levels read the edited cell's buildings, no more; the moved one walked.
+    expect(reads()).toBe(2 * edited.length);
     expect(walks()).toBeGreaterThanOrEqual(1);
-    expect(walks()).toBeLessThanOrEqual(3);
+    expect(walks()).toBeLessThanOrEqual(2);
     // The edited cell's new slices kept, its old ones forgotten.
-    expect(store.forgotten).toHaveLength(3);
-    expect(store.kept.size).toBe(CELLS.length * 3);
+    expect(store.forgotten).toHaveLength(2);
+    expect(store.kept.size).toBe(CELLS.length * 2);
     // And the levels re-joined are the levels made whole with the edit.
     expect(difference(masses.get('t:0,0'), reference('massTile', 't:0,0', byCell).mass)).toBe('');
-    expect(difference(masses.get('p:0,0'), reference('massPlate', 'p:0,0', byCell).mass)).toBe('');
     expect(difference(bases.get('b:0,0'), reference('massBase', 'b:0,0', byCell).base)).toBe('');
     // ...and differ from before the edit (the edit is in them).
     const before = town();
@@ -161,7 +160,7 @@ describe('a square level joined from its cells\' slices', () => {
     await CellWorker.drainAll();
     const base = asked.find((a) => a.key === 'cells:massBase|b:0,0');
     expect(base?.priority).toBe(FAR_TIER * TIER_SPAN);
-    // The base the first job asked (the plate waits its turn, no tile is wanted).
+    // The base the first job asked (no tile is wanted; the plate is the base's).
     expect(asked[0]?.key).toBe('cells:massBase|b:0,0');
   });
 });

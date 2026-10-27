@@ -2675,7 +2675,7 @@ export function createSceneRenderer(
     tiny.setAttribute('uv', new Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2));
     tiny.setAttribute('aDecay', new Float32BufferAttribute([0, 0, 0], 1));
     const group = new Group();
-    const mats = [kit.shellMaterial, kit.ruinShell, kit.facade, ...Object.values(kit.material), kit.furniture().material, kit.massing];
+    const mats = [kit.shellMaterial, kit.ruinShell, kit.facade, ...Object.values(kit.material), kit.furniture().material];
     for (const mat of mats) {
       const mesh = new Mesh(tiny, mat);
       mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
@@ -3719,7 +3719,7 @@ export function createSceneRenderer(
         detailFrustum.setFromProjectionMatrix(detailProjection, rig.camera.coordinateSystem, rig.camera.reversedDepth);
         // The sun's cascades are made by three at their first draw: counted as they stand before the detail is chosen.
         gpuLedger.set('shadow maps', 'shadow maps', renderTargetsBytes(environment.shadowMaps()));
-        // The view's budget of triangles (`core/perfBudget.ts`): the levels' error scale rises until they fit (`buildings/frameBudget.ts`).
+        // The view's budget of triangles (`core/perfBudget.ts`): over it the farthest cells step down first (`layer.ts` capTriangles), the levels chosen once by the view.
         buildings.frame.budget = buildingChoices.triangles === 0 ? Infinity : VIEW_BUDGETS[viewOf(rig.viewport.zoom)].triangles * buildingChoices.triangles * quality.triangleScale;
         buildings.levelOfDetail(ex, ey, ez, pxAtMetre * optimizer.buildingPx, rig.perspective ? null : rig.viewport.zoom, reach, detailFrustum);
         // DO NOT leave a road just built invisible until the world's build lands (over 2 s, the player): drawn now from the network the commit solved, let go by the build of the commit's revision landing, every commit not landed yet standing.

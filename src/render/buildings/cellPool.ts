@@ -20,7 +20,7 @@ declare const __CELL_WORK_HASH__: string | undefined;
 const CELL_HASH = typeof __CELL_WORK_HASH__ !== 'undefined' && __CELL_WORK_HASH__ ? __CELL_WORK_HASH__ : null;
 const CELL_PREFIX = CELL_HASH ? `cellWork:${CELL_HASH}:` : null;
 /** The kinds kept: every level of a cell a view draws, the detail ('cell') with them. DO NOT make them again at every launch: the same buildings on the same ground made the same masses, 117 jobs and ~3 s of every worker before a reopened city showed (2026-10-21). DO NOT leave the detail out: a worker made it again every time the eye came back to a cell, and the facade level and the masses stood as boxes 4-6 s at each approach (the city tour, 2026-10-27). The summaries are the page's alone. */
-const KEPT_KINDS: ReadonlySet<JobKind> = new Set(['cell', 'facade', 'mass', 'massTile', 'massPlate', 'massBase']);
+const KEPT_KINDS: ReadonlySet<JobKind> = new Set(['cell', 'facade', 'mass', 'massTile', 'massBase']);
 let forgotOthers = false;
 /** The keys kept, read once at the start (a keys-only read) and added to as results are kept: a job not in it is asked at once. DO NOT read the store before every job: a read waits for every write on the store before it (IndexedDB transactions), the road tiles' and the cells' own, and a city not kept yet opened 4 s later (2026-10-21). With them, the one key kept of each level and cell (`levelOfStored`), followed as results are kept (`keptResult`). */
 let keptKeys: Promise<{ readonly keys: Set<string>; readonly byLevel: Map<string, string> }> | null = null;
@@ -120,7 +120,7 @@ function derivedSlices(prefix: string | null, store: KeptStore = { read: readDer
 }
 
 /** The kinds joined from their cells' slices (`CellJob.spans`). */
-const SLICED_KINDS: ReadonlySet<JobKind> = Object.freeze(new Set<JobKind>(['massTile', 'massPlate', 'massBase']));
+const SLICED_KINDS: ReadonlySet<JobKind> = Object.freeze(new Set<JobKind>(['massTile', 'massBase']));
 
 /** THE PAGE'S SIDE OF THE CELLS PUT TOGETHER IN WORKERS (`cellWork.ts`, `cell.worker.ts`), through the job system's one queue (`jobPool.ts` `submitJob`) */
 
@@ -134,7 +134,7 @@ export interface CellEnv {
 /** How far past its cell a job's buildings read the paving off the roads handed to its worker (`PavingData`) */
 const PAVING_REACH = m(64);
 /** Which jobs go first, a band each, nearest the eye first within a band: the detail, its far level, the masses, the summaries; the base (the top level, `massBase.ts`) in the far levels' band (`FAR_TIER`), before them all. */
-const TIER: Readonly<Record<JobKind, number>> = { cell: 0, facade: 1, mass: 2, massTile: 2.5, massPlate: 2.75, summary: 3, massBase: -0.5 };
+const TIER: Readonly<Record<JobKind, number>> = { cell: 0, facade: 1, mass: 2, massTile: 2.5, summary: 3, massBase: -0.5 };
 /** A band: farther than any cell of any map is from the eye (the far levels' jobs take a band of their own, `farLevels.ts`). */
 export const TIER_SPAN = m(10_000_000);
 /** The bands the detail is put back by while the town is unseen (`coarseFirst`): past the masses (2-2.75). */

@@ -1,17 +1,17 @@
-import { Box3, BufferAttribute, BufferGeometry, Group, InterleavedBuffer, InterleavedBufferAttribute, type InstancedMesh, Mesh, MeshStandardMaterial, type Object3D, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, ShaderMaterial, SRGBColorSpace, Vector3, WebGLRenderer, ACESFilmicToneMapping } from 'three';
+import { Box3, Group, type InstancedMesh, Mesh, MeshStandardMaterial, type Object3D, PCFShadowMap, PerspectiveCamera, PlaneGeometry, Scene, ShaderMaterial, SRGBColorSpace, Vector3, WebGLRenderer, ACESFilmicToneMapping } from 'three';
 import { Rng } from '@core/rng';
 import { CELL } from '@world/cells';
 import { instantiate } from '@world/buildings/blueprints';
 import { madeToMeasure } from '@world/buildings/procedural';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { m } from '@world/units';
-import { assembleBuildingMeshes, emitProgram } from '../render/buildings/buildingMesh';
+import { type MassShells, assembleBuildingMeshes, emitProgram, massShells } from '../render/buildings/buildingMesh';
 import { cellMass } from '../render/buildings/cellArrays';
 import { type BuildingKit, type PartKind, createBuildingKit } from '../render/buildings/kit';
 import { COARSE_PARTS } from '../render/buildings/layerCells';
-import { BASE_VERTEX, type BaseMass, type BasePiece, BaseWriter, GRID_SHORTS, writeBase } from '../render/buildings/massBase';
+import { baseCellOf, joinBase } from '../render/buildings/massBase';
 import { cellMesh } from '../render/buildings/massCells';
-import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, massFloor, massOf } from '../render/buildings/massing';
+import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, massFloor } from '../render/buildings/massing';
 import type { PartView } from '../render/buildings/partCells';
 import { SHELL_PARTS } from '../render/buildings/shellParts';
 import { type SceneEnvironment, createEnvironment, sunShadowChunks } from '../render/environment';
@@ -22,8 +22,8 @@ import { type SteadyTiming, timeFrame } from './steadyTiming';
 /**
  * THE FAR BUILDINGS' SHEET (`scripts/far-building-sheet.mjs`): a glass tower and a masonry tower drawn by every level of the building layer, each
  * as the layer draws it - the detail (L0: the near program's shells and the near cells' parts, `partLadderSheet.ts` nearCells), the facade level
- * (L1: the far program's shells and the town's far batch), the masses at the cell's, the tile's and the plate's detail (`massing.ts` massOf over
- * the program, `massCells.ts` cellMesh) and the base (`massBase.ts`, for information) - under the game's own sky, sun, cascades and light at the
+ * (L1: the far program's shells and the town's far batch), the masses at the cell's, the tile's and the plate's detail (`buildingMesh.ts` massShells
+ * over the program, `massCells.ts` cellMesh) and the base (`massBase.ts`: the plate's level cell by cell) - under the game's own sky, sun, cascades and light at the
  * hour the game opens on (`environment.ts`), at the screen's own size (1920 x 1080, the iso rig's 35°), looked at as the Home view (V0) looks at
  * downtown, from several distances. Each shot: the tower's crop, three's draws and triangles of it alone, the mean colour of each of its faces
  * (the light averaged, as the eye averages a face it cannot resolve). And a district of towers at the masses' and the facade level from the V0 and
@@ -151,17 +151,26 @@ function levelsOf(kit: BuildingKit, buildings: readonly Building[], levels: read
       group.add(shells.group, parts.group);
       out.set(level, { group, look: (v) => parts.look(v), cast: (t) => parts.cast(t), dispose() { parts.dispose(); shells.dispose(); } });
     } else if (level === 'base') {
-      const writer = new BaseWriter();
-      for (const { b, p } of programs) writeBase(writer.cellOf(b), p);
+      // As the layer's base job lays it (`cellWork.ts` massBase): each building at the plate's detail, cell by cell, on the square's grid.
+      const byCell = new Map<string, MassShells[]>();
+      for (const { b, p } of programs) {
+        const chunk = massShells(p, PLATE_DETAIL);
+        const cell = baseCellOf(b);
+        const list = byCell.get(cell) ?? [];
+        if (chunk) list.push(chunk);
+        byCell.set(cell, list);
+      }
       const xs = buildings.map((b) => Math.floor(b.x / CELL)), ys = buildings.map((b) => Math.floor(b.y / CELL));
       const i0 = Math.min(...xs), j0 = Math.min(...ys);
-      const base = writer.done({ i0, j0, n: Math.max(Math.max(...xs) - i0, Math.max(...ys) - j0) + 1 });
-      const meshes = base ? base.pieces.map((piece) => baseMeshOf(piece, base.place, kit)) : [];
-      group.add(...meshes);
-      out.set(level, still(group, () => { for (const mesh of meshes) mesh.geometry.dispose(); }));
+      const order = (key: string): [number, number] => key.split(',').map(Number) as [number, number];
+      const cells = [...byCell].sort(([p], [q]) => order(p)[0] - order(q)[0] || order(p)[1] - order(q)[1]);
+      const base = joinBase(cells.map(([cell, list]) => ({ cell, mass: cellMass(list) })), { i0, j0, n: Math.max(Math.max(...xs) - i0, Math.max(...ys) - j0) + 1 });
+      const mesh = base?.mass ? cellMesh(base.mass, kit, 'building-massing-base') : null;
+      if (mesh) group.add(mesh);
+      out.set(level, still(group, () => { mesh?.geometry.dispose(); }));
     } else {
       const detail: MassDetail = level === 'cell' ? CELL_DETAIL : level === 'tile' ? TILE_DETAIL : PLATE_DETAIL;
-      const chunks = programs.flatMap(({ p }) => { const c = massOf(p, detail); return c ? [c] : []; });
+      const chunks = programs.flatMap(({ p }) => { const c = massShells(p, detail); return c ? [c] : []; });
       const mass = cellMass(chunks);
       const mesh = mass ? cellMesh(mass, kit, `building-massing-${level}`) : null;
       if (mesh) group.add(mesh);
@@ -169,28 +178,6 @@ function levelsOf(kit: BuildingKit, buildings: readonly Building[], levels: read
     }
   }
   return out;
-}
-
-/** A base's piece as the layer draws it (`massCells.ts` baseMesh: its vertices one buffer of shorts, its place on its grid read normalised and
- *  put in place by the mesh's matrix, its paint), every cell of it drawn (the layer leaves a group a cell the base draws, `syncBases`). */
-function baseMeshOf(piece: BasePiece, place: BaseMass['place'], kit: BuildingKit): Mesh {
-  const g = new BufferGeometry();
-  const vertices = new InterleavedBuffer(piece.vertices, BASE_VERTEX);
-  g.setAttribute('position', new InterleavedBufferAttribute(vertices, 3, 0, true));
-  g.setAttribute('basePaint', new InterleavedBufferAttribute(vertices, 1, 3, true));
-  // Its block's facade grid as whole shorts (`massBase.ts` gridShorts): not normalised, read as the integers they are.
-  g.setAttribute('baseGrid', new InterleavedBufferAttribute(vertices, GRID_SHORTS, 4, false));
-  g.setIndex(new BufferAttribute(piece.index, 1));
-  g.addGroup(0, piece.index.length, 0);
-  const mesh = new Mesh(g, [kit.massingBase]);
-  mesh.position.set(place.x, place.y, place.z);
-  mesh.scale.setScalar(place.step * 65535);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  // Its box on its grid: three culls by the geometry's own frame.
-  mesh.frustumCulled = false;
-  mesh.name = 'building-massing-base';
-  return mesh;
 }
 
 /** The eye `distance` from `target`, looking at it as the Home view looks at downtown. */

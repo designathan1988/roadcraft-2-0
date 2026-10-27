@@ -9,17 +9,19 @@ import { createBuildingKit } from '@render/buildings/kit';
 import { createMassCells } from '@render/buildings/massCells';
 import type { PackedEntries } from '@render/buildings/chunk';
 import { MassLevels } from '@render/buildings/massLevels';
-import { plateOf, tileOf } from '@render/buildings/levelKeys';
-import { CELL_DETAIL, PLATE_DETAIL, TILE_DETAIL, massFloor, massOf } from '@render/buildings/massing';
+import { baseOf, levelCells, plateOf, tileOf } from '@render/buildings/levelKeys';
+import { type BaseMass, joinBase } from '@render/buildings/massBase';
+import { CELL_DETAIL, PLATE_DETAIL, TILE_DETAIL, massFloor } from '@render/buildings/massing';
+import { massShells } from '@render/buildings/buildingMesh';
 import { emitProgram } from '@render/buildings/buildingMesh';
-import { massesOf } from './support/masses';
+import { massCorners, massesOf } from './support/masses';
 import { drawsSignature } from '@render/buildings/signature';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
 import type { Building } from '@world/buildings/types';
 import { m } from '@world/units';
 import { CELL } from '@world/cells';
 
-/** THE BUILDINGS' TILES (L2) AND PLATES (L3): chosen by their error on the screen, in place of their cells, asked again only where a cell changed */
+/** THE BUILDINGS' TILES (L2) AND PLATES (L3, drawn by their base, `massBase.ts`): chosen by their error on the screen, in place of their cells, asked again only where a cell changed */
 const flat = (): number => 0;
 
 function building(index: number, x: number, y: number): Building {
@@ -33,13 +35,21 @@ function masses(x: number, y: number, error = 0): CellMass {
   return { ...cellMass(chunks)!, error };
 }
 
+/** A plate's level as it comes: its square's base (`massBase.ts`), the masses of `cells` (each as `masses` lays a cell) with the error it left out. */
+function plateBase(error: number, cells: readonly string[] = ['0,0']): BaseMass {
+  return joinBase(cells.map((cell) => {
+    const [i, j] = cell.split(',').map(Number) as [number, number];
+    return { cell, mass: masses(i * CELL + m(10), j * CELL + m(10), error) };
+  }), levelCells(baseOf(0, 0)))!;
+}
+
 const meshNamed = (root: Object3D, name: string): Mesh[] => {
   const out: Mesh[] = [];
   root.traverse((o) => { if (o.name === name && (o as Mesh).isMesh) out.push(o as Mesh); });
   return out;
 };
 
-describe('a tile or a plate of masses drawn in place of its cells', () => {
+describe('a tile or a plate (its base) drawn in place of its cells', () => {
   it('lets nothing go for a coarser choice a frame tried and did not keep: the masses neither leave the scene nor are asked again (the still view, `__stillLog`)', () => {
     const kit = createBuildingKit();
     const released: string[] = [];
@@ -50,7 +60,7 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     const choose = (orthoPx: number): void => far.choose(m(128), m(128), m(500), 1000, orthoPx, false);
     choose(2);
     far.landLevel(tileOf(0, 0), masses(m(10), m(10), m(4)));
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10), ['0,0', '1,0']));
     choose(2);
     far.settle();
     const before = meshNamed(far.group, 'building-massing');
@@ -87,11 +97,12 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     // Close first: the plate refined, so its tile is wanted and its masses taken.
     look(2);
     far.landLevel(tileOf(0, 0), masses(m(10), m(10), m(4)));
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10), ['0,0', '1,0']));
     // A cell's mesh by where it stands.
     const cellMesh = (key: string): Mesh | undefined => meshNamed(far.group, 'building-massing').find((mesh) => (mesh.geometry.boundingBox!.min.x < CELL) === (key === '0,0'));
     const tile = meshNamed(far.group, 'building-massing-tile')[0]!;
-    const plate = meshNamed(far.group, 'building-massing-plate')[0]!;
+    // The plate drawn: its base drawing its cells (`syncBases`).
+    const byPlate = (key: string): boolean => { far.syncBases(); return far.census().get(key) === 'base'; };
 
     // Close: the cells, near; no level drawn.
     look(2);
@@ -99,13 +110,13 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     expect(far.coarse(plateOf(0, 0))).toBe(false);
     expect(far.near('0,0')).toBe(true);
     expect(tile.visible).toBe(false);
-    expect(plate.visible).toBe(false);
+    expect(byPlate('0,0')).toBe(false);
     // A tile's 4 m under 2 px (0.3 px a metre): the tile, its cells far and their masses let go (neither drawn nor wanted).
     look(0.3);
     expect(far.coarse(tileOf(0, 0))).toBe(true);
     expect(far.coarse(plateOf(0, 0))).toBe(false);
     expect(tile.visible).toBe(true);
-    expect(plate.visible).toBe(false);
+    expect(byPlate('0,0')).toBe(false);
     for (const key of ['0,0', '1,0']) {
       expect(far.near(key)).toBe(false);
       expect(cellMesh(key)).toBeUndefined();
@@ -120,7 +131,7 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     look(0.1);
     expect(far.coarse(plateOf(0, 0))).toBe(true);
     expect(far.coarse(tileOf(0, 0))).toBe(false);
-    expect(plate.visible).toBe(true);
+    expect(byPlate('0,0') && byPlate('1,0')).toBe(true);
     expect(meshNamed(far.group, 'building-massing-tile')).toEqual([]);
     expect(released).toEqual([tileOf(0, 0)]);
     expect(far.wanted(tileOf(0, 0))).toBe(false);
@@ -134,9 +145,9 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     expect(far.coarse(plateOf(0, 0))).toBe(false);
     expect(far.coarse(tileOf(0, 0))).toBe(false);
     expect(far.near('0,0')).toBe(true);
-    // Back close: the cells again, their masses asked again and shown (no detail landed for them).
+    // Back close: the cells again, their masses asked again and shown (no detail landed for them; the base under them meanwhile).
     look(2);
-    expect(plate.visible).toBe(false);
+    expect(far.coarse(plateOf(0, 0))).toBe(false);
     expect(far.near('1,0')).toBe(true);
     expect([...far.exposedCells()].sort()).toEqual(['0,0', '1,0']);
     far.land('0,0', masses(m(10), m(10)));
@@ -162,7 +173,7 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     far.planLevel(tileOf(0, 0));
     far.plan('0,0', 0, m(30));
     const look = (orthoPx: number): void => far.choose(m(128), m(128), m(500), 1000, orthoPx, false);
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10)));
     look(0.1);
     expect(far.coarse(plateOf(0, 0))).toBe(true);
     // Nearer: the tile is wanted and has not come; the plate stays drawn meanwhile.
@@ -190,7 +201,7 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     const far = createMassCells(kit, CELL);
     // Plate p:0,0 holds the tiles t:0,0 (cells 0..3) and t:-1,0 (cells -4..-1).
     for (const [i, key] of [[0, '0,0'], [-4, '-4,0']] as const) { far.planLevel(tileOf(i, 0)); far.plan(key, 0, m(30)); }
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10)));
     far.choose(m(128), m(128), m(500), 1000, 0.1, false);
     expect(far.coarse(plateOf(0, 0))).toBe(true);
     // The view over x and y 300-1000 m: tile t:0,0 in it, t:-1,0 (x under 0) out of it - not asked while the curtain is up (`layer.ts` deferred).
@@ -212,12 +223,12 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     kit.dispose();
   });
 
-  it('over the budget, lets go a plate in the view its tiles draw, and asks it back only once the view wants it whole (low)', () => {
+  it('over the budget, never lets go a plate: it is its base, drawn under its tiles and asked for good (`massBase.ts`)', () => {
     const kit = createBuildingKit();
     const far = createMassCells(kit, CELL);
     far.planLevel(tileOf(0, 0));
     far.plan('0,0', 0, m(30));
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10)));
     const view = new Frustum(
       new Plane(new Vector3(1, 0, 0), m(2000)), new Plane(new Vector3(-1, 0, 0), m(2000)),
       new Plane(new Vector3(0, 0, 1), m(2000)), new Plane(new Vector3(0, 0, -1), m(2000)),
@@ -225,22 +236,19 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     const look = (orthoPx: number): void => far.choose(m(128), m(128), m(500), 1000, orthoPx, false, Infinity, view);
     look(0.1);
     expect(far.coarse(plateOf(0, 0))).toBe(true);
-    // Drawn whole: never let go, whatever the budget.
     expect(far.evictLevels(0)).toBe(0);
-    // Nearer: its tile drawn in its place, the plate idle in the view - let go, and not asked again while its tile draws it.
+    // Nearer: its tile drawn in its place, the plate idle in the view - still there, nothing of it let go.
     look(0.3);
     far.landLevel(tileOf(0, 0), masses(m(10), m(10), m(4)));
     look(0.3);
     expect(far.coarse(tileOf(0, 0))).toBe(true);
-    expect(far.evictLevels(0)).toBeGreaterThan(0);
-    expect(far.levelDrawn(plateOf(0, 0))).toBe(false);
-    look(0.3);
-    expect(far.askable(plateOf(0, 0))).toBe(false);
-    expect(far.coarse(tileOf(0, 0))).toBe(true);
-    // Back out: the view wants it whole, it is asked; its tile stands meanwhile (no hole).
-    look(0.1);
+    expect(far.evictLevels(0)).toBe(0);
+    expect(far.levelDrawn(plateOf(0, 0))).toBe(true);
     expect(far.askable(plateOf(0, 0))).toBe(true);
-    expect(far.coarse(tileOf(0, 0))).toBe(true);
+    // Back out: drawn whole at once, nothing waited for.
+    look(0.1);
+    expect(far.coarse(plateOf(0, 0))).toBe(true);
+    expect(far.coarse(tileOf(0, 0))).toBe(false);
     far.dispose();
     kit.dispose();
   });
@@ -256,9 +264,9 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
       expect(c.error).toBe(0);
       expect(t!.error).toBeLessThanOrEqual(TILE_DETAIL.drop);
       expect(p!.error).toBeLessThanOrEqual(PLATE_DETAIL.drop);
-      expect(t!.index.length).toBeLessThanOrEqual(c.index.length);
-      expect(p!.index.length).toBeLessThanOrEqual(t!.index.length);
-      cell += c.index.length; tile += t!.index.length; plate += p!.index.length;
+      expect(massCorners(t!)).toBeLessThanOrEqual(massCorners(c));
+      expect(massCorners(p!)).toBeLessThanOrEqual(massCorners(t!));
+      cell += massCorners(c); tile += massCorners(t!); plate += massCorners(p!);
       tileError = Math.max(tileError, t!.error); plateError = Math.max(plateError, p!.error);
     }
     expect(tile).toBeLessThan(cell);
@@ -272,12 +280,12 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
       for (const turn of [0, 0.7]) {
         const b = { ...building(i, 0, 0), rotation: turn };
         const floor = massFloor(b, flat) ?? null;
-        // One program (`emitProgram`), its every level a filter (`massOf`): nothing of it read from the record object or its memos again.
+        // One program (`emitProgram`), its every level a filter (`massShells`): nothing of it read from the record object or its memos again.
         const program = emitProgram(b, flat, undefined, flat, { near: false, far: false }, { floor });
         const copy = emitProgram(structuredClone(b), flat, undefined, flat, { near: false, far: false }, { floor });
-        for (const detail of [CELL_DETAIL, TILE_DETAIL, PLATE_DETAIL]) expect(massOf(program, detail)).toEqual(massOf(copy, detail));
+        for (const detail of [CELL_DETAIL, TILE_DETAIL, PLATE_DETAIL]) expect(massShells(program, detail)).toEqual(massShells(copy, detail));
         // The coarser the level, never more triangles.
-        const [c, t, p] = [CELL_DETAIL, TILE_DETAIL, PLATE_DETAIL].map((d) => massOf(program, d)?.index.length ?? 0);
+        const [c, t, p] = [CELL_DETAIL, TILE_DETAIL, PLATE_DETAIL].map((d) => { const s = massShells(program, d); return s ? massCorners(s) : 0; });
         expect(t).toBeLessThanOrEqual(c!);
         expect(p).toBeLessThanOrEqual(t!);
       }
@@ -289,15 +297,16 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
     const plain = BLUEPRINTS.findIndex((_, i) => !drawsSignature(building(i, 0, 0)));
     const b = building(plain, m(10), m(10));
     const job = (kind: JobKind): CellJob => ({
-      id: 1, kind, cell: 'x', paved: false, boxes: { parts: {}, furniture: {} } as unknown as CellJob['boxes'],
+      id: 1, kind, cell: kind === 'massBase' ? baseOf(0, 0) : 'x', paved: false, boxes: { parts: {}, furniture: {} } as unknown as CellJob['boxes'],
       entries: [{ key: '1', sig: 1, digest: 1, record: refOf(b) }, { key: '2', sig: 2, digest: 1, record: refOf({ ...b, id: 2 as Building['id'], x: m(80) }) }],
     });
     const mass = (kind: JobKind): CellMass => {
       const reply = runCellJob(job(kind), { groundAt: flat, naturalAt: flat });
       if (reply.kind !== 'done') throw new Error(reply.kind);
-      return reply.result.mass!;
+      return kind === 'massBase' ? reply.result.base!.mass! : reply.result.mass!;
     };
-    const cell = mass('mass'), tile = mass('massTile'), plate = mass('massPlate');
+    // The plate's level made by its base's job (`massBase.ts`).
+    const cell = mass('mass'), tile = mass('massTile'), plate = mass('massBase');
     expect(cell.error).toBe(0);
     expect(tile.index.length).toBeLessThanOrEqual(cell.index.length);
     expect(plate.index.length).toBeLessThanOrEqual(tile.index.length);
@@ -305,7 +314,7 @@ describe('a tile or a plate of masses drawn in place of its cells', () => {
   });
 });
 
-describe('the tiles and plates asked of the workers', () => {
+describe('the tiles and bases (the plates\' level) asked of the workers', () => {
   /** A pool that keeps what it is asked and answers when told. */
   function fakePool(): { pool: CellPool; asked: { kind: JobKind; key: string; entries: readonly CellEntry[] }[]; answer: () => void } {
     const asked: { kind: JobKind; key: string; entries: readonly CellEntry[]; done: (r: CellResult) => void; id: number }[] = [];
@@ -331,7 +340,7 @@ describe('the tiles and plates asked of the workers', () => {
   const entries = (...keys: string[]): PackedEntries => ({ ids: Float64Array.from(keys, (key) => key.charCodeAt(0)), sigs: Float64Array.from(keys, (_key, i) => i + 1), digest: 7 });
   const named = (list: readonly CellEntry[]): string[] => list.map((e) => String.fromCharCode(Number(e.key))).sort();
 
-  it('a change in one cell asks again its tile and its plate only, once for every cell touched', () => {
+  it('a change in one cell asks again its tile and its base only, once for every cell touched', () => {
     const { pool, asked, answer } = fakePool();
     const landed: string[] = [], removed: string[] = [];
     const levels = new MassLevels(pool, (key) => landed.push(key), (key) => removed.push(key), () => {}, () => true);
@@ -342,31 +351,30 @@ describe('the tiles and plates asked of the workers', () => {
     levels.touch('4,0', entries('e'));
     levels.flush(env);
     const keys = asked.map((a) => `${a.kind} ${a.key}`).sort();
-    // And the base over each plate's square, asked at once (`massBase.ts`).
-    expect(keys).toEqual(['massBase b:0,0', 'massBase b:1,0', 'massPlate p:0,0', 'massPlate p:1,0', 'massTile t:0,0', 'massTile t:1,0', 'massTile t:2,0'].sort());
-    // A tile is made of its cells' buildings; a plate of its tiles'.
+    // And the base over each plate's square, asked at once (`massBase.ts`): the plate's level, no job of the plate's.
+    expect(keys).toEqual(['massBase b:0,0', 'massBase b:1,0', 'massTile t:0,0', 'massTile t:1,0', 'massTile t:2,0'].sort());
+    // A tile is made of its cells' buildings; a base of its plate's.
     expect(named(asked.find((a) => a.key === 't:0,0')!.entries)).toEqual(['a', 'b', 'c']);
-    expect(named(asked.find((a) => a.key === 'p:0,0')!.entries)).toEqual(['a', 'b', 'c', 'e']);
     expect(named(asked.find((a) => a.key === 'b:0,0')!.entries)).toEqual(['a', 'b', 'c', 'e']);
-    expect(levels.asking).toBe(7);
+    expect(levels.asking).toBe(5);
     answer();
     expect(levels.asking).toBe(0);
     // The bases land by their own way (`landBase`).
-    expect(landed.length).toBe(5);
+    expect(landed.length).toBe(3);
 
     asked.length = 0;
-    // One cell changed: its tile and plate alone.
+    // One cell changed: its tile and base alone.
     levels.touch('9,0', entries('d', 'f'));
     // The same buildings on the same ground (the town filed again): nothing.
     levels.touch('0,0', entries('a', 'b'));
     levels.flush(env);
-    expect(asked.map((a) => a.key).sort()).toEqual(['b:1,0', 'p:1,0', 't:2,0']);
+    expect(asked.map((a) => a.key).sort()).toEqual(['b:1,0', 't:2,0']);
     // Changed again before it came: the older job cancelled, the newer one asked.
     levels.touch('9,0', entries('d'));
     levels.flush(env);
-    expect(levels.asking).toBe(3);
+    expect(levels.asking).toBe(2);
 
-    // Its last building gone: the tile and plate are removed, not asked.
+    // Its last building gone: the tile, the plate and the base are removed, not asked.
     asked.length = 0;
     levels.touch('9,0', null);
     levels.flush(env);
@@ -375,7 +383,7 @@ describe('the tiles and plates asked of the workers', () => {
     expect(levels.asking).toBe(0);
   });
 
-  it('asks a tile only once the view wants it (its plate refined), and every plate at once', () => {
+  it('asks a tile only once the view wants it (its plate refined), and every base at once', () => {
     const { pool, asked, answer } = fakePool();
     const planned: string[] = [];
     const wanted = new Set<string>();
@@ -384,8 +392,8 @@ describe('the tiles and plates asked of the workers', () => {
     // Cell 9: tile 2, plate 1 (the plates from the cells' origin, `levelKeys.ts`).
     levels.touch('9,0', entries('b'));
     levels.flush(env);
-    // The plates and the bases asked, the tiles only planned: a plate stands for them from afar.
-    expect(asked.map((a) => a.key).sort()).toEqual(['b:0,0', 'b:1,0', 'p:0,0', 'p:1,0']);
+    // The bases asked, the plates and the tiles only planned: a plate (its base) stands for them from afar.
+    expect(asked.map((a) => a.key).sort()).toEqual(['b:0,0', 'b:1,0']);
     expect(planned.sort()).toEqual(['b:0,0', 'b:1,0', 'p:0,0', 'p:1,0', 't:0,0', 't:2,0']);
     answer();
     asked.length = 0;
@@ -416,14 +424,14 @@ describe('a tile or a plate drawn before some of its buildings came in', () => {
     const far = createMassCells(kit, CELL, () => {});
     far.land('0,0', masses(m(10), m(10)));
     far.planLevel(plateOf(0, 0));
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10)));
     // From afar: the plate drawn in place of its cells.
     far.choose(m(128), m(128), m(500), 1000, 0.1, false);
     expect(far.coarse(plateOf(0, 0))).toBe(true);
     // A cell come in under it (a tile loaded): no mesh of its own, the plate standing in its place.
     far.plan('1,1');
     expect(far.drawn('1,1')).toBe(true);
-    // The plate's mesh of older buildings (`MassLevels.outdated`): drawing nothing of the cell.
+    // The plate's base of older buildings (`MassLevels.outdated`): drawing nothing of the cell.
     expect(far.drawn('1,1', (level) => level !== plateOf(0, 0))).toBe(false);
     far.dispose();
     kit.dispose();
@@ -438,7 +446,7 @@ describe('a tile or a plate drawn before some of its buildings came in', () => {
     far.choose(m(128), m(128), m(500), 1000, 2, false);
     far.land('0,0', masses(m(10), m(10)));
     far.land('1,0', masses(CELL + m(10), m(10)));
-    far.landLevel(plateOf(0, 0), masses(m(10), m(10), m(10)));
+    far.landBase(baseOf(0, 0), plateBase(m(10), ['0,0', '1,0']));
     far.choose(m(128), m(128), m(500), 1000, 2, false);
     // From afar, the plate made before its cells' buildings changed: not drawn in their place, their masses kept and drawn.
     far.choose(m(128), m(128), m(500), 1000, 0.1, false);
@@ -470,7 +478,7 @@ describe('a tile or a plate drawn before some of its buildings came in', () => {
     expect(levels.outdated(plateOf(0, 0))).toBe(true);
     levels.flush({ groundAt: flat, naturalAt: flat });
     expect(levels.outdated(plateOf(0, 0))).toBe(true);
-    // Its base and its plate answered (the base is asked first, `massBase.ts`).
+    // Its base answered (the plate's level, `massBase.ts`).
     for (const done of answers.splice(0)) done({ mass: null } as CellResult);
     expect(levels.outdated(plateOf(0, 0))).toBe(false);
   });

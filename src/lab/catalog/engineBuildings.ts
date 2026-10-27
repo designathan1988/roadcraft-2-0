@@ -7,17 +7,16 @@ import type { Building, BuildingId } from '@world/buildings/types';
 import { m } from '@world/units';
 import { CELL } from '@world/cells';
 import { PART_KINDS, type PartKind, createBuildingKit } from '../../render/buildings/kit';
-import { assembleBuildingMeshes, buildBuildingMeshes, emitProgram, kitBoxes } from '../../render/buildings/buildingMesh';
-import { CELL_DETAIL, PLATE_DETAIL, TILE_DETAIL, massFloor, massOf } from '../../render/buildings/massing';
+import { assembleBuildingMeshes, buildBuildingMeshes, emitProgram, kitBoxes, massShells } from '../../render/buildings/buildingMesh';
+import { CELL_DETAIL, PLATE_DETAIL, TILE_DETAIL, massFloor } from '../../render/buildings/massing';
 import { cellArrays, cellMass } from '../../render/buildings/cellArrays';
 import { cellMesh } from '../../render/buildings/massCells';
-import { BASE_VERTEX, CellWriter, writeBase } from '../../render/buildings/massBase';
 import { FarPartBatch } from '../../render/buildings/farParts';
 import { PartCell } from '../../render/buildings/partCells';
 import { DETAIL_CELL, fileParts } from '../../render/buildings/partFiling';
 import { COARSE_PARTS, DETAIL_PARTS } from '../../render/buildings/layerCells';
 import { SHELL_PARTS } from '../../render/buildings/shellParts';
-import { BufferAttribute, BufferGeometry as BufferGeometryClass, Group, Mesh, MeshStandardMaterial, type Material } from 'three';
+import { Group, type Material } from 'three';
 import type { BatchCache } from './capture';
 import { piecesOf, shown } from './layout';
 import type { ItemSpec } from './items';
@@ -39,8 +38,8 @@ const floorsOf = (b: Building): number => Math.max(1, Math.round(buildingHeight(
 
 /** The far levels of every building the generators make, each drawn from ONE walk of the building (`buildingMesh.ts` emitProgram), as the
  *  building layer's cells draw them: its facade from afar (L1, the bays laid as runs, the program's `far`), its masses at the cell's, the tile's
- *  and the plate's detail (`massing.ts` massOf over the program, packed as the GPU takes them by `cellArrays.ts` cellMass, drawn by `massCells.ts`
- *  cellMesh), and its base (`massBase.ts` writeBase over the program). */
+ *  and the plate's detail (`buildingMesh.ts` massShells over the program, packed as the GPU takes them by `cellArrays.ts` cellMass, drawn by
+ *  `massCells.ts` cellMesh); the base is the plate's level laid cell by cell (`massBase.ts`), no form of its own. */
 export async function engineBuildingFarItems(add: Add): Promise<void> {
   const kit = createBuildingKit(16);
   const cache: BatchCache = new Map();
@@ -58,26 +57,13 @@ export async function engineBuildingFarItems(add: Add): Promise<void> {
       pieces: piecesOf(facade.group), object: shown(facade.group, cache), countKey: `building-l1:${label}`,
       notes: ['the bays laid as runs, their windows drawn by the facade shader (facadeLevel.ts); what is set into an opening left to the shader'] });
     for (const [level, detail] of [['cell', CELL_DETAIL], ['tile', TILE_DETAIL], ['plate', PLATE_DETAIL]] as const) {
-      const chunk = massOf(program, detail);
+      const chunk = massShells(program, detail);
       const mass = chunk ? cellMass([chunk]) : null;
       if (!mass) continue;
       const mesh = cellMesh(mass, kit);
-      add({ group: `Buildings: masses (${level} level)`, name: label, variation: group, origin: 'kit', source: 'src/render/buildings/massing.ts (massOf over the program) + massCells.ts (cellMesh)', build: 'merged',
-        pieces: [{ label: 'masses', geometry: mesh.geometry, material: mesh.material as Material }], object: shown(mesh, cache), countKey: `building-mass-${level}:${label}`,
-        notes: [`left out or laid flat at this level: up to ${detail.drop} m${detail.boxes ? ', pitched roofs as boxes' : ''}; the windows drawn by the massing shader`] });
-    }
-    const writer = new CellWriter();
-    writeBase(writer, program);
-    if (writer.index.length) {
-      const g = new BufferGeometryClass();
-      g.setAttribute('position', new BufferAttribute(new Float32Array(writer.position), 3));
-      g.setIndex(writer.index);
-      g.computeVertexNormals();
-      const mesh = new Mesh(g, new MeshStandardMaterial({ color: 0xb9b2a6, roughness: 0.9 }));
-      mesh.name = 'building-base';
-      add({ group: 'Buildings: base (farthest level)', name: label, variation: group, origin: 'kit', source: 'src/render/buildings/massBase.ts (writeBase over the program)', build: 'merged',
-        pieces: [{ label: 'base', geometry: g, material: mesh.material }], object: mesh, countKey: `building-base:${label}`,
-        notes: [`each block a prism, each paved lot a slab; on the GPU a vertex is ${BASE_VERTEX} shorts on its square's grid (massBase.ts)`] });
+      add({ group: `Buildings: masses (${level} level)`, name: label, variation: group, origin: 'kit', source: 'src/render/buildings/buildingMesh.ts (massShells over the program) + massCells.ts (cellMesh)', build: 'merged',
+        pieces: [{ label: 'masses', geometry: mesh.geometry, material: (mesh.material as Material[])[0]! }], object: shown(mesh, cache), countKey: `building-mass-${level}:${label}`,
+        notes: [`left out or laid flat at this level: up to ${detail.drop} m${detail.boxes ? ', pitched roofs as boxes' : ''}; the walls the facade level's runs of bays, drawn by its shader`] });
     }
   };
   for (const bp of BLUEPRINTS) one('preset', bp.key, 'preset', bp.body, bp.key);

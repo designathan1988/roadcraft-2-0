@@ -421,13 +421,13 @@ describe('the shell\'s compact vertex', () => {
     }
   });
 
-  it('is 24 bytes, 44 only on the far level\'s runs of bays with openings (37 and 77 before, then 52 and 28)', () => {
+  it('is 24 bytes, 48 only on the far level\'s runs of bays with openings (37 and 77 before, then 52 and 28; 44 before their cover)', () => {
     for (const far of [false, true]) {
       const s = cellArrays(town.map((b) => emitChunk(b, groundAt, undefined, groundAt, undefined, far)), take, unitBoxes);
       if (far) expect(s.shells.some((p) => p.facade)).toBe(true);
       for (const piece of s.shells) {
         const one = { shells: [piece], parts: {}, furniture: {} };
-        expect((cellBytes(one) - piece.index.byteLength) / (piece.position.length / 3)).toBe(piece.facade ? 44 : 24);
+        expect((cellBytes(one) - piece.index.byteLength) / (piece.position.length / 3)).toBe(piece.facade ? 48 : 24);
       }
     }
   });

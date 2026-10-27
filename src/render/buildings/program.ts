@@ -1,3 +1,4 @@
+import { FINISHES, type Finish } from '@world/buildings/materials';
 import type { BuildingChunk, LotGround } from './chunk';
 import type { FlagInstance } from './flagLayer';
 
@@ -13,7 +14,7 @@ import type { FlagInstance } from './flagLayer';
  * when a building's floor is measured anew.
  */
 
-/** A thing the masses leave out at a level (`MassDetail.drop`), asked once a level (`MassWriter.leaves`): a parapet, a box on the roof, a
+/** A thing the masses leave out at a level (`MassDetail.drop`), asked once a level (`buildingMesh.ts` massShells): a parapet, a box on the roof, a
  *  machine room, a pitched roof's rise. Held two numbers a group (`MassProgram.groups`): its height or depth, and 1 where only a level of
  *  boxes asks it (`MassDetail.boxes`: a pitched roof, laid flat at its eaves there). */
 export const GROUP_FLOATS = 2;
@@ -24,13 +25,21 @@ export const MASS_PITCHED = 1;
 export const MASS_FLATTENED = 2;
 
 /** A face of the masses, `FACE_FLOATS` numbers (`MassProgram.faces`): its group (-1: none, always drawn) and mode, its normal (three's axes),
- *  its colour, its first point and points (`MassProgram.points`, three doubles each), its first triangle corner and corners (`MassProgram.tris`;
- *  none: a convex fan). */
-export const FACE_FLOATS = 12;
+ *  its first point and points (`MassProgram.points`, three doubles each), its first triangle corner and corners (`MassProgram.tris`; none: a
+ *  convex fan), and its paint (`MassLook`: linear rgb, the finish's index in `FINISHES`). In the arrays the program already holds: DO NOT give a
+ *  program a palette of its own, a tile's job held four hundred programs' few objects more each (`cellJobMemory.spec.ts`). */
+export const FACE_FLOATS = 13;
 
+/** A face's paint as the detail and the facade level lay it (`buildingMesh.ts` Paint): its linear colour and its finish, the finishes' maps
+ *  the shells draw it with (`finishes.ts`). Every level drawn from afar lays it so (`buildingMesh.ts` massShells): the building's own look. */
+export interface MassLook {
+  readonly rgb: readonly [number, number, number];
+  readonly finish: Finish;
+}
 /** One bay of a block's wall as the masses read it (`bayLayout`), as the walk records it: its side, its span along it, its storey (from its
- *  floor), its outward offset (a relief's push, an arcade's set-back), its glass, its colour; a storey on the ground runs down past the lowest
- *  ground under it (`BURY`). Held `BAY_FLOATS` numbers a bay (`MassProgram.bays`). */
+ *  floor), its outward offset (a relief's push, an arcade's set-back); a storey on the ground runs down past the lowest ground under it
+ *  (`BURY`). Held `BAY_FLOATS` numbers a bay (`MassProgram.bays`): the fields here in their order, its look as four (rgb, finish), then its
+ *  block's volume id and grime foot (`MassRecorder.block`). */
 export interface MassBay {
   readonly side: number;
   readonly start: number;
@@ -38,16 +47,28 @@ export interface MassBay {
   readonly z0: number;
   readonly height: number;
   readonly d: number;
-  /** The share of the bay its opening takes (`GLASS_SHARE`) as the bays alike are joined by, and the glass the shader draws (on a curtain wall `CURTAIN_WALL` more, `massing.ts`). */
-  readonly share: number;
-  readonly glass: number;
-  readonly rgb: readonly [number, number, number];
   readonly ground: boolean;
   /** Its opening's sill and head, shares of the storey's height from its floor (`buildingMesh.ts` openingOf, the detail's and the facade level's own). */
   readonly sill: number;
   readonly head: number;
+  /** What the facade level draws in it (`buildingMesh.ts` facadeKind with its streak, `FACADE_STREAK`; `FACADE_KIND.none` a plain wall), and its
+   *  opening's two edges across, shares of its width (`openingOf`): the facade level's own run of bays (`emitFacadeRuns`). */
+  readonly kind: number;
+  readonly a0: number;
+  readonly a1: number;
+  /** Its wall's paint (`MassLook`), its bay's index along its side and its storey's level (the facade level's u and v: the shader picks each
+   *  bay's pane by them, as `emitBay` does). */
+  readonly look: MassLook;
+  readonly index: number;
+  readonly level: number;
+  /** How many of the facade level's bays it holds side by side (the bays alike joined, `recordBlock`): its run's u from `index` to `index + bays`. */
+  readonly bays: number;
+  /** What stands out of its wall in the detail (balconies, slabs, fins, rails, bands, awnings: `buildingMesh.ts` CoverShell over its own
+   *  `emitBay`), as a level from afar draws it once it is under the pixels: the share of the bay it covers seen from the front, its colour (linear). */
+  readonly cover: number;
+  readonly coverRgb: readonly [number, number, number];
 }
-export const BAY_FLOATS = 14;
+export const BAY_FLOATS = 25;
 
 /** A side of a block on the plan, local: its start, its direction along it, its outward normal; its bay's width (the facade's grid). Held `SIDE_FLOATS` numbers, its side first (`MassProgram.sides`). */
 export interface MassSide {
@@ -61,24 +82,18 @@ export interface MassSide {
 }
 export const SIDE_FLOATS = 8;
 
-/** A block's facade grid as its walls show it from afar (`buildingMesh.ts` recordBlock, the bays the walk laid out): its typical storey's
- *  height and its bay's width, where its storeys are counted from (absolute, as the walk lays it), its window's share across (on a curtain
- *  wall `CURTAIN_WALL` more), sill and head (shares of the storey). The base draws its windows from it (`massBase.ts`, `massingMaterial.ts`). */
-export interface BaseGrid { readonly storey: number; readonly bay: number; readonly z0: number; readonly glass: number; readonly sill: number; readonly head: number }
-
-/** The base's (`massBase.ts`): a block's prism on the plan (anticlockwise), from its foot to its top over its floor, its two paints (5-6-5),
- *  its facade grid packed in four shorts (`gridShorts`; null: a block with no bay laid out, drawn without windows); a paved lot flat at `level` (absolute: a lot's, `LotsProgram`). */
-export interface BasePrism { readonly xs: Float64Array; readonly ys: Float64Array; readonly bottom: number; readonly top: number; readonly wall: number; readonly roof: number; readonly grid: readonly [number, number, number, number] | null }
-export interface BaseSlab { readonly xs: Float64Array; readonly ys: Float64Array; readonly level: number; readonly paint: number }
-
 /** The mass stage of a program: what every level drawn from afar is drawn from, in a few flat arrays (a few KB a building: the programs
  *  kept by a worker are a plate's thousands, `cellJobMemory.spec.ts`); every height over the building's floor (its bays' feet, its faces'
- *  points, its prisms), the floor added where a level is drawn (`massing.ts` massOf, `massBase.ts` writeBase). */
+ *  points), the floor added where a level is drawn (`buildingMesh.ts` massShells: the cells', the tiles', the plates' and the base's). */
 export interface MassProgram {
   /** The building's frame on the plan (its walls laid from their local sides). */
   readonly frame: { readonly x: number; readonly y: number; readonly c: number; readonly s: number };
   /** The shader's seed for its windows (and its use: + 2 for offices and works). */
   readonly seed: number;
+  /** How run-down the building is (`Building.decay`): its shells' weathering, as the detail's (`buildingMesh.ts` Shell.decay). */
+  readonly decay: number;
+  /** Its window frames' colour (the trim, linear), as the facade level's runs draw them. */
+  readonly trim: readonly [number, number, number];
   /** Every block's bays (`BAY_FLOATS` each), storey row by row; each row's first bay and one past the last (`rows`); each block's first row and one past the last (`blockRows`). */
   readonly bays: Float64Array;
   readonly rows: Uint32Array;
@@ -90,23 +105,21 @@ export interface MassProgram {
   readonly faces: Float64Array;
   readonly points: Float64Array;
   readonly tris: Uint32Array;
-  readonly prisms: readonly BasePrism[];
 }
 
-/** The part of a program that stands on a floor: its paved lots as the masses lay them (faces, absolute) and as the base lays them (slabs),
- *  and its lots' ground as the page keeps it; `floor`: the floor they stand on (null: no closed block, the lots on the highest ground). */
+/** The part of a program that stands on a floor: its paved lots as every level from afar lays them (faces, absolute), and its lots' ground
+ *  as the page keeps it; `floor`: the floor they stand on (null: no closed block, the lots on the highest ground). */
 export interface LotsProgram {
   readonly floor: number | null;
   readonly faces: Float64Array;
   readonly points: Float64Array;
   readonly tris: Uint32Array;
-  readonly slabs: readonly BaseSlab[];
   readonly lotGround?: LotGround;
   readonly signatureFloor?: number;
 }
 
-/** What a level drawn from afar is drawn from (`massing.ts` massOf, `massBase.ts` writeBase): a building's body, and its lots on the floor the
- *  level stands it on (the body put on the lots' floor). */
+/** What a level drawn from afar is drawn from (`buildingMesh.ts` massShells, `massBase.ts` writeBase): a building's body, and its lots on the
+ *  floor the level stands it on (the body put on the lots' floor). */
 export interface ProgramStage {
   readonly mass: MassProgram;
   readonly lots: LotsProgram;
@@ -152,13 +165,13 @@ export class MassRecorder {
   private readonly faceList: number[] = [];
   private readonly points: number[] = [];
   private readonly tris: number[] = [];
-  readonly prisms: BasePrism[] = [];
-  readonly slabs: BaseSlab[] = [];
-  /** Each closed block's facade grid by its volume's id (`recordBlock`), read by the base (`massBase.ts` recordBase). */
-  readonly grids = new Map<number, BaseGrid>();
+  /** The bays' covers kept for the worker's buildings (`ProgramCache.covers`), set by `emitProgram`; none, measured once a building. */
+  covers: BayCovers | null = null;
+  /** Its window frames' colour (`MassProgram.trim`), set by the walk. */
+  trim: readonly [number, number, number] = [1, 1, 1];
 
   /** Every height written absolute, as the walk lays the building on its floor; taken over the floor when packed (`done`). */
-  constructor(readonly frame: MassProgram['frame'], readonly seed: number) {}
+  constructor(readonly frame: MassProgram['frame'], readonly seed: number, readonly decay = 0) {}
 
   /** A thing left out under `size` at a level; `boxesOnly`: a pitched roof, asked only by a level of boxes. */
   group(size: number, boxesOnly = false): number {
@@ -166,31 +179,52 @@ export class MassRecorder {
     return this.groupList.length / GROUP_FLOATS - 1;
   }
 
-  /** A closed block's sides and its bays, storey row by storey row. */
-  block(sides: ReadonlyMap<number, MassSide>, rows: readonly (readonly MassBay[])[]): void {
+  /** A closed block's sides and its bays, storey row by storey row; its volume's id and the foot its grime is measured from. */
+  block(sides: ReadonlyMap<number, MassSide>, rows: readonly (readonly MassBay[])[], volume: number, foot: number): void {
     this.blockSides.push(this.sides.length / SIDE_FLOATS);
     for (const [side, s] of sides) this.sides.push(side, s.x, s.y, s.tx, s.ty, s.nx, s.ny, s.bay);
     this.blockRows.push(this.rows.length);
     for (const row of rows) {
       this.rows.push(this.bays.length / BAY_FLOATS);
-      for (const q of row) this.bays.push(q.side, q.start, q.width, q.z0, q.height, q.d, q.share, q.glass, q.rgb[0], q.rgb[1], q.rgb[2], q.ground ? 1 : 0, q.sill, q.head);
+      for (const q of row) {
+        this.bays.push(q.side, q.start, q.width, q.z0, q.height, q.d, q.ground ? 1 : 0, q.sill, q.head, q.kind, q.a0, q.a1,
+          q.look.rgb[0], q.look.rgb[1], q.look.rgb[2], FINISHES.indexOf(q.look.finish), q.index, q.level, q.bays, volume, foot,
+          q.cover, q.coverRgb[0], q.coverRgb[1], q.coverRgb[2]);
+      }
     }
   }
 
-  /** A convex polygon of plan points (world), its normal (world plan, any length), its colour. */
-  face(points: readonly V3[], n: V3, rgb: readonly [number, number, number], group = -1, mode = MASS_KEEP): void {
-    this.add(points, null, n, rgb, group, mode);
+  /** A convex polygon of plan points (world), its normal (world plan, any length), its paint (`MassLook`). */
+  face(points: readonly V3[], n: V3, look: MassLook, group = -1, mode = MASS_KEEP): void {
+    this.add(points, null, n, look, group, mode);
+  }
+
+  /** How many faces are recorded so far (`tintUp`'s range). */
+  get faceCount(): number {
+    return this.faceList.length / FACE_FLOATS;
+  }
+
+  /** The faces recorded from `from` to `to` that look up in the roof's paint mixed toward what stands on the roof in the detail (`buildingMesh.ts`
+   *  CoverShell): its colour by its share of the roof, as a level from afar sees it. */
+  tintUp(from: number, to: number, roof: MassLook, share: number, rgb: readonly [number, number, number]): void {
+    const f = this.faceList, finish = FINISHES.indexOf(roof.finish), t = Math.min(1, share);
+    for (let i = from; i < to; i++) {
+      const o = i * FACE_FLOATS;
+      if (f[o + 3]! < 0.5 || f[o + 12] !== finish || f[o + 9] !== roof.rgb[0] || f[o + 10] !== roof.rgb[1] || f[o + 11] !== roof.rgb[2]) continue;
+      for (let k = 0; k < 3; k++) f[o + 9 + k] = f[o + 9 + k]! + (rgb[k]! - f[o + 9 + k]!) * t;
+    }
   }
 
   /** A flat polygon of plan points (world) and its triangles over them (earcut's). */
-  polygon(points: readonly V3[], tris: ArrayLike<number>, n: V3, rgb: readonly [number, number, number], group = -1, mode = MASS_KEEP): void {
-    this.add(points, tris, n, rgb, group, mode);
+  polygon(points: readonly V3[], tris: ArrayLike<number>, n: V3, look: MassLook, group = -1, mode = MASS_KEEP): void {
+    this.add(points, tris, n, look, group, mode);
   }
 
-  private add(points: readonly V3[], tris: ArrayLike<number> | null, n: V3, rgb: readonly [number, number, number], group: number, mode: number): void {
+  private add(points: readonly V3[], tris: ArrayLike<number> | null, n: V3, look: MassLook, group: number, mode: number): void {
     const l = Math.hypot(n[0], n[1], n[2]) || 1;
     // Three's axes (x, up, -north), as the masses' vertices hold them.
-    this.faceList.push(group, mode, n[0] / l, n[2] / l, -n[1] / l, rgb[0], rgb[1], rgb[2], this.points.length / 3, points.length, this.tris.length, tris ? tris.length : 0);
+    this.faceList.push(group, mode, n[0] / l, n[2] / l, -n[1] / l, this.points.length / 3, points.length, this.tris.length, tris ? tris.length : 0,
+      look.rgb[0], look.rgb[1], look.rgb[2], FINISHES.indexOf(look.finish));
     for (const p of points) this.points.push(p[0], p[2], -p[1]);
     if (tris) for (let k = 0; k < tris.length; k++) this.tris.push(tris[k]!);
   }
@@ -198,26 +232,26 @@ export class MassRecorder {
   /** The mass stage packed, every height taken over `floor` (the floor the walk stood the building on). */
   done(floor = 0): MassProgram {
     const bays = Float64Array.from(this.bays);
-    for (let i = 3; i < bays.length; i += BAY_FLOATS) bays[i]! -= floor;
+    // Its foot and its grime's foot over the floor.
+    for (let i = 0; i < bays.length; i += BAY_FLOATS) { bays[i + 3]! -= floor; bays[i + 20]! -= floor; }
     // DO NOT keep them in single floats: a point taken over its floor, rounded to a float and put back on its floor fell a float's step off the
     // same point of a wall beside it (a parapet's foot off the wall's head), the masses' faces no longer closed (the catalogue's solids, stage 1b).
     const points = new Float64Array(this.points.length);
     for (let i = 0; i < points.length; i += 3) { points[i] = this.points[i]!; points[i + 1] = this.points[i + 1]! - floor; points[i + 2] = this.points[i + 2]!; }
     return {
-      frame: this.frame, seed: this.seed,
+      frame: this.frame, seed: this.seed, decay: this.decay, trim: this.trim,
       bays, rows: Uint32Array.from([...this.rows, this.bays.length / BAY_FLOATS]),
       blockRows: Uint32Array.from([...this.blockRows, this.rows.length]),
       sides: Float64Array.from(this.sides), blockSides: Uint32Array.from([...this.blockSides, this.sides.length / SIDE_FLOATS]),
       groups: Float64Array.from(this.groupList), faces: Float64Array.from(this.faceList),
       points, tris: Uint32Array.from(this.tris),
-      prisms: this.prisms.map((q) => ({ ...q, bottom: q.bottom - floor, top: q.top - floor })),
     };
   }
 
-  /** What it recorded as a lots part (`LotsProgram`): its faces and its slabs as laid (absolute), on `floor`. */
+  /** What it recorded as a lots part (`LotsProgram`): its faces as laid (absolute), on `floor`. */
   lots(floor: number | null, lotGround?: LotGround, signatureFloor?: number): LotsProgram {
     return {
-      floor, faces: Float64Array.from(this.faceList), points: Float64Array.from(this.points), tris: Uint32Array.from(this.tris), slabs: this.slabs,
+      floor, faces: Float64Array.from(this.faceList), points: Float64Array.from(this.points), tris: Uint32Array.from(this.tris),
       ...(lotGround ? { lotGround } : {}), ...(signatureFloor !== undefined ? { signatureFloor } : {}),
     };
   }
@@ -228,7 +262,6 @@ function programBytes(p: BuildingProgram): number {
   const q = p.mass;
   let bytes = 512 + q.bays.byteLength + q.rows.byteLength + q.blockRows.byteLength + q.sides.byteLength + q.blockSides.byteLength
     + q.groups.byteLength + q.faces.byteLength + q.points.byteLength + q.tris.byteLength;
-  for (const s of q.prisms) bytes += 160 + s.xs.byteLength + s.ys.byteLength;
   bytes += lotsBytes(p.lots) + p.flags.length * 96;
   for (const chunk of [p.near, p.far]) {
     if (!chunk) continue;
@@ -244,16 +277,37 @@ function programBytes(p: BuildingProgram): number {
 
 /** The bytes a lots part holds (its lots' ground's surfaces counted a few hundred bytes a lot). */
 function lotsBytes(l: LotsProgram): number {
-  let bytes = 256 + l.faces.byteLength + l.points.byteLength + l.tris.byteLength;
-  for (const s of l.slabs) bytes += 160 + s.xs.byteLength + s.ys.byteLength;
+  const bytes = 256 + l.faces.byteLength + l.points.byteLength + l.tris.byteLength;
   return bytes + (l.lotGround ? 512 : 0);
 }
 
 /** THE PROGRAMS A WORKER KEEPS, by record: a building's program is made once and every job of it after that reads it (`cellWork.ts`);
  *  an edit changes the record's digest, so only the edited building is walked again, its neighbours' programs read as they were.
  *  Least recently used first out, within a budget of bytes: each worker is a heap in the page's V8 cage (`jobPool.ts`), so a few tens of MB. */
+/** A bay's cover as a level from afar draws it (`MassBay.cover`), by what decides it (`buildingMesh.ts` recordBlock's key): its share and
+ *  its rgb a byte each in one number, as the run's vertex carries them (`packCover`). DO NOT keep an object and an array a bay: a worker
+ *  keeps tens of thousands (`cellJobMemory.spec.ts`). */
+export type BayCovers = Map<number, number>;
+const coverByte = (x: number): number => Math.round(Math.max(0, Math.min(1, x)) * 255);
+/** A cover packed into one number (`BayCovers`). */
+export const packCover = (cover: number, rgb: readonly [number, number, number]): number =>
+  ((coverByte(cover) << 24) | (coverByte(rgb[0]) << 16) | (coverByte(rgb[1]) << 8) | coverByte(rgb[2])) >>> 0;
+/** A cover unpacked (`packCover`). */
+export const unpackCover = (n: number): { readonly cover: number; readonly coverRgb: readonly [number, number, number] } =>
+  ({ cover: ((n >>> 24) & 255) / 255, coverRgb: [((n >>> 16) & 255) / 255, ((n >>> 8) & 255) / 255, (n & 255) / 255] });
+/** The most bays' covers a worker keeps: past it they are all let go and measured again as they come (a few hundred bytes each). */
+const COVERS_MOST = 50_000;
+
 export class ProgramCache {
   private readonly kept = new Map<string, { program: BuildingProgram; bytes: number }>();
+  /** Each kind of bay measured once for every building of the worker's jobs (`recordBlock`): DO NOT measure each building's bays again,
+   *  a town's opening ran its every bay through `emitBay` once more for its masses. */
+  private readonly coverMap: BayCovers = new Map();
+  /** The bays' covers kept, let go whole once past `COVERS_MOST`. */
+  get covers(): BayCovers {
+    if (this.coverMap.size > COVERS_MOST) this.coverMap.clear();
+    return this.coverMap;
+  }
   private readonly keptLots = new Map<string, { lots: LotsProgram; bytes: number }>();
   private bytes = 0;
   /** Since `resetCounts`: the buildings' bodies walked (`emitProgram`), the programs read instead of a walk, and the lots alone walked on a floor anew (`emitLotsAt`). */
@@ -342,6 +396,7 @@ export class ProgramCache {
   clear(): void {
     this.kept.clear();
     this.keptLots.clear();
+    this.coverMap.clear();
     this.bytes = 0;
   }
 }

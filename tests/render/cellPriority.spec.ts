@@ -21,7 +21,7 @@ describe("a building job's place in the queue", () => {
   });
 
   it('behind the curtain: every mass and far level before any detail, however near', () => {
-    for (const coarse of ['mass', 'massTile', 'massPlate'] as const) {
+    for (const coarse of ['mass', 'massTile', 'massBase'] as const) {
       expect(cellPriority(coarse, far, false, true)).toBeLessThan(cellPriority('cell', near, false, true));
       expect(cellPriority(coarse, far, false, true)).toBeLessThan(cellPriority('facade', near, false, true));
     }

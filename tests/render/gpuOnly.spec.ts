@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BoxGeometry, type BufferAttribute, Color, InstancedMesh, type Mesh, MeshBasicMaterial, type Object3D } from 'three';
+import { BoxGeometry, type BufferAttribute, Color, InstancedMesh, type InterleavedBufferAttribute, type Mesh, MeshBasicMaterial, type Object3D } from 'three';
 import { compileCopy, shadowStandIn } from '@render/uploads';
 
 import { createBuildingKit } from '@render/buildings/kit';
@@ -17,7 +17,10 @@ import { m } from '@world/units';
 const attributes = (mesh: Mesh): BufferAttribute[] => [...Object.values(mesh.geometry.attributes), mesh.geometry.index!] as BufferAttribute[];
 const arraysOf = (mesh: Mesh): number[][] => attributes(mesh).map((a) => Array.from(a.array));
 /** What the renderer does after `bufferData` (`WebGLAttributes.createBuffer`). */
-const upload = (mesh: Mesh): void => { for (const a of attributes(mesh)) a.onUploadCallback(); };
+const upload = (mesh: Mesh): void => {
+  // An interleaved attribute's buffer is what three uploads, its callback the buffer's (r186 `WebGLAttributes.update`).
+  for (const a of attributes(mesh)) ((a as unknown as InterleavedBufferAttribute).isInterleavedBufferAttribute ? (a as unknown as InterleavedBufferAttribute).data : a).onUploadCallback();
+};
 
 function checks(mesh: Mesh, root: Object3D): void {
   const before = arraysOf(mesh);
