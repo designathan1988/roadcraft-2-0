@@ -1,5 +1,5 @@
 import { m } from '@world/units';
-import { isMass, roofRise, volumeElevation, volumeHeight } from './geometry';
+import { isMass, roofRise, storedBounds, volumeElevation, volumeHeight } from './geometry';
 import { IdSlots, grown } from '@core/idSlots';
 import { BuildingStore } from './store';
 import { type Building, type BuildingId, volumeTop } from './types';
@@ -119,10 +119,50 @@ export interface CameraSolidsKeeper {
   solids(): CameraSolids;
 }
 
-/** DO NOT file the town again for one building */
+/**
+ * DO NOT file the town again for one building. DO NOT file the whole town to answer the camera: a cell of `CELL` is filled the first time a
+ * question reaches it (the eye's point, the canyon light's window, the occluders round the eye: `fill`), from the buildings the store files
+ * near it by their box columns (`BuildingStore.nearIds`), each building filed once with all its volumes. The 10 km city's 249,122 buildings
+ * were decoded and floored on the page in the first frame of a tilted view, 55 s of its opening (2026-10-26).
+ */
 export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: Building) => Rect, reach: number): CameraSolidsKeeper {
   const filing = new SolidFiling();
+  /** The cells whose every building is filed. */
+  const filled = new Set<number>();
   let buildings: BuildingStore | null = null;
+  /** The cells over a rectangle filled: each building a volume of which may be filed in one of them (its box grown by `REACH`, `forEachCellOf`) filed, once. */
+  const fill = (x0: number, y0: number, x1: number, y1: number): void => {
+    const town = buildings;
+    if (!town) return;
+    for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
+      for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) {
+        const key = cellKey(cx, cy);
+        if (filled.has(key)) continue;
+        filled.add(key);
+        for (const id of town.nearIds(cx * CELL - REACH, cy * CELL - REACH, (cx + 1) * CELL + REACH, (cy + 1) * CELL + REACH)) {
+          if (filing.has(id)) continue;
+          const b = town.get(id);
+          if (b) filing.add(b, floorAt(b));
+        }
+      }
+    }
+  };
+  /** Whether a building's box grown by `REACH` meets a cell filled: filed there again when it changes. */
+  const inFilled = (b: Building): boolean => {
+    const box = storedBounds(b);
+    for (let cx = Math.floor((box.minX - REACH) / CELL); cx <= Math.floor((box.maxX + REACH) / CELL); cx++) {
+      for (let cy = Math.floor((box.minY - REACH) / CELL); cy <= Math.floor((box.maxY + REACH) / CELL); cy++) if (filled.has(cellKey(cx, cy))) return true;
+    }
+    return false;
+  };
+  /** The filing as the questions read it: each cell they reach filled first. */
+  const asked: CameraSolids = {
+    floorAt: (x, y) => { fill(x, y, x, y); return filing.floorAt(x, y); },
+    roofAt: (x, y) => { fill(x, y, x, y); return filing.roofAt(x, y); },
+    forEachIn: (x0, y0, x1, y1, visit) => { fill(x0, y0, x1, y1); filing.forEachIn(x0, y0, x1, y1, visit); },
+    forEachInAny: (rects, visit) => { for (const r of rects) fill(r[0], r[1], r[2], r[3]); filing.forEachInAny(rects, visit); },
+    forEachOccluder: (x0, y0, x1, y1, visit) => { fill(x0, y0, x1, y1); filing.forEachOccluder(x0, y0, x1, y1, visit); },
+  };
   const read = BuildingStore.cursor();
   let groundSeen = -1;
   /** Buildings to file again at the next ask (named by the diary, or the ground moved under them), or the whole town. */
@@ -155,19 +195,19 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
     },
     solids() {
       if (whole) {
-        /** @rebuild The whole town only when the diary cannot say what changed. */
+        // The diary cannot say what changed: every cell let go, filled again as the questions reach it.
         filing.clear();
-        for (const b of buildings?.all() ?? []) filing.add(b, floorAt(b));
+        filled.clear();
         whole = false;
       } else {
         for (const id of pending) {
-          const b = buildings?.get(id);
           filing.remove(id);
-          if (b) filing.add(b, floorAt(b));
+          const b = buildings?.get(id);
+          if (b && inFilled(b)) filing.add(b, floorAt(b));
         }
       }
       pending.clear();
-      return filing;
+      return asked;
     },
   };
 }
@@ -212,6 +252,11 @@ class SolidFiling implements CameraSolids {
     this.pages.clear();
   }
 
+  /** Whether a building is filed (with its volumes, or as one with none). */
+  has(id: BuildingId): boolean {
+    return this.filedIds.get(id) >= 0;
+  }
+
   /** `b`'s solid volumes filed, standing on `foot`. */
   add(b: Building, foot: number): void {
     const cos = Math.cos(b.rotation);
@@ -244,8 +289,7 @@ class SolidFiling implements CameraSolids {
         else this.cells.set(k, [solid]);
       });
     }
-    if (head < 0) return;
-    // Its slot taken first: taking it may grow the column (`onGrow`).
+    // Its slot taken first: taking it may grow the column (`onGrow`); one with no solid volume filed too (-1), never read again for a cell.
     const filed = this.filedIds.take(b.id);
     this.first[filed] = head;
   }

@@ -58,3 +58,63 @@ describe('camera solids', () => {
     expect(Number.isFinite(solids.floorAt(c.x + d + m(0.5), c.y))).toBe(true);
   });
 });
+
+/** A town of blocks over 600 m, as a store opened from a table answers it: each record read when asked. */
+function spreadTown(): BuildingStore {
+  const store = new BuildingStore();
+  let seed = 5;
+  const rand = (): number => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  for (let i = 0; i < 120; i++) {
+    const bp = BLUEPRINTS[i % BLUEPRINTS.length]!;
+    store.add(instantiate(bp.body, { x: rand() * m(600), y: rand() * m(600) }, rand() * 6.3));
+  }
+  return store;
+}
+
+describe('camera solids filed as the questions reach them', () => {
+  const ground = { version: 0, rectsSince: () => [] };
+  const floorOf = (b: Building): number => b.x * 0.001;
+  const box = (b: Building): readonly [number, number, number, number] => [b.x - 30, b.y - 30, b.x + 30, b.y + 30];
+
+  it('answer as the whole town filed at once, and file only round the first question', () => {
+    const store = spreadTown();
+    const lazy = cameraSolidsKeeper(floorOf, box, 0);
+    const whole = cameraSolidsKeeper(floorOf, box, 0);
+    lazy.follow(store, ground);
+    whole.follow(store, ground);
+    let read = 0;
+    const get = store.get.bind(store);
+    store.get = ((id) => { read++; return get(id); }) as typeof store.get;
+    lazy.solids().floorAt(m(300), m(300));
+    expect(read).toBeLessThan(store.size / 4);
+    store.get = get;
+    // The other filled over the whole town first: the filing every question read before.
+    whole.solids().forEachIn(m(-100), m(-100), m(700), m(700), () => {});
+    let seedPoint = 11;
+    const rand = (): number => ((seedPoint = (seedPoint * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    for (let i = 0; i < 2000; i++) {
+      const x = rand() * m(640) - m(20), y = rand() * m(640) - m(20);
+      expect(lazy.solids().floorAt(x, y)).toBe(whole.solids().floorAt(x, y));
+      expect(lazy.solids().roofAt(x, y)).toBe(whole.solids().roofAt(x, y));
+    }
+    const listed = (k: typeof lazy, r: readonly [number, number, number, number]): string[] => {
+      const out: string[] = [];
+      k.solids().forEachOccluder(r[0], r[1], r[2], r[3], (...a) => { out.push(a.join(',')); });
+      return out.sort();
+    };
+    expect(listed(lazy, [m(100), m(100), m(400), m(350)])).toEqual(listed(whole, [m(100), m(100), m(400), m(350)]));
+  });
+
+  it('files a building changed again where its cells were filled', () => {
+    const store = spreadTown();
+    const lazy = cameraSolidsKeeper(floorOf, box, 0);
+    lazy.follow(store, ground);
+    const b = [...store.all()][7]!;
+    lazy.solids().floorAt(b.x, b.y);
+    const before = lazy.solids().roofAt(b.x, b.y);
+    expect(before).toBeGreaterThan(-Infinity);
+    store.remove(b.id);
+    lazy.follow(store, ground);
+    expect(lazy.solids().roofAt(b.x, b.y) < before || lazy.solids().roofAt(b.x, b.y) === -Infinity).toBe(true);
+  });
+});
