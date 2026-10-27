@@ -91,6 +91,7 @@ import { type BlockDigestAsk, type GroundShapeAsk, type PadsAsk, type PlateShape
 import { type Pad, padLevelAt } from '@world/buildings/pads';
 import { RoadFootprints } from './roadFootprints';
 import { refOf } from '@world/buildings/recordTable';
+import type { BuildingStore } from '@world/buildings/store';
 import { shapeBoth } from './terrainShaping';
 import { PLANT_MAP_ZOOM, createSceneryKit, plantSamples, type SceneryKit } from './scenery';
 import { createStreetFurniture } from './streetFurnitureLayer';
@@ -1770,10 +1771,16 @@ export function createSceneRenderer(
     const grow = (r: ChangeRect, d: number): ChangeRect => [r[0] - d, r[1] - d, r[2] + d, r[3] + d];
     return entries.flatMap((e) => e.kind === 'buildings' ? e.rects! : e.rects!.map((r) => grow(r, CANYON_GROUND_REACH)));
   };
-  /** Each building's floor, once per record while what it reads stands (`floors.ts`) */
-  const floors = buildingFloors(builtGroundAt, pavedHeightAt, floorBox, FLOOR_READ_REACH);
+  /** The store whose buildings' floors are kept (`followFloors`): a floor of one of its table's rows is kept by the row (`BuildingStore.recordRow`). */
+  let floorStore: BuildingStore | null = null;
+  /** Each building's floor, once per record while what it reads stands, a table's row by its row (`floors.ts`) */
+  const floors = buildingFloors(builtGroundAt, pavedHeightAt, floorBox, FLOOR_READ_REACH, (b) => floorStore?.recordRow(b) ?? null);
   /** `shaped`: the regions the caller is shaping, where the diary cannot say what moved (`floors.ts` `follow`). */
-  const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => floors.follow(net.doc.buildings, floorGroundSince, shaped);
+  const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => {
+    // Another map's store: its rows are another table's, kept apart by it.
+    floorStore = net.doc.buildings;
+    floors.follow(net.doc.buildings, floorGroundSince, shaped);
+  };
   const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH);
   /** The roads watched for vanishing from the picture */
   let roadsWatchedAt = 0;

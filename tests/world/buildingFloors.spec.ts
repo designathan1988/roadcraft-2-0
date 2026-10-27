@@ -13,6 +13,9 @@ import { buildRoadElevation } from '@world/elevation';
 import { applyLots, planLots, zoneLots } from '@world/lots';
 import { Network } from '@world/network';
 import { m } from '@world/units';
+import { RoadDoc } from '@world/doc';
+import { type RowBox, type RowPlace, type RowSummary, type TableRow, encodeRecords } from '@world/buildings/recordTable';
+import { KEYED } from '@editor/saveLayers';
 
 /** EACH BUILDING'S FLOOR WORKED OUT ONCE (`floors.ts`) */
 const base = (x: number, y: number): number => m(6) * Math.sin(x / m(170)) + m(4) * Math.cos(y / m(130)) + x * 0.01;
@@ -98,5 +101,45 @@ describe('the floors kept for every reader', () => {
     reads = 0;
     for (const b of town) floors.floorOf(b);
     expect(reads).toBeGreaterThan(0);
+  });
+});
+
+describe('the floors of the rows of a table', () => {
+  it('are kept by the row while it stands, whatever record object reads it; a preview of a building keeps its own', () => {
+    const doc = layCity(planCity({ ...DEFAULT_CITY, seed: 2, size: 'small' }));
+    const net = new Network(doc);
+    net.rebuild();
+    applyLots(doc, planLots(doc, net));
+    doc.lots.forEach((l, k) => zoneLots(doc, [l.id], { use: (['residential', 'commercial', 'industrial'] as const)[k % 3]!, density: 'medium' }));
+    const refused = new Set<number>();
+    for (let k = 0; k < 300; k++) if (growOnLot({ doc, net, groundAt: base }, refused, 0x5eed) === null && refused.size >= doc.lots.length) break;
+    const records = [...doc.buildings.all()];
+    expect(records.length).toBeGreaterThan(5);
+    // The same map with its buildings in one table, its columns as the save writes them (`saveLayers.ts` KEYED), as a saved city opens.
+    const spec = KEYED.buildings;
+    const table = encodeRecords(records as unknown as TableRow[], (spec.columns ?? null) as RowPlace<TableRow> | null, (spec.box ?? null) as RowBox<TableRow> | null,
+      (spec.summary?.() ?? null) as RowSummary<TableRow> | null);
+    const opened = RoadDoc.fromJSON({ ...doc.toJSON(), buildings: [] }, { tables: { buildings: table.buffer } });
+    const store = opened.buildings;
+    let reads = 0;
+    const groundAt = (x: number, y: number): number => { reads++; return base(x, y); };
+    const floors = buildingFloors(groundAt, undefined, (b) => { const r = storedBounds(b, FLOOR_READ_REACH); return [r.minX, r.minY, r.maxX, r.maxY]; }, FLOOR_READ_REACH,
+      (b) => store.recordRow(b));
+    const one = store.get(records[0]!.id)!;
+    expect(store.recordRow(one)).not.toBeNull();
+    const floor = floors.floorOf(one);
+    expect(floor).toBeCloseTo(floorHeight(one, base), 9);
+    const after = reads;
+    // Its wear written over its row: another record object reads the row now, its floor the row's, not worked out again.
+    store.wear(one.id, 0.5);
+    const worn = store.get(one.id)!;
+    expect(worn).not.toBe(one);
+    expect(floors.floorOf(worn)).toBe(floor);
+    expect(reads).toBe(after);
+    // A preview of it (a copy moved by a tool) is no record of the store: its own floor, on its own ground.
+    const preview = { ...worn, x: worn.x + m(40) };
+    expect(store.recordRow(preview)).toBeNull();
+    expect(floors.floorOf(preview)).toBeCloseTo(floorHeight(preview, base), 9);
+    expect(reads).toBeGreaterThan(after);
   });
 });

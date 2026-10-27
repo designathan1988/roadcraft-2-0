@@ -207,6 +207,16 @@ export class BuildingStore {
     return row ? { table: items.table, row: row.row } : null;
   }
 
+  /** The table's row `b` stands as, only when `b` is the very record this store reads for it (`TableItems.holdsRow`): what is kept of a building by
+   *  its row is kept while the row stands (`floors.ts`). Null for a record written on the page, a copy of one (a preview), or not here. */
+  recordRow(b: Building): { readonly table: TableRows; readonly row: number } | null {
+    if (this.below) return this.below.recordRow(b);
+    const items = this.items;
+    if (!(items instanceof BuildingItems) || !items.table) return null;
+    const row = items.standing(b.id);
+    return row && items.holdsRow(row.row, b) ? { table: items.table, row: row.row } : null;
+  }
+
   /** The buildings `meets` keeps for one of `rects`, asked of those within `pad` of it, each once, in the store's order */
   nearAny(rects: readonly (readonly [number, number, number, number])[], pad: number,
     meets: (b: Building, rect: readonly [number, number, number, number]) => boolean): Building[] {

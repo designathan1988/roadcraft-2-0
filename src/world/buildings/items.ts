@@ -168,6 +168,12 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     return own;
   }
 
+  /** Whether `record` is the record a table's row reads as here now (the table's own, or its copy with the field written over it, as held): nothing decoded. */
+  holdsRow(row: number, record: V): boolean {
+    if (!this.base) return false;
+    return this.fieldHeld.get(row)?.deref() === record || this.base.holds(row, record);
+  }
+
   /** Whether `key` reads the very same record here and in `other`, known without decoding it: both over one table, neither wrote it, the same field over it. */
   sameUnwritten(other: TableItems<K, V>, key: K): boolean {
     if (this.base === null || this.base !== other.base) return false;

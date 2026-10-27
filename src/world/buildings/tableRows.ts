@@ -90,6 +90,11 @@ export class TableRows<K extends number = BuildingId, T extends TableRow = Build
     return b;
   }
 
+  /** Whether `record` is this row's record as decoded and held now (the very object `record(row)` gives while it lives): nothing decoded. */
+  holds(row: number, record: T): boolean {
+    return this.alive.get(row)?.deref() === record;
+  }
+
   /** One field of a row's record, the rest passed over, nothing decoded (`TableReader.field`): undefined where the record has none. */
   field(row: number, name: string): unknown {
     return this.reader.field(row, name);
