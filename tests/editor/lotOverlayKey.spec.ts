@@ -79,3 +79,48 @@ describe('the lots overlay', () => {
     expect(changed.length).toBeLessThan(doc.lots.length);
   });
 });
+
+/** Two streets 3 km apart, their lots zoned, and the Zoning tool over them. */
+function twoStreets(): { doc: RoadDoc; tool: () => LotTool } {
+  const doc = new RoadDoc();
+  for (const x0 of [0, 3000]) {
+    const a = doc.addNode({ x: m(x0 - 120), y: 0 }).id, b = doc.addNode({ x: m(x0 + 120), y: 0 }).id;
+    doc.addSegment(a, b, 1);
+  }
+  const net = new Network(doc);
+  net.rebuild();
+  applyLots(doc, planLots(doc, net));
+  zoneLots(doc, doc.lots.map((l) => l.id), { use: 'residential', density: 'low' });
+  const tool = (): LotTool => new LotTool({
+    doc, net, zoom: () => 1,
+    settings: () => ({ mode: 'brush', use: 'residential', density: 'low', eraser: false, splitKind: 'grid', splitParts: 2 } as never),
+    mutate: (fn) => { fn(); },
+    hint: () => {},
+    redraw: () => {},
+    plan: async () => planLots(doc, net),
+  });
+  return { doc, tool };
+}
+
+describe('the lots overlay for the ground the view sees', () => {
+  it('makes the groups of the lots in view alone, as the whole overlay makes them, and follows the view', () => {
+    const { doc, tool } = twoStreets();
+    const whole = tool().overlay(false);
+    const windowed = tool();
+    const near = (x0: number): number[] => doc.lots.filter((l) => Math.abs(lotCentre(l).x - m(x0)) < m(400)).map((l) => l.id);
+    const first = near(0), second = near(3000);
+    expect(first.length).toBeGreaterThan(3);
+    expect(second.length).toBeGreaterThan(3);
+    const at = (x0: number): [number, number, number, number] => [m(x0 - 200), m(-200), m(x0 + 200), m(200)];
+    let book = windowed.overlay(false, at(0));
+    expect(lotGroups(book.groups.keys()).sort()).toEqual(first.map((id) => `l${id}`).sort());
+    for (const id of first) expect(JSON.stringify(book.groups.get(`l${id}`))).toBe(JSON.stringify(whole.groups.get(`l${id}`)));
+    // The view moved to the other street: its lots drawn, the first street's let go.
+    book = windowed.overlay(false, at(3000));
+    expect(lotGroups(book.groups.keys()).sort()).toEqual(second.map((id) => `l${id}`).sort());
+    for (const id of second) expect(JSON.stringify(book.groups.get(`l${id}`))).toBe(JSON.stringify(whole.groups.get(`l${id}`)));
+    // A view of both: every lot, as the whole overlay.
+    book = windowed.overlay(false, [m(-300), m(-300), m(3300), m(300)]);
+    expect(lotGroups(book.groups.keys()).sort()).toEqual(lotGroups(whole.groups.keys()).sort());
+  });
+});

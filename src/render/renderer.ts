@@ -288,6 +288,8 @@ export interface SceneHandle {
   setTransitPreview(preview: { mode: 'train' | 'metro'; points: readonly { x: number; y: number }[] } | null): void;
   /** The lots of the Zoning tool coloured into the ground, all of them from the next frame (`lotOverlay.ts`) */
   setLotOverlay(input: LotOverlayInput | null, changes?: ChangeJournal): void;
+  /** The ground the view saw at the last frame drawn (`propView`: round the eye out to the far plane, or the flat view's footprint), as a box; before the first frame, the point it looks at. */
+  groundSeen(): ChangeRect;
   /** A blow on a building at world (x, y, z), `strength` 1..10: it breaks (`destruction.ts`). */
   strikeBuilding(b: Building, x: number, y: number, z: number, strength: number): boolean;
   /** A blow on the street at (x, y): a crater in the asphalt, dust. */
@@ -2764,6 +2766,8 @@ export function createSceneRenderer(
   // Development only: the production build replaces the flag with false and drops the inspector with it.
   const inspect = import.meta.env.DEV ? createInspector(renderer, scene) : null;
   let lotOverlay: ReturnType<typeof createLotOverlay> | null = null;
+  /** The ground the view saw at the last frame (`groundSeen`): set where the props are brought to the view. */
+  let seenGround: ChangeRect | null = null;
   let transitXray = false;
   let transitPreview: TrackPreview | null = null;
   let transitPreviewKey = '';
@@ -3299,6 +3303,9 @@ export function createSceneRenderer(
       lotOverlay ??= createLotOverlay((x, y) => handle.surfaceHeightAt(x, y));
       lotOverlay.set(input, changes);
     },
+    groundSeen() {
+      return seenGround ?? [rig.target.x, -rig.target.z, rig.target.x, -rig.target.z];
+    },
     setPolePreview(net, preview) {
       const key = preview && elevation
         ? `${net.revision}:${preview.poles.map((p) => `${p.x.toFixed(2)},${p.y.toFixed(2)},${+p.lamp},${+p.standing}`).join(';')}`
@@ -3710,6 +3717,7 @@ export function createSceneRenderer(
       // The props held round the view (`propCells.ts`): the near square's cells and the far blocks the view reaches placed within the frame's time, the poles' blocks too; none of a layer not drawn at this zoom.
       {
         const view = propView(cullCamera, crowdFrustum, screenHalf(), rig.target.y);
+        seenGround = [view.x - view.reach, view.y - view.reach, view.x + view.reach, view.y + view.reach];
         // The long grass at every zoom (its cells cut the tufts a pixel does not show), the furniture and the gardens where the view is detailed.
         const props = [...(gardens && detailed ? [gardens.layer] : []), ...(quality.detailProps && detailed ? [furniture.layer] : []), furniture.grassLayer];
         lookProps(props, view);
