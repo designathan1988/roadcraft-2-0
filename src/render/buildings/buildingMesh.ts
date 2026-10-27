@@ -4299,7 +4299,9 @@ function massWalk(b: Building, floor: number, shell: LevelShell, levels: Levels,
     const from = rec.faceCount;
     emitRoof(e, b, v, floor, (side) => wallOf(v, side), trim, roof);
     emitRoofDetails(e, b, v, floor);
-    if (v.open) continue;
+    // A flat roof lays its plant (`emitRoofPlant`), which the masses lay of their own (`MASS_OWN_ROOF`), and its drains, a plant room's door and
+    // trims, seen from above a few hundredths of the roof: not measured (its walk was a second `emitRoof` for every flat roof of the town).
+    if (v.open || v.roof === 'flat') continue;
     probe.reset([0, 0, 1], roof);
     emitRoof(measure, b, v, floor, (side) => wallOf(v, side), trim, roof);
     emitRoofDetails(measure, b, v, floor);

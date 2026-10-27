@@ -98,7 +98,9 @@ Entry point and method of work: `docs/agent/README.md`. Rules: `docs/agent/memor
   the covers kept once a kind of bay per worker (opening 150 s -> 92 s; 84 s before the covers). Far sheet (2000 m, masonry): wall 107,101,89
   and roof 91,87,80 against the detail's 119,105,88 and 87,84,78 (were 94,91,82 and 65). Photo: reports/in-game/2026-10-27-one-building/12-city-far.png.
   Camera drag measured in the game window (in front, 2026-10-27): 8 s of drags 1355 frames, p50 16.7 ms, p95 33.3, max 33.4 (still: the
-  same); photo reports/in-game/2026-10-27-one-building/13-after-drag.png. Opening 92 s (84 s before the covers).
+  same); photo reports/in-game/2026-10-27-one-building/13-after-drag.png. Opening 92 s, then 77.8 s once a flat roof's cover is not walked
+  (1a5b0dfd; 84 s before the covers). Tried and reverted: counting the frames proud of the wall as cover (the L1's rule) took the wall to
+  105,99,87, further from the detail. Left: the masonry wall at 2000 m 107,101,89 against the detail's 119,105,88 (the L1 itself 125,112,99).
 - NEXT: (g) one game pass with photos (near, district, far, the whole map) of the buildings at every zoom; then push.
 - FOUND, NOT OURS: `tests/render/buildingsVisibleSame.spec.ts` "lays every shell triangle where HEAD laid it" fails on house/cut0 (12
   triangles not in its baseline); it fails the same at c97ff615, before this session, and passes at a6c86e62.
