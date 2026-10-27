@@ -8,7 +8,7 @@ import { readEconomy } from '@world/economy';
 import { isSerializedBuildings } from '@world/buildings/serialize';
 import { unitFactor } from '@world/rescale';
 import { METERS_PER_UNIT, m, perM } from '@world/units';
-import { type SavedLayout, type SavedTables, TiledSaves } from './chunkedSave';
+import { type SavedFields, type SavedLayout, type SavedTables, TiledSaves } from './chunkedSave';
 import { type PartStore, SAVES_STORE, indexedDbParts, openSaves, portWriter } from './saveStore';
 import { FILE_DOC, FILE_MAGIC, FILE_SETTINGS, jsonOf, magicOf, readFrame } from './saveBinary';
 import { jobPort } from '../jobs/jobPool';
@@ -57,6 +57,8 @@ export interface SavedSession {
   readonly settings: SavedSettings;
   /** The tables a map saved by squares holds its records in (`chunkedSave.ts` SavedTables), joined from its squares without decoding; absent: every record in the document (a whole-map copy, a file, an older save). */
   readonly tables?: SavedTables;
+  /** The field written over a table's rows (the buildings' wears saved since their squares, `chunkedSave.ts` SavedFields). */
+  readonly fields?: SavedFields;
 }
 
 /** Autosave and file export. */
@@ -188,7 +190,7 @@ export class Persistence {
       const session = { version: 2, document: parted.document, settings: parted.settings };
       if (isSavedSession(session)) {
         // Its tables beside the document: the records of the kinds kept in tables, never decoded here (`restoreInto` takes them as they are).
-        best = { document: session.document, settings: this.readSettings() ?? normalizeSettings(session.settings), tables: parted.tables };
+        best = { document: session.document, settings: this.readSettings() ?? normalizeSettings(session.settings), tables: parted.tables, ...(parted.fields ? { fields: parted.fields } : {}) };
         bestAt = parted.savedAt;
         bestParts = parted.layout;
       }

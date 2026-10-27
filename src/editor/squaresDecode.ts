@@ -1,4 +1,5 @@
 import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow, tableRecords } from '@world/buildings/recordTable';
+import type { FieldWrites } from '@world/buildings/items';
 import type { DocTable } from '@world/docBinary';
 import type { GlobalPart, SavedGlobals, SerializedDoc } from '@world/doc';
 import { REGION_CODEC, type SquareSections, squareFrame } from './regionFrames';
@@ -46,10 +47,17 @@ export interface UpgradedSquare {
 /** The tables a map read back from its squares holds its records in (the kinds kept in tables), each joined from its squares without decoding; a kind absent has its records in the document (a save before manifest 8). */
 export type SavedTables = Partial<Record<DocTable, ArrayBufferLike>>;
 
+/** The numeric field written over a kind's joined rows (`TableSections.field`): the buildings' stored wears, their rows copied as they are. */
+export type SavedFields = Partial<Record<DocTable, FieldWrites>>;
+
 /** What a tiled save reads back. */
 export interface TiledSession {
   readonly document: SerializedDoc;
   readonly tables: SavedTables;
+  /** The field written over a table's rows where its stored value differs from the row's own (a building's wear saved since its square). */
+  readonly fields?: SavedFields;
+  /** How long its parts of the read took off the page, ms: the squares decompressed and read, the kinds' tables joined. */
+  readonly timing?: { readonly squares: number; readonly join: number };
   readonly settings: unknown;
   readonly savedAt: number;
   readonly layout: SavedLayout;
@@ -84,11 +92,13 @@ function squareRecords(value: SquareBlob | SquareSections): SquareBlob | null {
 
 /**
  * A kind's squares joined into one table of the map, row by row without decoding (`TableWriter.copyRows`), in id order (the lots in their
- * stored order, then by id) as the map read as records always held them; decoded and written again, a building whose stored wear differs
- * from its row's (given its wear), and a row of a square written before its kind had box columns (the lots' before 2026-10-26: their box
- * written now, `KEYED.box`, so the map reads their places from the columns, `TableItems.eachBox`).
+ * stored order, then by id) as the map read as records always held them; a building whose stored wear differs from its row's copied as it is,
+ * its wear the field written over it (`field`, `TableItems.writeField`). Decoded and written again, a row of a square written before its kind
+ * had box columns (the lots' before 2026-10-26: their box written now, `KEYED.box`, so the map reads their places from the columns,
+ * `TableItems.eachBox`). DO NOT decode and write again a building for its wear: a city that ran for hours had nearly every wear moved since its
+ * square was written, and the 10 km city's opening decoded and encoded its 249,122 buildings for them (2026-10-27).
  */
-function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null; square: string }[], wears: ReadonlyMap<number, number>): ArrayBufferLike {
+function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null; square: string }[], wears: ReadonlyMap<number, number>): { buffer: ArrayBufferLike; field: FieldWrites | null } {
   const rows: { t: number; row: number; id: number; order: number }[] = [];
   squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
   rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
@@ -97,22 +107,25 @@ function joined(name: KeyedName, squares: readonly { table: RecordTable; orders:
   const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null, summary);
   const readers = new Map<number, TableReader>();
   const readerOf = (t: number): TableReader => { let reader = readers.get(t); if (!reader) readers.set(t, reader = squares[t]!.table.reader()); return reader; };
+  /** The wears that differ from their rows', as (id, decay) pairs: the field over the joined table. */
+  const worn: number[] = [];
   for (const { t, row, id } of rows) {
     const table = squares[t]!.table;
+    if (box && !table.boxes) { writer.add([name === 'buildings' ? withWear(readerOf(t).record(row), wears) as TableRow : readerOf(t).record(row)]); continue; }
     if (name === 'buildings' && wears.has(id)) {
-      const reader = readerOf(t);
-      const decay = reader.field(row, 'decay');
-      if ((typeof decay === 'number' ? decay : 0) !== wears.get(id)) { writer.add([withWear(reader.record(row), wears) as TableRow]); continue; }
+      const decay = readerOf(t).field(row, 'decay');
+      const wear = wears.get(id)!;
+      if ((typeof decay === 'number' ? decay : 0) !== wear) worn.push(id, wear);
     }
-    if (box && !table.boxes) { writer.add([readerOf(t).record(row)]); continue; }
     writer.copyRows(table, [row]);
   }
-  return writer.finish().buffer;
+  return { buffer: writer.finish().buffer, field: worn.length ? { name: 'decay', pairs: Float64Array.from(worn) } : null };
 }
 
 /** The map of `read`'s blobs (see the file's comment), or null when a blob is missing or unreadable. */
 export async function decodeSquares(read: SquaresRead): Promise<TiledSession | null> {
   const { manifest, squares: blobs, wearSquares, got, old } = read;
+  const started = performance.now();
   const codec: SquareCodec = read.codec === 'region' ? REGION_CODEC : JSON_CODEC;
   const globals: Record<string, unknown> = {};
   for (let i = 0; i < manifest.globals.length; i++) {
@@ -173,8 +186,10 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
       }
     }
   }
+  const squaresMs = performance.now() - started;
   // A kind with a square in JSON beside its tables (a save of two formats): every record of it as an object, the tables decoded too.
   const tables: SavedTables = {};
+  const fields: SavedFields = {};
   const upgraded: UpgradedSquare[] = [];
   for (const [name, squares] of tableRead) {
     const spec = KEYED[name];
@@ -197,8 +212,11 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
       entry.table = new RecordTable(buffer);
       upgraded.push({ layer: name, square: entry.square, frame: squareFrame(buffer, entry.orders ? Array.from(entry.orders) : null) });
     }
-    tables[spec.table!] = joined(name, squares, wears);
+    const made = joined(name, squares, wears);
+    tables[spec.table!] = made.buffer;
+    if (made.field) fields[spec.table!] = made.field;
   }
+  const timing = { squares: squaresMs, join: performance.now() - started - squaresMs };
   for (const [name, out] of keyedRead) out.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
   for (const out of listRead.values()) out.sort((a, b) => a.ord - b.ord);
   const records = (name: KeyedName): unknown[] => (keyedRead.get(name) ?? []).map((e) => e.record);
@@ -214,11 +232,11 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
     buildings: records('buildings'), zones: items('zones'), zoneMarks: items('zoneMarks'), lots: records('lots'), lotKeys: rest.lotKeys ?? [],
   } as unknown as SerializedDoc;
   // A format before this one: nothing of it is this format's layout, the next save writes every square.
-  if (old) return { document, tables, settings: manifest.settings, savedAt: manifest.savedAt, layout: { old, squares: {}, globals: [], lists: {} } };
+  if (old) return { document, tables, fields, timing, settings: manifest.settings, savedAt: manifest.savedAt, layout: { old, squares: {}, globals: [], lists: {} } };
   const lists: Partial<Record<ListName, { ords: number[]; squares: string[] }>> = {};
   for (const [name, out] of listRead) lists[name] = { ords: out.map((e) => e.ord), squares: out.map((e) => e.square) };
   return {
-    document, tables, settings: manifest.settings, savedAt: manifest.savedAt,
+    document, tables, fields, timing, settings: manifest.settings, savedAt: manifest.savedAt,
     layout: { old: null, squares: manifest.squares, globals: manifest.globals, lists, ...(upgraded.length ? { upgraded } : {}) },
   };
 }

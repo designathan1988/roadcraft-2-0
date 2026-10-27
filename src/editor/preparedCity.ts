@@ -1,5 +1,6 @@
 import { type SerializedDoc, landscapeRecord, lotRecord, poleRecord, spanPlace } from '@world/doc';
 import { DOC_TABLES, type DocTable } from '@world/docBinary';
+import type { FieldWrites } from '@world/buildings/items';
 import { RecordTable, TableWriter, encodeRecords } from '@world/buildings/recordTable';
 import { buildingSummaryColumns } from '@world/buildings/summary';
 import { buildingBounds } from '@world/buildings/geometry';
@@ -115,6 +116,8 @@ export class PreparedCityWriter {
 /** The tables a city opens with (`restoreInto`): its buildings' and the other kinds' (null: those records in the data, or none). */
 export interface OpenedTables extends CityTables {
   readonly buildings: ArrayBufferLike | null;
+  /** The field written over a table's rows (the buildings' wears saved since their squares): its records the table's (`TableSections.field`). */
+  readonly fields?: Partial<Record<DocTable, FieldWrites>>;
 }
 
 /** A city as the page opens it; `table`: its buildings' table (`prepareCity`), the document's source of truth as it is, null: its buildings are in `data`; the other kinds' tables likewise. */

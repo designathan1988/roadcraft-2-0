@@ -183,7 +183,8 @@ export function docGenerated(doc: RoadDoc): boolean {
 export function restoreInto(target: RoadDoc, data: SerializedDoc, net: Network, tables: OpenedTables | ArrayBufferLike | null = null): { readonly replacedAt: number } {
   const t: OpenedTables = tables === null ? { ...noCityTables(), buildings: null } : isOpenedTables(tables) ? tables : { ...noCityTables(), buildings: tables };
   const generated = openedGenerated(data, t.buildings);
-  target.replaceFromJSON(data, { ...(generated ? { repair: false } : {}), tables: t, whole: true });
+  const { fields, ...kinds } = t;
+  target.replaceFromJSON(data, { ...(generated ? { repair: false } : {}), tables: kinds, ...(fields ? { fields } : {}), whole: true });
   const replacedAt = target.changes.version;
   performance.mark('restore:replaced');
   // A map opened is built whole, nothing taken from the map before it (`Network.rebuild`): every road where the network holds every road, the tiles it opens with where it holds the tiles near the view (`Network.scope`, `world/networkWindow.ts`).

@@ -89,7 +89,7 @@ describe('the autosave as binary regions', () => {
     // Opened as the page opens it, and saved by another store: the same keys, the same bytes.
     const reader = new Persistence(undefined, largeStore(), first);
     const session = await reader.loadSessionAsync();
-    const loaded = RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables });
+    const loaded = RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables, ...(session!.fields ? { fields: session!.fields } : {}) });
     const second = memoryStore();
     const again = new Persistence(undefined, largeStore(), second);
     again.saveSession(loaded, session!.settings);
@@ -114,7 +114,7 @@ describe('the autosave as binary regions', () => {
     const read = await saves.read();
     // The buildings come back in their table, none in the document; the edited one read from it.
     expect(read!.document.buildings).toEqual([]);
-    expect(RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables }).buildings.get(one.id)).toMatchObject({ name: 'Edited' });
+    expect(RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) }).buildings.get(one.id)).toMatchObject({ name: 'Edited' });
   });
 
   it('never makes a text of the whole map: each text one square\'s records, far below the map', async () => {
@@ -175,7 +175,7 @@ describe('the JSON saves before the binary regions', () => {
     const read = await saves.read();
     expect(read?.savedAt).toBe(77);
     expect(read?.layout.old).toContain('map:tiles');
-    const doc = RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables });
+    const doc = RoadDoc.fromJSON(read!.document, { repair: false, tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) });
     expect(doc.buildings.size).toBe(original.buildings.size);
     saves.adopt(doc, read!.layout);
     const before = new Map(store.blobs);
@@ -186,7 +186,7 @@ describe('the JSON saves before the binary regions', () => {
     const again = await new TiledSaves(store, 'map').read();
     expect(again?.layout.old).toBeNull();
     expect(again?.savedAt).toBe(88);
-    expect(JSON.stringify(RoadDoc.fromJSON(again!.document, { repair: false, tables: again!.tables }).toJSON().buildings?.length)).toBe(String(original.buildings.size));
+    expect(JSON.stringify(RoadDoc.fromJSON(again!.document, { repair: false, tables: again!.tables, ...(again!.fields ? { fields: again!.fields } : {}) }).toJSON().buildings?.length)).toBe(String(original.buildings.size));
   });
 
   it('a whole map saved as one JSON text opens, and is saved next as binary regions', async () => {
@@ -219,7 +219,7 @@ describe('the map file', () => {
     expect(new DataView(bytes).getUint32(4, true)).toBe(1);
     const session = readMapFile(bytes);
     expect(session?.settings.camera).toEqual(settings.camera);
-    expect(JSON.stringify(RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables }).toJSON())).toBe(JSON.stringify(doc.toJSON()));
+    expect(JSON.stringify(RoadDoc.fromJSON(session!.document, { repair: false, tables: session!.tables, ...(session!.fields ? { fields: session!.fields } : {}) }).toJSON())).toBe(JSON.stringify(doc.toJSON()));
     expect(bytes.byteLength).toBeLessThan(doc.toText().length);
   });
 

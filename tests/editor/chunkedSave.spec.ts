@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SAVE_TILE, type SavedTables, TiledSaves } from '@editor/chunkedSave';
+import { SAVE_TILE, type SavedFields, type SavedTables, TiledSaves } from '@editor/chunkedSave';
 import { readSquareFrame, readSquareSections, squareFrame } from '@editor/regionFrames';
 import { gunzipBytes } from '@editor/saveBinary';
 import { encodeRecords, tableRecords } from '@world/buildings/recordTable';
@@ -51,8 +51,8 @@ function canonical(json: SerializedDoc): unknown {
   };
 }
 /** A map read back opened as the page opens it: its document and its tables (the kinds kept in tables, joined from the squares). */
-const opened = (read: { document: SerializedDoc; tables: SavedTables } | null): RoadDoc => RoadDoc.fromJSON(read!.document, { tables: read!.tables });
-const same = (read: { document: SerializedDoc; tables: SavedTables } | null, doc: RoadDoc): void => {
+const opened = (read: { document: SerializedDoc; tables: SavedTables; fields?: SavedFields } | null): RoadDoc => RoadDoc.fromJSON(read!.document, { tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) });
+const same = (read: { document: SerializedDoc; tables: SavedTables; fields?: SavedFields } | null, doc: RoadDoc): void => {
   expect(canonical(opened(read).toJSON())).toEqual(canonical(doc.toJSON()));
 };
 
@@ -114,6 +114,27 @@ describe('a map saved by tiles', () => {
     expect(opened(await saves.read()).buildings.size).toBe(doc.buildings.size);
   });
 
+  it('reads a wear saved since its square as the field over its row, the row copied as its square holds it', async () => {
+    const doc = town();
+    const store = memoryStore();
+    const saves = new TiledSaves(store, 'map');
+    await saves.save(doc, {});
+    const aged = [...doc.buildings.all()].filter((_, i) => i % 13 === 0);
+    for (const b of aged) doc.buildings.wear(b.id, 0.45);
+    await saves.save(doc, {});
+    const read = (await saves.read())!;
+    // Every aged building's wear in the field, none of its record decoded and written again for it.
+    const pairs = read.fields?.buildings?.pairs;
+    expect(read.fields?.buildings?.name).toBe('decay');
+    expect(pairs?.length).toBe(aged.length * 2);
+    const worn = new Map<number, number>();
+    for (let k = 0; k + 1 < pairs!.length; k += 2) worn.set(pairs![k]!, pairs![k + 1]!);
+    for (const b of aged) expect(worn.get(b.id)).toBe(0.45);
+    const back = opened(read);
+    for (const b of aged) expect(back.buildings.get(b.id)!.decay).toBe(0.45);
+    same(read, doc);
+  });
+
   it('keeps what a failed write did not write for the next save', async () => {
     const doc = town();
     const store = memoryStore();
@@ -134,7 +155,7 @@ describe('a map saved by tiles', () => {
     await new TiledSaves(store, 'map').save(town(), {});
     const reader = new TiledSaves(store, 'map');
     const read = await reader.read();
-    const doc = RoadDoc.fromJSON(read!.document, { tables: read!.tables });
+    const doc = RoadDoc.fromJSON(read!.document, { tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) });
     reader.adopt(doc, read!.layout);
     const one = [...doc.buildings.all()][2]!;
     doc.buildings.put({ ...one, decay: 0.75 });
@@ -252,10 +273,10 @@ describe('an edit in one tile writes that tile, whatever the size of the map', (
     doc.plantTrees([{ x: 150, y: 120, height: 7, yaw: 0, seed: 0.9 }, { x: 2_100, y: 120, height: 7, yaw: 0, seed: 0.1 }]);
     await saves.save(doc, {});
     const read = await saves.read();
-    expect(RoadDoc.fromJSON(read!.document, { tables: read!.tables }).toJSON().trees).toEqual(doc.toJSON().trees);
+    expect(RoadDoc.fromJSON(read!.document, { tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) }).toJSON().trees).toEqual(doc.toJSON().trees);
     // Opened and cut again: still the same order.
     const reader = new TiledSaves(store, 'map');
-    const opened = RoadDoc.fromJSON(read!.document, { tables: read!.tables });
+    const opened = RoadDoc.fromJSON(read!.document, { tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) });
     reader.adopt(opened, read!.layout);
     opened.cutTrees(2_000 + 7 * 10, 100, 5);
     await reader.save(opened, {});
@@ -291,7 +312,7 @@ describe('a map saved before the tiles', () => {
     expect(read?.layout.old).toContain('map:head');
     same(read, original);
     // The player's map opened, then saved: by tiles; the old save left as it was (the player's, an older build's only copy).
-    const doc = RoadDoc.fromJSON(read!.document, { tables: read!.tables });
+    const doc = RoadDoc.fromJSON(read!.document, { tables: read!.tables, ...(read!.fields ? { fields: read!.fields } : {}) });
     saves.adopt(doc, read!.layout);
     const before = new Map(store.blobs);
     await saves.save(doc, { camera: 3 }, 66);
@@ -339,7 +360,7 @@ describe('a map by tiles among the other copies', () => {
     // The map by tiles: its buildings in their table beside the document, none in it.
     const session = await new Persistence(undefined, large, parts).loadSessionAsync();
     expect(session?.document.buildings ?? []).toHaveLength(0);
-    expect(RoadDoc.fromJSON(session!.document, { tables: session!.tables }).buildings.size).toBe(town().buildings.size);
+    expect(RoadDoc.fromJSON(session!.document, { tables: session!.tables, ...(session!.fields ? { fields: session!.fields } : {}) }).buildings.size).toBe(town().buildings.size);
   });
 
   it('a small map is saved by tiles too, never as one text', async () => {

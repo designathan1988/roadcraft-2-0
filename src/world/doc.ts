@@ -40,7 +40,7 @@ import { type TransitData, emptyTransit, hasTransit, normalizeTransit } from './
 import { type SegmentDirection, casingHalf, roadProfile } from './roadTypes';
 import { BuildingStore } from './buildings/store';
 import { type BuildingSections, type TableSections, itemsOfSections, sectionsOf } from './buildings/sections';
-import { TableItems } from './buildings/items';
+import { type FieldWrites, TableItems } from './buildings/items';
 import { type DocImage, type DocTable, type DocTables, dataOf, imageBytes, imageOf, packImage, unpackImage } from './docBinary';
 import { type RecordRef, type RowPlace, type TableRow, allocate, encodeRecords } from './buildings/recordTable';
 import type { SerializedBuilding } from './buildings/serialize';
@@ -2251,7 +2251,7 @@ export class RoadDoc {
   /** `preparedBuildings`: its buildings prepared by a worker (`editor/preparedCity.ts`), filed as they are; `buildingTable`: its buildings' table (`prepareCity`), the store's source of truth as it is; `whole`: another map opened, replacing this one whole (`replaceWhole`), never compared with it record by record. */
   /** `tables`: the other kinds' tables (`DOC_TABLES`: the landscaping's, the lots', the poles', the wires'), each the document's source of truth as it is. */
   replaceFromJSON(data: SerializedDoc, options: { readonly repair?: boolean; readonly preparedBuildings?: boolean; readonly buildingTable?: ArrayBufferLike;
-    readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>>; readonly whole?: boolean } = {}): void {
+    readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>>; readonly fields?: Partial<Record<DocTable, FieldWrites>>; readonly whole?: boolean } = {}): void {
     const { buildingTable, tables, whole, ...rest } = options;
     const restored = RoadDoc.fromJSON(data, { ...rest, tables: { ...tables, ...(buildingTable ? { buildings: buildingTable } : {}) } });
     if (whole) this.replaceWhole(restored); else this.replaceWith(restored);
@@ -2915,11 +2915,12 @@ export class RoadDoc {
 
   /** Builds a document from its serialized form. */
   /** `sections`: the records of each kind kept in a table (`DOC_TABLES`) as their tables (a city made off the page, a map's image): read when asked, never decoded whole; the file's records of the kind, if any, stand over the table. `tables`: the same as whole tables (a city prepared, a map read from its squares). `buildingSections` is the buildings' alone. */
+  /** `fields`: the field written over a table's rows (the buildings' wears saved since their squares), its records the table's own. */
   static fromJSON(saved: SerializedDoc, options: { readonly repair?: boolean; readonly shareBuildings?: BuildingStore; readonly preparedBuildings?: boolean; readonly buildingSections?: BuildingSections;
-    readonly sections?: Partial<DocTables>; readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>> | undefined } = {}): RoadDoc {
+    readonly sections?: Partial<DocTables>; readonly tables?: Partial<Record<DocTable, ArrayBufferLike | null>> | undefined; readonly fields?: Partial<Record<DocTable, FieldWrites>> } = {}): RoadDoc {
     const sections: Partial<Record<DocTable, TableSections>> = { ...options.sections };
     for (const [name, buffer] of Object.entries(options.tables ?? {}) as [DocTable, ArrayBufferLike | null | undefined][]) {
-      if (buffer) sections[name] = { base: buffer, gone: new Float64Array(0), replaced: null, added: null };
+      if (buffer) sections[name] = { base: buffer, gone: new Float64Array(0), replaced: null, added: null, field: options.fields?.[name] ?? null };
     }
     const buildingSections = options.buildingSections ?? sections.buildings;
     // A map saved in another world unit (every map before 2026-10-10: 0.4 m) in this build's.

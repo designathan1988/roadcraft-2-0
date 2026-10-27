@@ -11,6 +11,8 @@ export function serve(scope: JobScope): void {
     const { id, read } = event.data;
     decodeSquares(read).then((session) => {
       const transfer = session ? Object.values(session.tables).filter((b): b is ArrayBuffer => b instanceof ArrayBuffer) : [];
+      // The fields over them (the buildings' wears): moved too.
+      for (const field of Object.values(session?.fields ?? {})) if (field) transfer.push(field.pairs.buffer as ArrayBuffer);
       // The squares written again in this format (`SavedLayout.upgraded`): their frames moved too, never copied.
       for (const square of session?.layout.upgraded ?? []) transfer.push(square.frame);
       scope.postMessage({ id, session } satisfies SquaresReadReply, transfer);

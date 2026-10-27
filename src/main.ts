@@ -272,7 +272,8 @@ function restoreBootSave(loaded: Awaited<ReturnType<Persistence['loadSessionAsyn
     const saved = loaded?.tables?.buildings ? loaded.tables : null;
     const asTable = !saved && (map.buildings?.length ?? 0) >= TABLE_RESTORE_BUILDINGS ? (() => { const made = prepareCity(map, !openedGenerated(map, null)); return preparedCity(made.data, made.buildings, made); })() : null;
     const tables: OpenedTables | null = saved
-      ? { buildings: saved.buildings ?? null, landscape: saved.landscape ?? null, lots: saved.lots ?? null, poles: saved.poles ?? null, spans: saved.spans ?? null }
+      ? { buildings: saved.buildings ?? null, landscape: saved.landscape ?? null, lots: saved.lots ?? null, poles: saved.poles ?? null, spans: saved.spans ?? null,
+        ...(loaded?.fields ? { fields: loaded.fields } : {}) }
       : asTable ? openedTables(asTable) : null;
     // The page's network opens holding the tiles round the saved view alone (`world/networkWindow.ts`); the map's far level is made off the page tile by tile once the scene stands (`render/networkFarTile.ts`).
     const data = asTable?.data ?? map;

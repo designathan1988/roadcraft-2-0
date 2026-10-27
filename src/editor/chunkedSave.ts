@@ -10,7 +10,7 @@ import {
   GLOBAL_KINDS, KEYED, KEYED_NAMES, type KeyedName, LAYER_NAMES, LISTS, LIST_NAMES, type LayerName, type ListName,
   NOWHERE, SAVE_TILE, freshKeyed, freshLists, meets, placeInOrder, squareAt, squareRect,
 } from './saveLayers';
-import { type SavedLayout, type SavedTables, type SquaresRead, type TiledManifest, type TiledSession, decodeSquares, isObject } from './squaresDecode';
+import { type SavedFields, type SavedLayout, type SavedTables, type SquaresRead, type TiledManifest, type TiledSession, decodeSquares, isObject } from './squaresDecode';
 import type { SquaresReadAsk, SquaresReadReply } from './squaresRead.worker';
 import { canQueueJobs, submitJob } from '../jobs/jobPool';
 
@@ -66,7 +66,7 @@ function isOldManifest(value: unknown): value is OldManifest {
     && (value['parts'] as unknown[]).every((p) => Number.isInteger(p));
 }
 
-export type { SavedLayout, SavedTables };
+export type { SavedFields, SavedLayout, SavedTables };
 
 /** A saved map's squares decoded off the page, its tables handed back (`squaresRead.worker.ts`): a job of the pool, the page's own worker (the blobs are the page's). */
 function decodedOffPage(read: SquaresRead): Promise<TiledSession | null> {
@@ -491,7 +491,8 @@ export class TiledSaves {
     performance.mark('save:files-read');
     const read: SquaresRead = { manifest, squares: blobs, wearSquares, got, codec: codec === REGION_CODEC ? 'region' : 'json', old };
     const session = canQueueJobs() ? await decodedOffPage(read) : await decodeSquares(read);
-    performance.mark('save:parsed');
+    // What the read's parts took off the page (`TiledSession.timing`): the squares decompressed and read, the tables joined.
+    performance.mark('save:parsed', { detail: session?.timing ?? null });
     return session;
   }
 
