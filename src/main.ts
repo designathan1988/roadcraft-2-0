@@ -82,6 +82,10 @@ import { formatInventory, sceneInventory } from '@render/inventory';
 import { cityBudgetTable, VIEW_BUDGETS, type CityView } from '@core/perfBudget';
 import { primeSurfaceBake, startSurfaceBake } from '@render/surfaceBakeClient';
 import { forgetOtherDerived, keepDerivedDurably, readDerived, readDerivedKeys, writeDerivedMany } from '@render/derivedCache';
+import { watchHiddenWork } from './lab/hiddenWork';
+
+// The work nobody sees, told on the console with its line (`lab/hiddenWork.ts`): the development build alone, before anything is asked of the page.
+if (import.meta.env.DEV) watchHiddenWork(/src\/frameLoop\.ts:/);
 
 declare const __CONFLICT_ZONES_HASH__: string | undefined;
 declare const __CITY_GEN_HASH__: string | undefined;
