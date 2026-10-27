@@ -21,7 +21,7 @@ import type { ChangeJournal, ChangeKind, ChangeRect } from '@world/changes';
 import { CELL } from '@world/cells';
 import { m } from '@world/units';
 import { ViewCells, type CellKey } from '@world/viewCells';
-import { HYSTERESIS, batchMesh, createCellInstances, releaseBatchMesh, screenHalf, warmMesh, type CellInstances, type KindMesh, type KindSpec, type Pack } from './cellInstances';
+import { HYSTERESIS, batchMesh, createCellInstances, releaseBatchMesh, screenHalf, warmMesh, type CellInstances, type KindLevels, type KindMesh, type KindSpec, type Pack } from './cellInstances';
 import { NEAR_SQUARE, YAW_POSE, nearCode } from './instanceRuns';
 import { createFarBands, showLadder, type Banded, type FarLadder, type FarRung } from './farLadders';
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
@@ -189,6 +189,8 @@ interface FarBlock {
   readonly growing: boolean;
   waiting: number;
   readonly gpu: number;
+  /** The ladders of its kinds whose simplified models were not made when it was (their band drawn by the whole model): made again once they are. */
+  readonly unsimplified: readonly KindLevels[];
 }
 
 /** Whether all of `mesh` (its bounding sphere) stands past `beyond` world units from the eye of `view` (a view-projection): its sphere's
@@ -333,6 +335,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
   farGroup.name = `${spec.name}-far`;
   group.add(farGroup);
   const growingFar = [new Set<CellKey>(), new Set<CellKey>()];
+  /** Each class's blocks made before some of their kinds' simplified models (`FarBlock.unsimplified`). */
+  const unsimplifiedFar = [new Map<CellKey, readonly KindLevels[]>(), new Map<CellKey, readonly KindLevels[]>()];
   /** Each class's held blocks, by key. */
   const heldFar = [new Map<CellKey, FarBlock>(), new Map<CellKey, FarBlock>()];
   const pictureKinds = spec.kinds.map((_, i) => spec.pictureOf[i] !== null && spec.pictureOf[i] !== undefined);
@@ -360,7 +364,9 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     };
     const out = [rung(nears, mid !== null ? 'near' : 'near-unsimplified', mid ?? far, top, mid ?? least, false)];
     if (mid !== null) out.push(rung(kindSpec.meshes.filter((s) => s.mid), 'mid', far, mid, least, false));
-    if (castsNear) out.push(rung(nears.filter((s) => s.castShadow), 'shadow', least, top, least, true));
+    // Its shadow by its model near, by its simplified model below (`mid`). DO NOT cast far lamps whole: 1.2 M triangles in the cascades (F7, 2026-10-27).
+    if (castsNear) out.push(rung(nears.filter((s) => s.castShadow), 'shadow', mid ?? least, top, mid ?? least, true));
+    if (castsNear && mid !== null) out.push(rung(kindSpec.meshes.filter((s) => s.mid && s.castShadow), 'shadow-mid', least, mid, least, true));
     return out;
   };
   /** Whether a kind is drawn far by its ladder (a street prop: `KindLevels.far` and a picture of its own). */
@@ -469,6 +475,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     // benches of 164 a few pixels across were 1.2 M triangles of the district's view (`npm run diagnose`, 2026-10-24); DO NOT draw them as the
     // box round them either (837f1866): their pictures are the same model.
     const ladders: FarLadder[] = [];
+    const unsimplified: KindLevels[] = [];
     for (const [kind, pack] of packs) {
       if (pictureKinds[kind]) continue;
       const kindSpec = spec.kinds[kind]!;
@@ -483,6 +490,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       const levels = kindSpec.levels;
       // Its simplified models drawn only once made (a batch holds its model's attributes as they were, `cellInstances.ts` posedGeometry).
       const midMade = levels?.mid !== undefined && (levels.midReady?.() ?? true);
+      if (levels?.mid !== undefined && !midMade && laddered(kindSpec)) unsimplified.push(levels);
       const batch = (body: KindMesh, casts: boolean, shadowAlone = false, band: Banded | null = null): InstancedMesh => {
         if (!body.geometry.boundingSphere) body.geometry.computeBoundingSphere();
         const s = body.geometry.boundingSphere!;
@@ -530,7 +538,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     pictured.name = `${spec.name}-far-pictures`;
     holder.add(pictured);
     for (const mesh of meshes) (mesh.material === spec.pictures?.material ? pictured : holder).add(mesh);
-    return { block: { group: holder, pictured, ladders, fading, meshes, uncast, growing, waiting, gpu: arrays }, arrays };
+    return { block: { group: holder, pictured, ladders, fading, meshes, uncast, growing, waiting, gpu: arrays, unsimplified }, arrays };
   };
 
   const far = [FarClass.wide, FarClass.small].map((cls) => {
@@ -550,10 +558,12 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         for (const mesh of block.meshes) farMeshes.add(mesh);
         if (block.meshes.length) meshList = null;
         if (block.growing) growingFar[cls]!.add(key);
+        if (block.unsimplified.length) unsimplifiedFar[cls]!.set(key, block.unsimplified);
         return { value: block, cpuBytes: made.arrays + FAR_OVERHEAD * (block.meshes.length + 1) };
       },
       release(key, block) {
         growingFar[cls]!.delete(key);
+        unsimplifiedFar[cls]!.delete(key);
         heldFar[cls]!.delete(key);
         farGroup.remove(block.group);
         for (const off of block.uncast) off();
@@ -701,6 +711,11 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       const reaches = [view.reach, largestSmall > 0 ? reachFor(view, largestSmall, leastSmall * (1 - HYSTERESIS)) : -1];
       busy = ringsShort;
       far.forEach((f, cls) => {
+        // A block made before its kinds' simplified models: made again once they are. DO NOT keep it: the 10 km city's far blocks came before the
+        // ladder made its models (one a frame) and drew every far bin and lamp whole, 2.7 M triangles at a street's view (the F7 lab, 2026-10-27).
+        const stale = unsimplifiedFar[cls]!, remade: CellKey[] = [];
+        for (const [key, kinds] of stale) if (kinds.every((l) => l.midReady?.() ?? true)) remade.push(key);
+        if (remade.length) { for (const key of remade) stale.delete(key); f.forget(remade); }
         // The same blocks as last frame: the cache's wanted list is the one it was given then (nothing else gives it one).
         const blocks = blocksFor(cls, view, reaches[cls]!);
         if (blocks.fresh) f.want(blocks.keys);

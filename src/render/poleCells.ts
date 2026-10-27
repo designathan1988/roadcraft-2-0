@@ -88,9 +88,23 @@ export class PoleCells implements Utilities {
     this.from = { net, groundAt };
   }
 
-  /** The diary's changes since the last look: the blocks they reached dropped, made again as the view asks. */
+  /** The network's state the blocks were last brought up to (`Network.changesSince`). */
+  private netState: object | null = null;
+
+  /** The diary's changes since the last look, and the roads the network came to hold or let go: the blocks they reached dropped, made again as
+   *  the view asks. A pole's way to the street is its kerb in the network (`framePole`, `kerbward`), which holds the roads near the view alone
+   *  (`networkWindow.ts`). DO NOT keep a block framed before its streets were held: its poles had found the kerb of the street behind the
+   *  block or none at all, their lamps turned to the buildings, and kept so as the camera came to them (the player, 2026-10-27). */
   follow(journal: ChangeJournal): void {
     this.cells.follow(journal);
+    const net = this.from?.net;
+    if (!net) return;
+    const delta = this.netState === null ? null : net.changesSince(this.netState);
+    if (this.netState !== null) {
+      if (delta === null) this.cells.clear();
+      else if (delta.rects.length) this.cells.invalidate(delta.rects);
+    }
+    this.netState = net.state;
   }
 
   /** The blocks a view wants (in its reach, in its frustum or the margin round it), nearest first, made while the frame has time (one at least). */

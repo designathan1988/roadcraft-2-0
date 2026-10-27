@@ -1315,6 +1315,9 @@ function emitBuilding(
         continue;
       }
       e.rect(face, 0, face.W, 0, face.H, m(0.25), e.N(-face.nx, -face.ny), inner);
+      // Its top, the floor above taken off: the wall's thickness seen from over it. DO NOT leave it open: the walls stood as sheets of paper
+      // round the floor cut open (the player, 2026-10-27).
+      e.shell.face([e.P(face, 0, face.H, 0), e.P(face, face.W, face.H, 0), e.P(face, face.W, face.H, m(0.25)), e.P(face, 0, face.H, m(0.25))], [0, 0, 1], inner);
     }
     // THE FACADE LEVEL'S BAY: flattened where its opening is no deeper than its error (`FLAT_DEPTH`), its wall laid by its run and its opening
     // drawn by the shader (`emitFacadeRuns`), what stands out of it put as in the detail. THE DETAIL'S BAY: its wall laid by its run where

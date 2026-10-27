@@ -15,6 +15,7 @@ import { mountProfilerHud } from '@ui/profilerHud';
 import { hookProfiler } from '@render/profilerHooks';
 import { hasTransit } from '@world/transit';
 import { JournalCursor } from '@world/derived';
+import { joinLineEnds } from '@world/lineEnds';
 import { mountCompass, northOnScreen, northTurn, type Compass } from '@ui/v2/compass';
 import { flipProfile, streetChain } from '@world/roads/streetChain';
 import { furnitureChosen } from '@ui/roads/furnitureChoice';
@@ -2259,8 +2260,19 @@ function openCity(data: ReturnType<typeof buildSmallCityMap>, large = false, tab
 
 /** A map opened (`render/roadWindowLink.ts` opened): a legacy map's repairs found off the page (`networkBake.worker.ts`) and played here; a generated city's roads need none. */
 function repairOffPage(d: RoadDoc): void {
+  joinLinesAcross(d);
   if (docGenerated(d)) return;
   void mapRepairsOffPage(d.roadsJSON()).then((steps) => { if (steps.length && d === doc) repairFromOffPage(steps); });
+}
+
+/** A map opened: its power lines carried across the junctions they stop at (`joinLineEnds`), once - the ends joined are no longer ends, a
+ *  map opened again strings none. A map made before the lines were carried across had every crossing's wires stopped on both sides. */
+function joinLinesAcross(d: RoadDoc): void {
+  if (d !== doc) return;
+  const strung = caused('power lines carried across the junctions', () => joinLineEnds(d));
+  if (!strung) return;
+  persistence.saveSessionSoon(doc, sessionSettings);
+  requestDraw();
 }
 
 /** A legacy map's repairs found off the page (`networkBake.worker.ts`, `editor/repair.ts` replayRepairs), made here as the map's own changes. */

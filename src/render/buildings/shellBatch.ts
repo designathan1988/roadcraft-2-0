@@ -57,9 +57,15 @@ export class ShellBatch {
     this.batches = this.makeBatches();
   }
 
-  /** A cell's shells (every mesh of `SHELL_MESH` in its batch) taken into the batches; the meshes let go. */
+  /** A cell's shells (every mesh of `SHELL_MESH` in its batch) taken into the batches in place of those it had; the meshes let go. */
   add(kind: 'cell' | 'facade', key: string, batch: BuildingMeshes): void {
     const id = `${kind}|${key}`;
+    // DO NOT keep the shells it landed before: a cell landed again (a building cut open, ruined by a blast, edited) left its old walls in
+    // the batch, drawn whole over the new ones - the cut-open building stood at its full height without its windows, the blast's ruin stood
+    // whole (2026-10-27). Shown or hidden as the cell was.
+    const shown = this.visible.get(id);
+    this.remove(kind, key);
+    if (shown !== undefined) this.visible.set(id, shown);
     const made: { batch: Batch; id: number; geometryId: number }[] = [];
     const box = new Box3();
     for (const child of [...batch.group.children]) {

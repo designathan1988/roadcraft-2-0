@@ -41,4 +41,20 @@ describe("the cells' walls batched", () => {
     expect(steps[5]).toBeGreaterThan(steps[4]!);
     batch.dispose();
   });
+
+  it('keep only the shells a cell landed last: a cell landed again (cut open, ruined, edited) draws no wall it had before', () => {
+    const batch = new ShellBatch(createBuildingKit());
+    const mesh = batch.detailGroup.children[0] as unknown as { usedCounts(): { vertices: number } };
+    batch.add('cell', '0,0', landed());
+    const once = mesh.usedCounts().vertices;
+    batch.setVisible('cell', '0,0', false);
+    batch.add('cell', '0,0', landed());
+    batch.add('cell', '0,0', landed());
+    expect(mesh.usedCounts().vertices).toBe(once);
+    // One instance live, hidden as the cell was before it landed again.
+    // Three's own record of each instance (r186 `BatchedMesh._instanceInfo`): those deleted are not active.
+    const info = (batch.detailGroup.children[0] as unknown as { _instanceInfo: { active: boolean; visible: boolean }[] })._instanceInfo;
+    expect(info.filter((i) => i.active).map((i) => i.visible)).toEqual([false]);
+    batch.dispose();
+  });
 });

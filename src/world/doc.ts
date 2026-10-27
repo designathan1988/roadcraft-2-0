@@ -459,6 +459,11 @@ export class RoadDoc {
     return this.poleIndex.near(rect).map((id) => this.poleMap.get(id)!);
   }
 
+  /** The ids of the spans reaching a pole, from the index alone (no span read). */
+  spanIdsAt(id: PoleId): readonly SpanId[] {
+    return [...this.poleIndex.spansAt(id)];
+  }
+
   /** The spans reaching a pole, in the order they were strung. */
   spansAt(id: PoleId): UtilitySpan[] {
     return [...this.poleIndex.spansAt(id)].map((sid) => this.spanMap.get(sid)!);

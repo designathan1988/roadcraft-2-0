@@ -23,10 +23,6 @@ import { forgetOtherDerived, readDerivedAll, writeDerived } from '../derivedCach
 
 /** Pictures of the things the galleries offer - a model, a window, a roof, a stair */
 const SIZE = 224;
-/** Pictures per frame: enough to fill a row, small enough to hold 60 fps. */
-const PER_FRAME = 3;
-/** Milliseconds of a frame the pictures may take, after the first of the frame. */
-const FRAME_SHARE_MS = 6;
 /** How long the second context is kept once the queue is empty. */
 const IDLE_MS = 4000;
 
@@ -184,9 +180,13 @@ export function createThumbnailStudio(gl: WebGLRenderer): ThumbnailStudio {
     }
   };
 
-  const shoot = (id: string, onBatch: (images: ReadonlyMap<string, string>) => void): void => {
+  /** A picture taken: its model built and framed, its programs built off the frame (`compileAsync`, KHR_parallel_shader_compile), then drawn.
+   *  DO NOT draw a model whose programs are not built: each picture's programs were linked in the frame, and this context shares the GPU's
+   *  one thread with the game's - opening the Builder after the kit changed held the game at 1 fps for seconds, 892 ms a frame (2026-10-27). */
+  const shoot = async (id: string, onBatch: (images: ReadonlyMap<string, string>) => void): Promise<void> => {
     const sample = partSample(id);
     if (!sample || !renderer || !kit || !scene || !camera) return;
+    const [gl2, room, eye] = [renderer, scene, camera];
     try {
       const meshes = buildBuildingMeshes([sample], () => 0, kit);
       // A signature building's body is drawn with its own parts, as in the town (`layer.ts`); the shared kit drew only its lot
@@ -228,20 +228,29 @@ export function createThumbnailStudio(gl: WebGLRenderer): ThumbnailStudio {
       void alone;
       camera.lookAt(centre);
       camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
-      // The picture is taken now and encoded off the frame (`toBlob`); it is kept for the next sessions (`derivedCache.ts`).
-      renderer.domElement.toBlob((blob) => {
-        if (!blob) return;
-        if (KIT_HASH) writeDerived(`thumb:${KIT_HASH}:${id}`, blob);
-        onBatch(new Map([[id, URL.createObjectURL(blob)]]));
-      }, 'image/png');
-      scene.remove(meshes.group);
-      if (signature) { meshes.group.remove(signature); disposeSignature(signature); }
-      meshes.dispose();
-    } catch {
+      try {
+        await gl2.compileAsync(room, eye);
+        // Let go while its programs were built (the Builder put down): nothing to draw into.
+        if (renderer !== gl2) return;
+        gl2.render(room, eye);
+        // The picture is taken now and encoded off the frame (`toBlob`); it is kept for the next sessions (`derivedCache.ts`).
+        gl2.domElement.toBlob((blob) => {
+          if (!blob) return;
+          if (KIT_HASH) writeDerived(`thumb:${KIT_HASH}:${id}`, blob);
+          onBatch(new Map([[id, URL.createObjectURL(blob)]]));
+        }, 'image/png');
+      } finally {
+        room.remove(meshes.group);
+        if (signature) { meshes.group.remove(signature); disposeSignature(signature); }
+        meshes.dispose();
+      }
+    } catch (error) {
       // A part that will not build keeps its glyph: the gallery still works.
+      console.warn(`parts studio: no picture of ${id}`, error);
     }
   };
+  /** The picture being taken (its programs being built), while it is. */
+  let shooting = false;
 
   const step = (): void => {
     frame = null;
@@ -249,16 +258,16 @@ export function createThumbnailStudio(gl: WebGLRenderer): ThumbnailStudio {
       waiting.length = 0;
       return;
     }
-    // At least one a frame, and no more once the frame's share is spent
-    const started = performance.now();
-    for (let i = 0; i < PER_FRAME && waiting.length > 0 && (i === 0 || performance.now() - started < FRAME_SHARE_MS); i++) {
-      const next = waiting.shift();
-      if (!next) break;
-      shoot(next.id, next.onBatch);
+    // One picture at a time, the next one the frame after it is drawn.
+    if (shooting) return;
+    const next = waiting.shift();
+    if (next) {
+      shooting = true;
       done.add(next.id);
-    }
-    if (waiting.length > 0) {
-      frame = requestAnimationFrame(step);
+      void shoot(next.id, next.onBatch).finally(() => {
+        shooting = false;
+        if (frame === null) frame = requestAnimationFrame(step);
+      });
       return;
     }
     // Nothing left to shoot and the Builder put down

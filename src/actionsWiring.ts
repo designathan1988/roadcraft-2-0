@@ -1,7 +1,7 @@
 import type { BodyPart } from '@sim/people/view';
 import type { Occupant } from '@render/ragdoll';
 import type { BlastHit, SceneHandle } from '@render/renderer';
-import { framesPoseInto, newPose } from '@sim/pose';
+import { framesPoseInto, newPose, pedPoseInto } from '@sim/pose';
 import type { SimClient, VehicleView } from '@sim/host/simClient';
 import type { GroundBox } from '@sim/host/fleetGrid';
 import { ARCHETYPES } from '@sim/vehicles/archetypes';
@@ -91,7 +91,12 @@ export function createActions(deps: ActionsDeps): Actions {
     const view = deps.view();
     const under = view.toWorldAt(sx, sy, ground(view.toWorld(sx, sy, w, h)), w, h);
     let best: { id: number; height: number; d: number; x: number; y: number; heading: number } | null = null;
-    for (const p of sim.pedViews) {
+    // Each person where the frame draws them (`agents.ts`, between their last two ticks at the clock's `alpha`). DO NOT aim at where the last
+    // tick left them: a walker is drawn up to a stride from it, and a shot at their drawn body missed ("nobody there", the player, 2026-10-27).
+    const drawn = newPose();
+    for (const ped of sim.pedViews) {
+      pedPoseInto(ped, sim.alpha, drawn);
+      const p = { id: ped.id, x: drawn.p.x, y: drawn.p.y, heading: drawn.angle };
       if (Math.hypot(p.x - under.x, p.y - under.y) >= m(25)) continue;
       // Down on the ground: their body is shot where it lies (below).
       if (scene.isDown(p.id)) continue;

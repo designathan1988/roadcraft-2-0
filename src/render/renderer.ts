@@ -969,7 +969,7 @@ export function createSceneRenderer(
   // The perspective view looks at the ground and stays over it (`IsoRig.setGround`).
   rig.setGround((x, y) => terrain.renderedHeightAt(x, y));
   // DO NOT make it again unseen.
-  if (import.meta.env.DEV) Object.assign(window, { __scene: scene, __gl: renderer });
+  if (import.meta.env.DEV) Object.assign(window, { __scene: scene, __gl: renderer, __rig: rig });
   scene.add(...terrain.meshes);
 
   const world = new Group();

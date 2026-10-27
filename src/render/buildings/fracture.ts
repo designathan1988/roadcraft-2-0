@@ -280,18 +280,17 @@ export function fractureData(input: FractureInput): FragmentData[] {
       group++;
     }
   }
-  // ---- the floor slabs inside, in the concrete finish
+  // ---- the floor slabs inside, in the concrete finish: each piece of one solid as a wall's is (its underside and a side along every cut,
+  // `WALL` deep). DO NOT lay a slab as its top and its underside alone: broken, its pieces were two sheets with nothing between them, the
+  // floors of the ruin paper (the player, 2026-10-27).
   const slabMat = input.slabMat;
   for (const slab of input.slabs) {
     const [c0, c1, c2, c3] = slab.corners as [readonly [number, number, number], readonly [number, number, number], readonly [number, number, number], readonly [number, number, number]];
-    for (const [top, ny] of [[slab.y, 1], [slab.y - m(0.25), -1]] as const) {
-      const vtx = (c: readonly [number, number, number]): number[] => [c[0], top, c[2], 0, ny, 0, 0.62, 0.6, 0.57, c[0] * 0.3, c[2] * 0.3, bDecay];
-      const quad = ny > 0 ? [[c0, c1, c2], [c0, c2, c3]] : [[c0, c2, c1], [c0, c3, c2]];
-      for (const [p0, p1, p2] of quad) {
-        const out: number[][] = [];
-        subdivide([...vtx(p0!), ...vtx(p1!), ...vtx(p2!)], MAX_EDGE, out);
-        for (const v of out) tris.push({ v, material: slabMat, solid: false, group: -1, finish: input.slabFinish });
-      }
+    const vtx = (c: readonly [number, number, number]): number[] => [c[0], slab.y, c[2], 0, 1, 0, 0.62, 0.6, 0.57, c[0] * 0.3, c[2] * 0.3, bDecay];
+    for (const [p0, p1, p2] of [[c0, c1, c2], [c0, c2, c3]]) {
+      const out: number[][] = [];
+      subdivide([...vtx(p0!), ...vtx(p1!), ...vtx(p2!)], MAX_EDGE, out);
+      for (const v of out) tris.push({ v, material: slabMat, solid: true, group: -1, finish: input.slabFinish });
     }
   }
   if (!tris.length) return [];
