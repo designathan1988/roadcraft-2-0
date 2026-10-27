@@ -139,6 +139,22 @@ describe('the cover index, cell by cell', () => {
     for (const [x, y] of [[40, 40], [60, 10], [20, 80], [90, 90]] as const) expect(index.covers(m(x), m(y))).toBe(coveredByAny(buildings, m(x), m(y)));
   });
 
+  it('packs a cell into arrays of its own: an empty cell sent twice, as a job sends it, both times whole', () => {
+    for (let k = 0; k < 2; k++) {
+      const packed = packCover(coverCellOf([], [0, 0, m(250), m(250)]));
+      const transfer = [packed.xy.buffer, packed.starts.buffer, packed.keys.buffer, packed.at.buffer, packed.polygons.buffer] as ArrayBuffer[];
+      const moved = structuredClone(packed, { transfer });
+      expect(moved.starts.length).toBe(1);
+      expect(unpackCover(moved).starts.length).toBe(1);
+    }
+    const one = building(1, m(40), m(40));
+    const full = coverCellOf([one], [0, 0, m(250), m(250)]);
+    const packed = packCover(full);
+    structuredClone(packed, { transfer: [packed.xy.buffer, packed.starts.buffer] as ArrayBuffer[] });
+    // The cell packed still holds its own arrays.
+    expect(full.xy.length).toBeGreaterThan(0);
+  });
+
   it('drops only the cells an edit reached, and moves its version with them', () => {
     const changes = new ChangeJournal();
     const buildings = new BuildingStore(changes);

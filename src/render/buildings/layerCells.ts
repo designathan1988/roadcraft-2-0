@@ -207,7 +207,10 @@ export function packCover(cell: CoverCell): PackedCover {
   n = 0;
   for (const [key, list] of cell.buckets) { keys[k] = key; at[k] = n; polygons.set(list, n); n += list.length; k++; }
   at[k] = n;
-  return { xy: cell.xy, starts: cell.starts, keys, at, polygons };
+  // Arrays of its own, to be handed over: DO NOT hand over the cell's (an empty cell is the one frozen `EMPTY_COVER`): the first empty cell sent
+  // left its arrays detached, and every empty cell after it failed to be sent - the woods' and the fields' plants waited for their cover for good,
+  // 1,708 failures in one opening of the 10 km city (2026-10-27).
+  return { xy: cell.xy.slice(), starts: cell.starts.slice(), keys, at, polygons };
 }
 
 export function unpackCover(p: PackedCover): CoverCell {
