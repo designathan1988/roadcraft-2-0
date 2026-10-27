@@ -4,23 +4,36 @@ import type { BuildingStore } from '@world/buildings/store';
 import { canQueueJobs, submitJob } from '../../jobs/jobPool';
 import type { CoverCellAsk, CoverCellReply } from './coverCell.worker';
 import { type CoverAsk, type CoverCell, coverReach, unpackCover } from './layerCells';
+import { TIER_SPAN } from './cellPool';
 
 /** The queue matches each answer to its job (`submitJob`'s own number): an ask's id is not read. */
 const UNNUMBERED = 0;
 
 /**
+ * The cover's band in the queue (`cellPool.ts` cellPriority): after the masses and their tiles and plates (2-2.75), before the summaries (3),
+ * nearest the view first within it. DO NOT ask it in the detail's band (0): the plants of the whole map ask the cover of every cell of it at
+ * the opening, 1,600 cells of a 10 km city, and in that band every one of them went before every mass the curtain waits for.
+ */
+const COVER_BAND = 2.9;
+
+/**
  * THE BUILDINGS' COVER ASKED OF THE JOB THREADS, A CELL A JOB (`coverCell.worker.ts`): the buildings the store files near the cell
- * (`BuildingStore.nearIds`), their rows copied into a table of their own without decoding (`TableWriter.copyRows`: fit for a job process,
- * never the map's table copied there), a record written on the page encoded; null without a job queue (the cells derived on the page).
+ * (`BuildingStore.nearIds`). A thread of the page reads their rows where the map's table holds them (`RecordRef`, the same memory); a thread of
+ * a job process gets them copied into a table of their own without decoding (`TableWriter.copyRows`: fit for another process, never the map's
+ * table copied there). A record written on the page is encoded either way. Null without a job queue (the cells derived on the page).
  */
 export function coverJobAsk(): CoverAsk | null {
   if (!canQueueJobs()) return null;
   const rowsNear = coverRows();
   return (rect, buildings) => new Promise<CoverCell>((done, fail) => {
     submitJob({
-      service: 'coverCells', key: null, priority: 0, at: [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2], crosses: true,
+      service: 'coverCells', key: null, priority: COVER_BAND * TIER_SPAN, at: [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2], crosses: true,
       // Its rows read when a thread takes it: the buildings as they stand then (an answer asked before a change is let go, `createCoverIndex`).
-      write: () => {
+      write: (to) => {
+        const near = to.sharesMemory ? refsNear(rect, buildings) : null;
+        if (near) {
+          return { data: { id: UNNUMBERED, rect, table: near.written, refs: near.refs } satisfies CoverCellAsk, transfer: near.written ? [near.written] : [] };
+        }
         const table = rowsNear(rect, buildings);
         return { data: { id: UNNUMBERED, rect, table } satisfies CoverCellAsk, transfer: table ? [table] : [] };
       },
@@ -31,6 +44,27 @@ export function coverJobAsk(): CoverAsk | null {
       failed: (message) => fail(new Error(message)),
     });
   });
+}
+
+/** The buildings near a cell (as `coverRows` reaches them) where the map's table holds them, as (buffer, row) pairs, and those written on the page
+ *  (not in the table) encoded in a table of their own (null: none). For a thread that shares the page's memory; null where a table is not in
+ *  shared memory (a page not cross-origin isolated): DO NOT post a plain buffer's row, the whole table would be copied with it. */
+function refsNear(rect: ChangeRect, buildings: BuildingStore): { refs: { readonly buffer: ArrayBufferLike; readonly row: number }[]; written: ArrayBuffer | null } | null {
+  const reach = coverReach(rect);
+  const refs: { buffer: ArrayBufferLike; row: number }[] = [];
+  let writer: TableWriter | null = null;
+  for (const id of buildings.nearIds(reach[0], reach[1], reach[2], reach[3])) {
+    // The table's row as it is: a wear written over it reads no footprint.
+    const ref = buildings.tableRef(id);
+    if (ref) {
+      if (typeof SharedArrayBuffer === 'undefined' || !(ref.buffer instanceof SharedArrayBuffer)) return null;
+      refs.push({ buffer: ref.buffer, row: ref.row });
+      continue;
+    }
+    const b = buildings.get(id);
+    if (b) (writer ??= new TableWriter(false)).add([b]);
+  }
+  return { refs, written: writer ? tableBytes(writer.finish().buffer) as ArrayBuffer : null };
 }
 
 /**

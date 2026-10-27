@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { pointInPolygon } from '@core/polygon';
 import { coverRows } from '@render/buildings/coverJobs';
 import { type CoverAsk, coverCellOf, coverPolygons, createCoverIndex, packCover, unpackCover } from '@render/buildings/layerCells';
-import { tableRecords } from '@world/buildings/recordTable';
+import { TableWriter, tableRecords } from '@world/buildings/recordTable';
+import { serve as serveCover, type CoverCellReply } from '@render/buildings/coverCell.worker';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
 import { BuildingStore } from '@world/buildings/store';
 import { type Building, asBuildingId } from '@world/buildings/types';
@@ -153,6 +154,26 @@ describe('the cover index, cell by cell', () => {
     structuredClone(packed, { transfer: [packed.xy.buffer, packed.starts.buffer] as ArrayBuffer[] });
     // The cell packed still holds its own arrays.
     expect(full.xy.length).toBeGreaterThan(0);
+  });
+
+  it('works a cell out the same from the rows of the map table (a thread sharing its memory) as from rows copied for it', () => {
+    const buildings = Array.from({ length: 6 }, (_, i) => building(i + 1, m(20 + 40 * i), m(30 + 25 * (i % 3))));
+    const writer = new TableWriter(true);
+    writer.add(buildings);
+    const map = writer.finish().buffer;
+    const copied = new TableWriter(false);
+    copied.add(buildings);
+    const rect = [0, 0, m(250), m(250)] as const;
+    const replies: CoverCellReply[] = [];
+    const scope = { postMessage: (reply: CoverCellReply) => { replies.push(reply); }, onmessage: null as ((event: MessageEvent) => void) | null };
+    serveCover(scope as never);
+    scope.onmessage!({ data: { id: 1, rect, table: null, refs: buildings.map((_, row) => ({ buffer: map, row })) } } as MessageEvent);
+    scope.onmessage!({ data: { id: 2, rect, table: copied.finish().buffer } } as MessageEvent);
+    const [a, b] = replies.map((r) => ('cover' in r ? unpackCover(r.cover) : null));
+    expect(a && b).toBeTruthy();
+    expect([...a!.xy]).toEqual([...b!.xy]);
+    expect([...a!.starts]).toEqual([...b!.starts]);
+    expect([...a!.buckets.keys()]).toEqual([...b!.buckets.keys()]);
   });
 
   it('drops only the cells an edit reached, and moves its version with them', () => {
