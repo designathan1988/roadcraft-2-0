@@ -97,7 +97,8 @@ Entry point and method of work: `docs/agent/README.md`. Rules: `docs/agent/memor
   roofs 30 % darker), the levels chosen once a frame by the view (no error scale fitted by load: 2-6 whole choices a frame of a drag gone),
   the covers kept once a kind of bay per worker (opening 150 s -> 92 s; 84 s before the covers). Far sheet (2000 m, masonry): wall 107,101,89
   and roof 91,87,80 against the detail's 119,105,88 and 87,84,78 (were 94,91,82 and 65). Photo: reports/in-game/2026-10-27-one-building/12-city-far.png.
-  NOT MEASURED: the frame time of a camera drag in the large city after these changes.
+  Camera drag measured in the game window (in front, 2026-10-27): 8 s of drags 1355 frames, p50 16.7 ms, p95 33.3, max 33.4 (still: the
+  same); photo reports/in-game/2026-10-27-one-building/13-after-drag.png. Opening 92 s (84 s before the covers).
 - NEXT: (g) one game pass with photos (near, district, far, the whole map) of the buildings at every zoom; then push.
 - FOUND, NOT OURS: `tests/render/buildingsVisibleSame.spec.ts` "lays every shell triangle where HEAD laid it" fails on house/cut0 (12
   triangles not in its baseline); it fails the same at c97ff615, before this session, and passes at a6c86e62.
