@@ -179,6 +179,15 @@ describe('the job system', () => {
     expect(hostOf(jobPort('save'))).toBe(save);
   });
 
+  it("runs no queued job on the derived cache writer's worker: the kept tiles' reads the opening waits for never wait behind a job", async () => {
+    const { jobPort, submitJob } = await import('@/jobs/jobPool');
+    const writer = hostOf(jobPort('derivedWriter'));
+    // With the save's lane: one worker kept clear for both.
+    expect(hostOf(jobPort('save'))).toBe(writer);
+    for (let k = 0; k < 8; k++) submitJob({ service: 'coverCells', key: null, priority: k, write: () => ({ data: k, transfer: [] }), done: () => {}, failed: () => {} });
+    expect(FakeWorker.made[writer]!.asked.filter((m) => m.seq !== undefined)).toEqual([]);
+  });
+
   it("makes a side's workers where the maker says, the page's Worker where it says nothing", async () => {
     const { jobPort, setJobWorkerMaker } = await import('@/jobs/jobPool');
     const made: boolean[] = [];

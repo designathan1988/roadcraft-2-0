@@ -406,6 +406,8 @@ const SURFACE_SETS: readonly ReadonlySet<RoadStructure>[] = [GROUND_ONLY, new Se
 
 /** How far past a scoped opening's view its roads are solved (`buildWorld`, `SolveScope`): a road block meeting the view (500 m), what a tile reads round it (`SURFACE_READ_REACH`) and a junction or two whose heights reach in. `tests/world/elevationScope.spec.ts` proves every tile of the view reads the whole solve's heights with it, and that half of it does not (the small city, 2026-10-21). */
 const OPENING_SOLVE_MARGIN = m(320);
+/** Kept road tiles a place (`noteStored`): the scoped opening's and the whole solve's. */
+const KEYS_A_PLACE = 2;
 /** The far roads' cells made from the network at a scoped opening (`networkFarRoads.ts`): a road block's side (`roadSurfaces.ts` CHUNK tiles). */
 const FAR_ROAD_CELL = ROAD_BLOCK;
 /** Frames between two reads of the scene's geometry against the tier's budget (`governGeometry`): a walk of the scene's objects, ~1-3 ms. */
@@ -1045,17 +1047,31 @@ export function createSceneRenderer(
   const tilesPrefix = ROAD_TILES_HASH ? `roadtiles:${ROAD_TILES_HASH}:` : null;
   /** The kept tiles have been read (or there are none to read). */
   let storedRead = tilesPrefix === null;
-  /** What the store holds now, by `storedKey`, and by place (`pass|tile`): a tile built again at its place replaces what was kept of it. */
+  /** What the store holds now, by `storedKey`, and by place (`pass|tile`): the keys of a place, least recently used first (`KEYS_A_PLACE`). */
   const storedKeys = new Set<string>();
-  const storedAt = new Map<string, string>();
+  const storedAt = new Map<string, string[]>();
   /** What the builds asked of the kept tiles since the last build landed (`worldSteps`, its diary entry): told kept or not, read, found. */
   const keptAsked = { yes: 0, no: 0, fetched: 0, found: 0, readMs: 0 };
   const placeOf = (key: string): string => key.slice(0, key.lastIndexOf('|'));
+  /**
+   * A key kept (or used again) at its place, the place's most recently used; past `KEYS_A_PLACE` the least recently used let go. TWO a place: a
+   * large map opens on a solve scoped to its view (`completeSolve`), its tiles digesting the heights that solve gives them, and the whole solve
+   * after gives a third of them other heights (335 of 589 tiles of the 10 km city, `elevation` their only part that differed, 2026-10-27) - the
+   * same tiles built again and kept under the whole solve's keys. DO NOT keep one a place: each let the other go, and every opening built its
+   * view's tiles again, then again after its solve completed. The scoped solve is the same at each opening of the same view.
+   */
   const noteStored = (key: string): void => {
     const place = placeOf(key);
-    const was = storedAt.get(place);
-    if (was && was !== key && tilesPrefix) { storedKeys.delete(was); forgetDerivedKeys(tilesPrefix, [was]); }
-    storedAt.set(place, key);
+    const keys = storedAt.get(place) ?? [];
+    const at = keys.indexOf(key);
+    if (at >= 0) keys.splice(at, 1);
+    keys.push(key);
+    while (keys.length > KEYS_A_PLACE) {
+      const gone = keys.shift()!;
+      storedKeys.delete(gone);
+      if (tilesPrefix) forgetDerivedKeys(tilesPrefix, [gone]);
+    }
+    storedAt.set(place, keys);
     storedKeys.add(key);
   };
   /** Where the road tiles are kept for a later session, off the page (`derivedWriter.worker.ts`); none in tests. */
@@ -1125,7 +1141,8 @@ export function createSceneRenderer(
     retired: [],
     // DO NOT read the whole store at the opening: it grows with every place the camera went (CLAUDE.md, "Streaming world").
     stored: {
-      has: (key) => { const kept = storedKeys.has(key); if (kept) keptAsked.yes++; else keptAsked.no++; return kept; },
+      // A key used again made its place's most recent (`noteStored`): the other one let go first.
+      has: (key) => { const kept = storedKeys.has(key); if (kept) { keptAsked.yes++; noteStored(key); } else keptAsked.no++; return kept; },
       fetch: (keys) => {
         keptAsked.fetched += keys.length;
         const asked = performance.now();
