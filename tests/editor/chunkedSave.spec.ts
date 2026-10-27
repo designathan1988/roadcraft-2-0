@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SAVE_TILE, type SavedTables, TiledSaves } from '@editor/chunkedSave';
-import { readSquareFrame } from '@editor/regionFrames';
+import { readSquareFrame, readSquareSections, squareFrame } from '@editor/regionFrames';
+import { gunzipBytes } from '@editor/saveBinary';
+import { encodeRecords, tableRecords } from '@world/buildings/recordTable';
+import { storedBounds } from '@world/buildings/geometry';
+import type { Building } from '@world/buildings/types';
 import { type PartStore, type SaveBatch, gzip, writeBatch } from '@editor/saveStore';
 import { type LargeStore, Persistence, normalizeSettings } from '@editor/persistence';
 import { RoadDoc, type SerializedDoc } from '@world/doc';
@@ -154,6 +158,31 @@ describe('a map saved by tiles', () => {
     same(await saves.read(), doc);
   });
 
+  it('a square stored before the summary columns of its kind is stored again in this format when the map is adopted, once', async () => {
+    const doc = town();
+    const store = memoryStore();
+    const saves = new TiledSaves(store, 'map');
+    await saves.save(doc, {});
+    // Every buildings' square as an older build stored it: its records with their box, no summary columns.
+    const keys = [...store.blobs.keys()].filter((k) => k.includes(':R8:buildings:'));
+    expect(keys.length).toBeGreaterThan(0);
+    for (const key of keys) {
+      const sections = readSquareSections(await gunzipBytes(store.blobs.get(key)!))!;
+      const older = encodeRecords(tableRecords<Building>(sections.table!.slice().buffer), null, (b) => storedBounds(b));
+      await writeBatch(store, { put: [{ key, bytes: squareFrame(older.buffer, sections.orders ? Array.from(sections.orders) : null), packed: true }], remove: [] });
+    }
+    const first = await saves.read();
+    expect(first!.layout.upgraded?.map((u) => `map:R8:${u.layer}:${u.square}`).sort()).toEqual(keys.sort());
+    same(first, doc);
+    // Adopted: the squares stored again in this format; the next read has nothing to work out.
+    const reader = new TiledSaves(store, 'map');
+    reader.adopt(opened(first), first!.layout);
+    await reader.settled();
+    const again = await reader.read();
+    expect(again!.layout.upgraded).toBeUndefined();
+    same(again, doc);
+  });
+
   it('reads nothing where nothing was saved', async () => {
     expect(await new TiledSaves(memoryStore(), 'map').read()).toBeNull();
   });
@@ -200,7 +229,7 @@ describe('an edit in one tile writes that tile, whatever the size of the map', (
     const store = memoryStore();
     const saves = new TiledSaves(store, 'map');
     await saves.save(doc, {});
-    const poles = doc.poles as Map<number, unknown>;
+    const poles = doc.poles as unknown as Map<number, unknown>;
     const keys = poles.keys.bind(poles);
     let walked = 0;
     poles.keys = (() => { walked++; return keys(); }) as typeof poles.keys;

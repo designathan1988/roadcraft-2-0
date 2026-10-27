@@ -156,6 +156,15 @@ export class TiledSaves {
     // A map stored in a format before this one: written whole, in this one, at the next save.
     if (layout.old) { this.everything(doc); return; }
     for (const name of KEYED_NAMES) this.keyed[name].stored = new Set(layout.squares[name] ?? []);
+    // The squares stored before their kind's box or summary columns, made in this format where the map was read (`SavedLayout.upgraded`): stored so now, once, in the saves' queue (a save after it writes after it), their frames handed to the writer as they are (nothing copied on the page); written again by the next save if this write fails.
+    const upgraded = layout.upgraded ?? [];
+    if (upgraded.length) {
+      void this.queued(async () => {
+        const ok = await this.writer.write({ put: upgraded.map((u) => ({ key: this.blobKey(u.layer, u.square), bytes: u.frame, packed: true })), remove: [] });
+        if (!ok) for (const u of upgraded) this.keyed[u.layer].dirty.add(u.square);
+        return ok;
+      });
+    }
     for (const name of LIST_NAMES) {
       const st = this.lists[name], spec = LISTS[name];
       st.stored = new Set(layout.squares[name] ?? []);
@@ -515,6 +524,11 @@ export class TiledSaves {
   }
 
   /** Runs after the saves under way: never a removal in the middle of a write. */
+  /** Once every write asked so far has ended, either way. */
+  settled(): Promise<void> {
+    return this.queue.then(() => undefined);
+  }
+
   private queued(run: () => Promise<boolean>): Promise<boolean> {
     const done = this.queue.then(run);
     this.queue = done.catch((error: unknown) => { console.error('[save] the tiles of the map were not reached', error); return false; });

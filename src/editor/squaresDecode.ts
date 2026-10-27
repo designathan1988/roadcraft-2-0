@@ -1,7 +1,7 @@
 import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow, tableRecords } from '@world/buildings/recordTable';
 import type { DocTable } from '@world/docBinary';
 import type { GlobalPart, SavedGlobals, SerializedDoc } from '@world/doc';
-import { REGION_CODEC, type SquareSections } from './regionFrames';
+import { REGION_CODEC, type SquareSections, squareFrame } from './regionFrames';
 import { JSON_CODEC, type SquareBlob, type SquareCodec, withWear } from './tileCodec';
 import { KEYED, KEYED_NAMES, type KeyedName, type LayerName, type ListName } from './saveLayers';
 
@@ -32,6 +32,15 @@ export interface SavedLayout {
   readonly globals: readonly GlobalPart[];
   /** Each list's places in the order and squares, in the order read. */
   readonly lists: Partial<Record<ListName, { readonly ords: readonly number[]; readonly squares: readonly string[] }>>;
+  /** The squares of a kind kept in a table stored before its box or summary columns, as this format writes them (`upgraded`): stored again when the map is adopted (`TiledSaves.adopt`), so the next opening copies their rows as they are. */
+  readonly upgraded?: readonly UpgradedSquare[];
+}
+
+/** A square stored before its kind's columns, written again in this format: its layer, its key and its frame (`squareFrame`). */
+export interface UpgradedSquare {
+  readonly layer: KeyedName;
+  readonly square: string;
+  readonly frame: ArrayBuffer;
 }
 
 /** The tables a map read back from its squares holds its records in (the kinds kept in tables), each joined from its squares without decoding; a kind absent has its records in the document (a save before manifest 8). */
@@ -79,12 +88,13 @@ function squareRecords(value: SquareBlob | SquareSections): SquareBlob | null {
  * from its row's (given its wear), and a row of a square written before its kind had box columns (the lots' before 2026-10-26: their box
  * written now, `KEYED.box`, so the map reads their places from the columns, `TableItems.eachBox`).
  */
-function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null }[], wears: ReadonlyMap<number, number>): ArrayBufferLike {
+function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null; square: string }[], wears: ReadonlyMap<number, number>): ArrayBufferLike {
   const rows: { t: number; row: number; id: number; order: number }[] = [];
   squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
   rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
   const box = KEYED[name].box as RowBox<TableRow> | undefined;
-  const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null, (KEYED[name].summary?.() ?? null) as RowSummary<TableRow> | null);
+  const summary = (KEYED[name].summary?.() ?? null) as RowSummary<TableRow> | null;
+  const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null, summary);
   const readers = new Map<number, TableReader>();
   const readerOf = (t: number): TableReader => { let reader = readers.get(t); if (!reader) readers.set(t, reader = squares[t]!.table.reader()); return reader; };
   for (const { t, row, id } of rows) {
@@ -122,7 +132,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
   }
   const keyedRead = new Map<KeyedName, { record: unknown; id: number; order: number; square: string }[]>();
   /** A kind kept in a table: each square's table and the order of its rows, joined once every square is read (`joined`). */
-  const tableRead = new Map<KeyedName, { table: RecordTable; orders: Float64Array | null }[]>();
+  const tableRead = new Map<KeyedName, { table: RecordTable; orders: Float64Array | null; square: string }[]>();
   const listRead = new Map<ListName, { item: unknown; ord: number; square: string }[]>();
   // DO NOT wait for each square's decompression before starting the next (EDT-03: hundreds, one after the other, at the opening): a batch at a time in flight, read in the same order.
   for (let i = 0; i < blobs.length; i += GUNZIP_BATCH) {
@@ -143,7 +153,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
           // The table in a buffer of its own: its columns are read from offset 0 (`RecordTable`).
           const list = tableRead.get(name) ?? [];
           tableRead.set(name, list);
-          list.push({ table: new RecordTable(value.table.slice().buffer), orders: value.orders });
+          list.push({ table: new RecordTable(value.table.slice().buffer), orders: value.orders, square });
           continue;
         }
         const records = squareRecords(value);
@@ -165,6 +175,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
   }
   // A kind with a square in JSON beside its tables (a save of two formats): every record of it as an object, the tables decoded too.
   const tables: SavedTables = {};
+  const upgraded: UpgradedSquare[] = [];
   for (const [name, squares] of tableRead) {
     const spec = KEYED[name];
     if (keyedRead.has(name)) {
@@ -174,6 +185,17 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
         records.forEach((record, j) => out.push({ record: name === 'buildings' ? withWear(record, wears) : record, id: table.ids[j]!, order: orders?.[j] ?? 0, square: '' }));
       }
       continue;
+    }
+    // A square stored before its kind's box or summary columns: its rows copied into a table of this format (what it lacks worked out once, here), joined from it, and handed back to be stored so.
+    const box = spec.box as RowBox<TableRow> | undefined;
+    const summary = (spec.summary?.() ?? null) as RowSummary<TableRow> | null;
+    for (const entry of squares) {
+      if (!((box && !entry.table.boxes) || (summary && entry.table.summaryWidth !== summary.width))) continue;
+      const writer = new TableWriter<TableRow>(false, spec.columns as RowPlace<TableRow> | undefined ?? null, box ?? null, summary);
+      writer.copyRows(entry.table, Array.from({ length: entry.table.rows }, (_, row) => row));
+      const buffer = writer.finish().buffer as ArrayBuffer;
+      entry.table = new RecordTable(buffer);
+      upgraded.push({ layer: name, square: entry.square, frame: squareFrame(buffer, entry.orders ? Array.from(entry.orders) : null) });
     }
     tables[spec.table!] = joined(name, squares, wears);
   }
@@ -197,6 +219,6 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
   for (const [name, out] of listRead) lists[name] = { ords: out.map((e) => e.ord), squares: out.map((e) => e.square) };
   return {
     document, tables, settings: manifest.settings, savedAt: manifest.savedAt,
-    layout: { old: null, squares: manifest.squares, globals: manifest.globals, lists },
+    layout: { old: null, squares: manifest.squares, globals: manifest.globals, lists, ...(upgraded.length ? { upgraded } : {}) },
   };
 }
