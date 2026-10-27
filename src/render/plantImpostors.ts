@@ -138,7 +138,7 @@ const PICK_GLSL = /* glsl */ `
   }
 `;
 
-const VARYINGS = /* glsl */ `
+export const VARYINGS = /* glsl */ `
   varying vec2 vFrameUv1;
   varying vec2 vFrameUv2;
   varying vec2 vFrameUv3;
@@ -308,7 +308,7 @@ export const STILL_READ_GLSL = /* glsl */ `
 `;
 
 /** A still picture's frame and its uv's change across the pixel, taken before anything is discarded (`STILL_READ_GLSL`). */
-const STILL_SLOPES = /* glsl */ `
+export const STILL_SLOPES = /* glsl */ `
   vec2 stillAt = stillUv(), stillIn = stillFrame();
   vec2 stillUx = dFdx(stillAt), stillUy = dFdy(stillAt);
 `;

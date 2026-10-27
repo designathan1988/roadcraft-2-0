@@ -9,7 +9,7 @@ import { DT, FLEET_CEILING } from '../params';
 import type { SimWorld } from '../world';
 import { spawnVehicleAt } from '../vehicles/spawn';
 import { mayRequestSearch } from '../routing/searchScratch';
-import { TRAFFIC } from '../ambient/ambient';
+import { TRAFFIC } from '../vehicles/archetypes';
 import { MesoModel } from './model';
 import { DemandCells } from './demand';
 import { MICRO_RADIUS, type MesoDelta, followView } from './memory';

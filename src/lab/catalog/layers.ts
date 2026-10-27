@@ -5,7 +5,8 @@ import { addLine, addStop, addTrack, emptyTransit } from '@world/transit';
 import type { SignalFeed } from '@sim/host/simClient';
 import { createFlagLayer } from '../../render/buildings/flagLayer';
 import { createSignalHeads } from '../../render/signals';
-import { carGeometry } from '../../render/densityCars';
+import { buildCarModel } from '../../render/carBody';
+import { archetypeById } from '@sim/vehicles/archetypes';
 import { createTransit } from '../../render/transit';
 import { TERRAIN_BASE, unifiedWaterGeometry } from '../../render/terrain';
 import { createWaterSurface } from '../../render/water';
@@ -139,14 +140,14 @@ export function signalItems(add: Add, cache: BatchCache): void {
     notes: ['one head on each approach of a signal group, where the world stands its post (signalPostPlace); the frame (post, arm, housing) one geometry an instance'] });
 }
 
-/** A far car as the far traffic draws it (`densityCars.ts`): a body and a cabin, placed along its road and coloured by the vertex shader. */
+/** A far car as the far traffic draws it (`densityCars.ts`): the picture of the near traffic's far model (`farCarPictures.ts`), here the sedan's model itself, painted. */
 export function farCarItems(add: Add): void {
-  const geometry = carGeometry();
-  const mesh = new Mesh(geometry, new MeshStandardMaterial({ color: 0x8a8f96, roughness: 0.6 }));
+  const geometry = buildCarModel(archetypeById('sedan'), 'sedan').far;
+  const mesh = new Mesh(geometry, new MeshStandardMaterial({ color: 0x5f8fca, roughness: 0.38, metalness: 0.28, vertexColors: true }));
   mesh.name = 'density-car';
-  add({ group: 'Vehicles', name: 'far car (far traffic)', variation: '4.3 x 1.8 m, body and cabin', origin: 'kit', source: 'src/render/densityCars.ts (carGeometry)', build: 'instanced',
+  add({ group: 'Vehicles', name: 'far car (far traffic)', variation: 'the sedan far model (body, dark glass, wheels)', origin: 'kit', source: 'src/render/farCarPictures.ts (createFarCarPictures)', build: 'instanced',
     pieces: [{ label: 'car', geometry, material: mesh.material }], object: mesh, countKey: 'far-cars',
-    notes: ['one instance a car of the far traffic, placed along its road and given its colour in the vertex shader'] });
+    notes: ['one picture an instance (8 x 8 directions, 2 triangles) of the far model the near traffic draws, placed along its road in the vertex shader and painted from the palette of its class; under 1.5 px long, none'] });
 }
 
 /** The water as the ground lays it (`terrain.ts` unifiedWaterGeometry): a lake from one stamp in a basin, a river along a course; its material the game's (`water.ts`). */

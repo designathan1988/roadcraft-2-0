@@ -2,7 +2,7 @@ import { Rng } from '@core/rng';
 import { m, stepsIn } from '@world/units';
 import { DT, FLEET_CEILING, PED_CEILING } from '../params';
 import type { SimWorld } from '../world';
-import { ARCHETYPES, bodyClassOfArchetype, type Archetype } from '../vehicles/archetypes';
+import { ARCHETYPES, TRAFFIC, bodyClassOfArchetype } from '../vehicles/archetypes';
 import { chooseVehicleDestination } from '../routing/destination';
 import { planFrom } from '../routing/router';
 import { makeDriver } from '../vehicles/driver';
@@ -42,10 +42,6 @@ const OPEN_TICKS = 600;
 /** Share of the bays with a car in them. */
 const PARKED = 0.62;
 
-/** The kinds of car that stand in bays and join the traffic (buses run their lines, `sim/transit`). */
-export const TRAFFIC: readonly (readonly [Archetype, number])[] = ARCHETYPES
-  .filter((a) => a.id !== 'bus')
-  .map((a) => [a, a.id === 'truck' ? a.weight * 0.4 : a.weight] as const);
 const PARKED_KINDS = ARCHETYPES.filter((a) => a.id === 'hatch' || a.id === 'sedan' || a.id === 'suv' || a.id === 'van');
 
 /** DO NOT stand a vehicle in every bay of the region: the scenery's car in a bay is this row of its place and look, a vehicle only when the lots drive it out (`release`) */

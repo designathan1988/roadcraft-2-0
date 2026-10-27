@@ -1412,7 +1412,7 @@ export function createSceneRenderer(
   holdStill(agentParts);
   scene.add(agentParts);
   // The far traffic: the meso model's cars on every road outside the micro window, in one draw (`densityCars.ts`).
-  const densityCars = createDensityCars(deckHeight);
+  const densityCars = createDensityCars(deckHeight, agents.farBodies);
   scene.add(densityCars.object);
   // What moves and casts: each sun cascade it is drawn into is drawn again while it moves (`sunCascades.ts`).
   environment.setMovers([

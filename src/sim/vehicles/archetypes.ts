@@ -234,3 +234,9 @@ export const archetypeById = (id: string): Archetype =>
 
 /** The conflict-zone size class a body of this archetype is measured with. */
 export const bodyClassOfArchetype = (a: Archetype): BodyClass => bodyClassOf(a.length, a.width);
+
+/** The kinds of car that stand in bays and join the traffic (buses run their lines, `sim/transit`): the near traffic's mix (`ambient.ts`,
+ *  `meso.ts`), and the far traffic's drawn from it (`render/farCarPictures.ts`). */
+export const TRAFFIC: readonly (readonly [Archetype, number])[] = ARCHETYPES
+  .filter((a) => a.id !== 'bus')
+  .map((a) => [a, a.id === 'truck' ? a.weight * 0.4 : a.weight] as const);

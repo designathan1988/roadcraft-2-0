@@ -61,6 +61,7 @@ import { blobInto, blobMesh } from './blobShadows';
 import { ERROR_PIXELS, LEVELS, LEVEL_ERRORS, PartLevelMaker, SHED, levelFor, type Weld } from './vehicleLevels';
 import { lodPool } from './people/lodPool';
 import { withoutHidden } from './vehicleHidden';
+import { type FarCarBody, LEAST_CAR_PX } from './farCarPictures';
 import { VEHICLE_WHOLE_CAP, type QualitySettings } from './quality';
 import { jobPort } from '../jobs/jobPool';
 import { provideLanes } from './pagePorts';
@@ -86,7 +87,7 @@ const OCCUPANT_ZOOM = perM(3);
 
 /** Each vehicle's own level, by the screen's scale where it stands */
 const VEHICLE_HYSTERESIS = 0.1;
-/** A car's length, for the smallest scale anything is drawn at (2 px). */
+/** A car's length, for the smallest scale anything is drawn at (`LEAST_CAR_PX` device pixels long, as the far traffic's). */
 const CAR_LENGTH = m(4.5);
 /** At most this many vehicles whole at once: past it, the smallest on the screen are drawn a level down. */
 const VEHICLE_NEAR_CAP = VEHICLE_WHOLE_CAP;
@@ -159,6 +160,9 @@ interface AgentRenderOptions {
 
 export interface AgentMeshes {
   readonly meshes: readonly Object3D[];
+  /** Each body the traffic is drawn with and its far model (`VehicleModel.far`, as made: not its simplified level): what the far traffic's
+   *  pictures are taken of (`farCarPictures.ts`), so a car past the micro window looks as one a few pixels long inside it. */
+  readonly farBodies: readonly FarCarBody[];
   /** Whether the last `sync` switched the two-wheelers between casting into the shadow map and a soft disc under them */
   readonly castersChanged: boolean;
   /** Whether the last `sync` drew anything into the shadow map (vehicles, two-wheelers, people): the map's moving casters. */
@@ -512,10 +516,10 @@ const levelsKey = (plan: BodyPlan, pixels: number): number =>
   levelFor(pixels) + LEVELS * (levelFor(pixels * tyreSize(plan)) + LEVELS * levelFor(pixels * rimSize(plan)));
 
 /** The screen scales (CSS pixels a unit) over which a standing vehicle drawn at `own` from `pixels` keeps its own level and its parts' (`levelsKey`): the open range [out.lo, out.hi]; none for a whole one (the cap's). */
-function standingRange(plan: BodyPlan, own: number, pixels: number, ratio: number, occupantZoom: number, out: { lo: number; hi: number }): void {
+function standingRange(plan: BodyPlan, own: number, pixels: number, ratio: number, occupantZoom: number, least: number, out: { lo: number; hi: number }): void {
   if (own >= 2) { out.lo = Infinity; out.hi = -Infinity; return; }
   // The hysteresis of `sync`'s own level: up at the next edge grown by a tenth, down at its own edge.
-  let lo = own === 1 ? FAR_BODY_ZOOM : 2 / CAR_LENGTH;
+  let lo = own === 1 ? FAR_BODY_ZOOM : least;
   let hi = (own === 1 ? occupantZoom : FAR_BODY_ZOOM) * (1 + VEHICLE_HYSTERESIS);
   // DO NOT make an array of the three sizes per car: three passes, one a part's scale.
   for (let k = 0; k < 3; k++) {
@@ -791,12 +795,12 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
   const thinWheelLevels = ladder(thinWheels, 'boxes', 2);
   const spokeLevels = ladder(spokes, 'boxes', 2);
   // One set per class and body style: a sedan may be drawn as an estate and an SUV as a pick-up
-  const bodies: { key: string; model: VehicleModel }[] = [];
+  const bodies: { key: string; archetype: Archetype; model: VehicleModel }[] = [];
   for (const archetype of ARCHETYPES) {
     if (archetype.shape === 'car') {
-      for (const style of carStylesFor(archetype)) bodies.push({ key: `${archetype.id}:${style}`, model: buildCarModel(archetype, style) });
-    } else if (archetype.shape === 'bus') bodies.push({ key: `${archetype.id}:bus`, model: buildBusModel(archetype) });
-    else if (archetype.shape === 'truck') bodies.push({ key: `${archetype.id}:truck`, model: buildTruckModel(archetype) });
+      for (const style of carStylesFor(archetype)) bodies.push({ key: `${archetype.id}:${style}`, archetype, model: buildCarModel(archetype, style) });
+    } else if (archetype.shape === 'bus') bodies.push({ key: `${archetype.id}:bus`, archetype, model: buildBusModel(archetype) });
+    else if (archetype.shape === 'truck') bodies.push({ key: `${archetype.id}:truck`, archetype, model: buildTruckModel(archetype) });
   }
   for (const { key, model } of bodies) {
     const id = key.replace(':', '-');
@@ -1767,6 +1771,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
 
   return {
     meshes,
+    farBodies: bodies.map(({ key, archetype, model }) => ({ key, archetype, far: model.far })),
     get castersChanged() { return castersChanged; },
     get casting() { return casting; },
     get held() { return { vehicles: draws.size, cells: cellsDrawn.size, kept: keptList.length, people: pedestrians.remembered }; },
@@ -1865,6 +1870,9 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
       const pixelRatio = options.pixelRatio ?? 1;
       // A part's level by its error in pixels drawn, against the tier's pixels (`levelFor` is against `ERROR_PIXELS`): one where the tier draws as every tier did.
       const levelRatio = pixelRatio * (ERROR_PIXELS / (options.tier?.vehicleErrorPixels ?? ERROR_PIXELS));
+      // The least screen scale (CSS pixels a unit) a vehicle is drawn at: a car `LEAST_CAR_PX` device pixels long, where the far traffic's go too
+      // (`densityCars.ts`): DO NOT let the two stop at other sizes, the near cars were gone at the window's centre while the far ones still stood round it.
+      const leastScale = LEAST_CAR_PX / (CAR_LENGTH * pixelRatio);
       const nearCap = options.tier?.vehicleWholeCap ?? VEHICLE_NEAR_CAP;
       const softShadows = options.shadows !== false;
       let whole = 0;
@@ -1890,7 +1898,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
       const keepsCells = !!options.vehicleInside && !!screenScale;
       const standsIn = (record: CellRecord, plan: BodyPlan, own: number, pixels: number, onScreen: boolean, x: number, y: number, radius: number): void => {
         if (!keepsCells) return;
-        standingRange(plan, own, pixels, levelRatio, occupantZoom, range);
+        standingRange(plan, own, pixels, levelRatio, occupantZoom, leastScale, range);
         if (range.lo > record.rangeLo) record.rangeLo = range.lo;
         if (range.hi < record.rangeHi) record.rangeHi = range.hi;
         if (!onScreen) record.onScreen = false;
@@ -1943,7 +1951,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
         const was = s.lod;
         let own = -1;
         for (let level = 2; level >= 0; level--) {
-          const edge = level === 2 ? occupantZoom : level === 1 ? FAR_BODY_ZOOM : 2 / CAR_LENGTH;
+          const edge = level === 2 ? occupantZoom : level === 1 ? FAR_BODY_ZOOM : leastScale;
           if (pixels >= (level > was ? edge * (1 + VEHICLE_HYSTERESIS) : edge)) { own = level; break; }
         }
         if (own < 0) return;

@@ -1,5 +1,7 @@
 import {
-  BoxGeometry,
+  BufferAttribute,
+  BufferGeometry,
+  Color,
   DataTexture,
   DynamicDrawUsage,
   FloatType,
@@ -11,13 +13,13 @@ import {
   NearestFilter,
   RGBAFormat,
   Sphere,
+  Vector2,
   Vector3,
-  type BufferGeometry,
+  Vector4,
 } from 'three';
 import { TILE } from '@world/tiles';
 import { pinned } from './pinned';
 import { TERRAIN_MAX_HEIGHT, TERRAIN_MIN_HEIGHT } from '@world/terrain';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import type { Network } from '@world/network';
 import type { SegmentId } from '@world/ids';
 import { laneOffset } from '@world/roadTypes';
@@ -26,6 +28,9 @@ import type { SimClient } from '@sim/host/simClient';
 import { MESO_INSIDE, MESO_ONE_WAY, MESO_PRESENT, MESO_RECORD, MICRO_RADIUS, ML, MesoMemory } from '@sim/meso/memory';
 import { JAM_SPACING } from '@sim/meso/model';
 import { linkDirection, linkSegment } from '@sim/meso/tileLinks';
+import { IMPOSTOR_FRAMES_GLSL } from './impostorShaders';
+import { FRAGMENT_PARS, SET_MODELS, STILL_READ_GLSL, STILL_SLOPES, VARYINGS, colourNormal, stillOf } from './plantImpostors';
+import { type FarCarBody, LEAST_CAR_PX, createFarCarPictures } from './farCarPictures';
 
 /** THE FAR TRAFFIC: the meso model's cars on every road outside the micro window, as Cidade's density cars, a draw a tile */
 /** DO NOT write every far car again at each meso step nor draw the tiles off the view: each link's cars belong to the tile of its middle, a mesh a tile culled by its sphere, and only the tiles where a link's numbers changed are written and sent.
@@ -55,24 +60,31 @@ const TIME_WRAP = 4096;
 /** A far road's lane, for its cars' places across it (its profile is the store's, not on the page). */
 const FAR_LANE = m(3.5);
 
-/** The car: a body and a cabin, 4.3 m by 1.8 m, its length along x, its width along z, standing on y = 0. */
-export function carGeometry(): BufferGeometry {
-  const body = new BoxGeometry(m(4.3), m(0.75), m(1.8)).translate(0, m(0.2) + m(0.375), 0);
-  const cabin = new BoxGeometry(m(2.2), m(0.55), m(1.6)).translate(-m(0.2), m(0.95) + m(0.275), 0);
-  for (const g of [body, cabin]) g.deleteAttribute('uv');
-  const merged = mergeGeometries([body, cabin], false);
-  body.dispose();
-  cabin.dispose();
-  return merged;
+/** A car's picture: one quad, its corners about its centre (`farCarPictures.ts`: each model's sphere, read by the model's index). */
+function pictureQuad(): BufferGeometry {
+  const g = new BufferGeometry();
+  g.setAttribute('position', new BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
+  g.setAttribute('normal', new BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1]), 3));
+  g.setIndex([0, 1, 2, 0, 2, 3]);
+  return g;
 }
 
 const VERTEX_PARS = /* glsl */ `
 uniform highp sampler2D uLinks;
 uniform float uTime;
 uniform vec3 uWindow;
+// Half the target's height, device pixels; the fewest pixels long a car is drawn at.
+uniform vec2 uSize;
+uniform vec4 uSpheres[${SET_MODELS}];
+uniform vec2 uBlockOf[${SET_MODELS}];
+uniform float uLengths[${SET_MODELS}];
 attribute vec4 aLink;
 attribute vec4 aMove;
-varying vec3 vCarColour;
+attribute vec3 aPaint;
+varying vec3 vPaint;
+${IMPOSTOR_FRAMES_GLSL}
+${VARYINGS}
+flat varying mat3 vNormalToWorld;
 vec4 linkPoint(float slot, int k) {
   int i = int(slot) * ${LINK_POINTS} + k;
   return texelFetch(uLinks, ivec2(i % ${TEX_WIDTH}, i / ${TEX_WIDTH}), 0);
@@ -80,7 +92,7 @@ vec4 linkPoint(float slot, int k) {
 `;
 
 // aLink: the link's slot, place along its travel (m), lateral offset to the right of travel (m), direction (1: from the road's b to its a).
-// aMove: speed (m/s), the stretch it moves round (0: standing in the queue), seed.
+// aMove: speed (m/s), the stretch it moves round (0: standing in the queue), seed, its model (-1: none pictured). aPaint: its paint, linear.
 const VERTEX_PLACE = /* glsl */ `
 float roadLength = linkPoint(aLink.x, 0).w;
 float travel = aMove.y > 0.0 ? mod(aLink.y + aMove.x * uTime, aMove.y) : aLink.y;
@@ -97,16 +109,64 @@ vec2 carRight = vec2(-carT.y, carT.x);
 carAt.xz += carRight * aLink.z;
 // Inside the micro window its cars are the micro simulation's: this one is folded to a point (no triangle drawn).
 bool carHidden = roadLength <= 0.0 || length(vec2(carAt.x, -carAt.z) - uWindow.xy) < uWindow.z;
-vec3 carX = vec3(carT.x, 0.0, carT.y);
-vec3 carZ = vec3(carRight.x, 0.0, carRight.y);
-float carHash = fract(sin(aMove.z * 12.9898 + 78.233) * 43758.5453);
-vCarColour = carHash < 0.24 ? vec3(0.8) : carHash < 0.44 ? vec3(0.03) : carHash < 0.6 ? vec3(0.25)
-  : carHash < 0.7 ? vec3(0.45, 0.04, 0.03) : carHash < 0.8 ? vec3(0.05, 0.1, 0.3) : carHash < 0.9 ? vec3(0.5, 0.5, 0.52) : vec3(0.12, 0.2, 0.12);
-vec3 objectNormal = carX * normal.x + vec3(0.0, normal.y, 0.0) + carZ * normal.z;
+// The model's frame in the world: its length along the travel, its width to the right of it, up (a right-handed frame: x cross y is z).
+mat3 carFrame = mat3(vec3(carT.x, 0.0, carT.y), vec3(0.0, 1.0, 0.0), vec3(carRight.x, 0.0, carRight.y));
+// The picture's normal is read off the atlas (\`colourNormal\`).
+vec3 objectNormal = vec3(0.0, 1.0, 0.0);
 `;
 
+/**
+ * The car's picture facing the eye, its frame the nearest of the 64 its model was taken from (the near props' still pictures,
+ * \`plantImpostors.ts\` vertexMain, with the car's place and frame worked out above in place of an instance's matrix); folded to a point
+ * where nothing is drawn: inside the micro window, no picture of its kind, or under \`LEAST_CAR_PX\` long.
+ */
 const VERTEX_TRANSFORM = /* glsl */ `
-vec3 transformed = carHidden ? carAt : carAt + carX * position.x + vec3(0.0, position.y, 0.0) + carZ * position.z;
+vec3 transformed = carAt;
+vPaint = aPaint;
+if (!carHidden && aMove.w > -0.5) {
+  int carModel = int(aMove.w + 0.5);
+  vec4 sphere = uSpheres[carModel];
+  vec4 footClip = projectionMatrix * viewMatrix * vec4(carAt, 1.0);
+  float perUnit = projectionMatrix[1][1] * uSize.x / max(footClip.w, 1e-4);
+  if (uLengths[carModel] * perUnit >= uSize.y) {
+    vec3 eyeWorld = cameraPosition;
+    if (projectionMatrix[2][3] == 0.0) eyeWorld = carAt + vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]) * 1.0e5;
+    vec3 eye = transpose(carFrame) * (eyeWorld - carAt) - sphere.xyz;
+    vec3 dir = normalize(eye);
+    // Never from below: the lowest pictures are level.
+    dir = normalize(vec3(dir.x, max(dir.y, 0.0), dir.z) + vec3(0.0, 1e-5, 0.0));
+    vec3 qx, qy;
+    frameBasis(dir, qx, qy);
+    vec3 corner = (qx * position.x + qy * position.y) * (2.0 * sphere.w);
+    vec3 ray = normalize(corner - eye);
+    vec2 grid = hemiOctaEncode(dir) * (FRAMES - 1.0);
+    vec2 cell = min(floor(grid), vec2(FRAMES - 2.0));
+    vec2 f = clamp(grid - cell, 0.0, 1.0);
+    vec3 w = vec3(min(1.0 - f.x, 1.0 - f.y), abs(f.x - f.y), min(f.x, f.y));
+    vWeights = w.x >= w.y && w.x >= w.z ? vec3(1.0, 0.0, 0.0) : w.y >= w.z ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0);
+    vFrame1 = cell;
+    vFrame2 = cell + (f.x >= f.y ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
+    vFrame3 = cell + vec2(1.0);
+    vFrameUv1 = frameUv(vFrame1, eye, ray, sphere.w);
+    vFrameUv2 = frameUv(vFrame2, eye, ray, sphere.w);
+    vFrameUv3 = frameUv(vFrame3, eye, ray, sphere.w);
+    vBlock = uBlockOf[carModel];
+    vNormalToWorld = carFrame;
+    transformed = carAt + carFrame * (sphere.xyz + corner);
+  }
+}
+`;
+
+/** The picture's colour (\`plantImpostors.ts\` COLOUR_MAP_STILL): its cover blended, its colours times the car's paint, as the near traffic's
+ *  far model is painted (\`agents.ts\` paint: the model's own colours times the car's). */
+const COLOUR_MAP = /* glsl */ `
+  ${STILL_SLOPES}
+  vec4 impostorColour = ${stillOf('uAlbedo')};
+  {
+    float cover = impostorColour.a;
+    if (cover < ${(0.5 / 255).toFixed(6)}) discard;
+    diffuseColor = vec4(diffuseColor.rgb * vPaint * pow(min(impostorColour.rgb / max(impostorColour.a, 1e-4), vec3(1.0)), vec3(2.2)), cover);
+  }
 `;
 
 export interface DensityCars {
@@ -120,8 +180,10 @@ export interface DensityCars {
 const farLateral = (lane: number, lanes: number, oneWay: boolean): number =>
   oneWay ? FAR_LANE * (lane - (lanes - 1) / 2) : FAR_LANE * (lane + 0.5);
 
-/** `heightAt`: the road's deck at a point, or the ground's for a road not on the page (`renderer.ts` deckHeight). */
-export function createDensityCars(heightAt: (x: number, y: number, segment: SegmentId | undefined) => number): DensityCars {
+/** `heightAt`: the road's deck at a point, or the ground's for a road not on the page (`renderer.ts` deckHeight); `bodies`: the near traffic's
+ *  (`AgentMeshes.farBodies`), whose pictures the cars are drawn as (none: nothing drawn, the specs). */
+export function createDensityCars(heightAt: (x: number, y: number, segment: SegmentId | undefined) => number, bodies: readonly FarCarBody[] = []): DensityCars {
+  const pictures = createFarCarPictures(bodies);
   const memory = new MesoMemory();
   let sent: { x: number; y: number; at: number } | null = null;
   /** The slots the deltas taken this frame changed, and a stamp a slot to keep each once. */
@@ -142,22 +204,44 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
   let whole = true;
   const watch = (t: DataTexture): DataTexture => { t.onUpdate = () => { whole = false; }; return t; };
   let texture = watch(makeTexture(lines, rows));
-  const uniforms = { uLinks: { value: texture }, uTime: { value: 0 }, uWindow: { value: new Vector3() } };
+  /** Each model's sphere, block and length as the shader reads them by index, the slots past the set's models empty. */
+  const padded = <T>(values: readonly T[] | undefined, empty: () => T): T[] => Array.from({ length: SET_MODELS }, (_, k) => values?.[k] ?? empty());
+  const uniforms = {
+    uLinks: { value: texture }, uTime: { value: 0 }, uWindow: { value: new Vector3() },
+    uSize: { value: new Vector2(540, LEAST_CAR_PX) },
+    uSpheres: { value: padded(pictures?.spheres, () => new Vector4()) },
+    uBlockOf: { value: padded(pictures?.blocks, () => new Vector2()) },
+    uLengths: { value: padded(pictures?.lengths, () => 0) },
+    uAlbedo: { value: pictures?.set.albedo ?? null },
+    uNormals: { value: pictures?.set.normals ?? null },
+    uBlocks: { value: new Vector2(pictures?.set.blocks.x ?? 1, pictures?.set.blocks.y ?? 1) },
+    // The atlas's finest level read alone (a still set's, `STILL_READ_GLSL`).
+    uPerMip: { value: 0 },
+  };
 
-  const material = new MeshStandardMaterial({ roughness: 0.45, metalness: 0.2 });
+  // The near paint's surface (`agents.ts` paint), its cover blended over what is behind it with its depth written (a still set's pictures, `createImpostors`).
+  const material = new MeshStandardMaterial({ roughness: 0.38, metalness: 0.28, envMapIntensity: 1.35, transparent: true, depthWrite: true });
   material.onBeforeCompile = (shader) => {
-    shader.uniforms['uLinks'] = uniforms.uLinks;
-    shader.uniforms['uTime'] = uniforms.uTime;
-    shader.uniforms['uWindow'] = uniforms.uWindow;
-    shader.vertexShader = VERTEX_PARS + shader.vertexShader
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${VERTEX_PARS}`)
       .replace('#include <beginnormal_vertex>', VERTEX_PLACE)
       .replace('#include <begin_vertex>', VERTEX_TRANSFORM);
-    shader.fragmentShader = 'varying vec3 vCarColour;\n' + shader.fragmentShader
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vCarColour;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${FRAGMENT_PARS}\nuniform sampler2D uAlbedo;\nuniform sampler2D uNormals;\nuniform float uPerMip;\nflat varying mat3 vNormalToWorld;\nvarying vec3 vPaint;\n${STILL_READ_GLSL}`)
+      .replace('#include <map_fragment>', COLOUR_MAP)
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>\n${colourNormal(stillOf('uNormals'), true)}`);
   };
-  material.customProgramCacheKey = () => 'density-cars-v1';
+  material.customProgramCacheKey = () => 'density-cars-pictures';
+  /** The target's height read as a tile is drawn: what a car's pixels are measured against (the post chain's targets, the canvas). */
+  const viewport = new Vector4();
+  const measureTarget = (renderer: { getCurrentViewport(target: Vector4): Vector4 }): void => {
+    uniforms.uSize.value.x = renderer.getCurrentViewport(viewport).w / 2;
+  };
+  /** A car's paint, written into its instance. */
+  const paint = new Color();
 
-  const shape = carGeometry();
+  const shape = pictureQuad();
   const group = new Group();
   group.name = 'densityCars';
   pinned(group);
@@ -168,8 +252,10 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
     geometry: InstancedBufferGeometry;
     link: Float32Array;
     move: Float32Array;
+    paint: Float32Array;
     linkAttribute: InstancedBufferAttribute;
     moveAttribute: InstancedBufferAttribute;
+    paintAttribute: InstancedBufferAttribute;
     capacity: number;
     n: number;
     readonly slots: Set<number>;
@@ -184,17 +270,20 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
   let total = 0;
 
   /** A geometry for a tile with room for `n` cars (the old one let go: three keeps a geometry's buffers until it is disposed), its sphere the tile's. */
-  function tileGeometry(tile: Pick<CarTile, 'link' | 'move' | 'linkAttribute' | 'moveAttribute' | 'capacity'>, n: number, sphere: Sphere): InstancedBufferGeometry {
+  function tileGeometry(tile: Pick<CarTile, 'link' | 'move' | 'paint' | 'linkAttribute' | 'moveAttribute' | 'paintAttribute' | 'capacity'>, n: number, sphere: Sphere): InstancedBufferGeometry {
     const g = new InstancedBufferGeometry();
     g.index = shape.index;
     g.setAttribute('position', shape.getAttribute('position'));
     g.setAttribute('normal', shape.getAttribute('normal'));
     tile.link = new Float32Array(n * 4);
     tile.move = new Float32Array(n * 4);
+    tile.paint = new Float32Array(n * 3);
     tile.linkAttribute = new InstancedBufferAttribute(tile.link, 4).setUsage(DynamicDrawUsage);
     tile.moveAttribute = new InstancedBufferAttribute(tile.move, 4).setUsage(DynamicDrawUsage);
+    tile.paintAttribute = new InstancedBufferAttribute(tile.paint, 3).setUsage(DynamicDrawUsage);
     g.setAttribute('aLink', tile.linkAttribute);
     g.setAttribute('aMove', tile.moveAttribute);
+    g.setAttribute('aPaint', tile.paintAttribute);
     g.instanceCount = 0;
     // The cars are placed by the shader inside their tile: the tile's sphere is what the view culls.
     g.boundingSphere = sphere;
@@ -208,13 +297,14 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
     let tile = tiles.get(key);
     if (tile) return tile;
     const sphere = new Sphere(new Vector3((cx + 0.5) * TILE, (TERRAIN_MAX_HEIGHT + TERRAIN_MIN_HEIGHT) / 2, -(cy + 0.5) * TILE), TILE_RADIUS);
-    const made = { link: new Float32Array(0), move: new Float32Array(0), capacity: 0 } as unknown as CarTile;
+    const made = { link: new Float32Array(0), move: new Float32Array(0), paint: new Float32Array(0), capacity: 0 } as unknown as CarTile;
     const geometry = tileGeometry(made, TILE_START, sphere);
     const mesh = new Mesh(geometry, material);
     mesh.name = `densityCars-${cx},${cy}`;
     pinned(mesh);
     mesh.castShadow = false;
     mesh.receiveShadow = true;
+    mesh.onBeforeRender = measureTarget;
     // Nothing drawn until a car is written.
     mesh.visible = false;
     tile = Object.assign(made, { mesh, geometry, n: 0, slots: new Set<number>(), dirty: false, key });
@@ -405,17 +495,22 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
     const put = (slot: number, s: number, lateral: number, dir: number, speed: number, wrap: number, seed: number): void => {
       if (n >= tile.capacity) {
         const old = tile.geometry;
-        const keepLink = tile.link, keepMove = tile.move;
+        const keepLink = tile.link, keepMove = tile.move, keepPaint = tile.paint;
         tile.geometry = tileGeometry(tile, tile.capacity * 2, old.boundingSphere!);
         tile.link.set(keepLink.subarray(0, n * 4));
         tile.move.set(keepMove.subarray(0, n * 4));
+        tile.paint.set(keepPaint.subarray(0, n * 3));
         tile.mesh.geometry = tile.geometry;
         letGoTile(old);
       }
       const at = n * 4;
       const link = tile.link, move = tile.move;
+      // Its model and paint by its seed, as the near traffic's mix and its classes' palettes give them (`farCarPictures.ts`).
+      const model = pictures ? pictures.modelOf(seed) : -1;
+      if (pictures && model >= 0) pictures.paintOf(seed, model, paint); else paint.setRGB(1, 1, 1);
       link[at] = slot; link[at + 1] = s; link[at + 2] = lateral; link[at + 3] = dir;
-      move[at] = speed; move[at + 1] = wrap; move[at + 2] = seed; move[at + 3] = 0;
+      move[at] = speed; move[at + 1] = wrap; move[at + 2] = seed; move[at + 3] = model;
+      tile.paint[n * 3] = paint.r; tile.paint[n * 3 + 1] = paint.g; tile.paint[n * 3 + 2] = paint.b;
       n++;
     };
     for (const slot of tile.slots) {
@@ -447,9 +542,9 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
         put(slot, ((k + 0.5) / free) * stretch, lateralOf[(queued + k) % lanes]!, dir, speed, stretch, slot * 31 + queued + k);
       }
     }
-    for (const attribute of [tile.linkAttribute, tile.moveAttribute]) {
+    for (const attribute of [tile.linkAttribute, tile.moveAttribute, tile.paintAttribute]) {
       attribute.clearUpdateRanges();
-      attribute.addUpdateRange(0, n * 4);
+      attribute.addUpdateRange(0, n * attribute.itemSize);
       attribute.needsUpdate = true;
     }
     tile.geometry.instanceCount = n;
@@ -479,6 +574,8 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
       // The window the worker stands at (its numbers in this step), not the one asked for: its cars and these meet at its edge.
       uniforms.uWindow.value.set(memory.windowX, memory.windowY, memory.windowR);
       uniforms.uTime.value = sim.clock.time % TIME_WRAP;
+      // Drawn once their pictures are taken (`takeWaitingPictures`, between draws).
+      group.visible = pictures?.set.ready() ?? false;
       // The tiles a step or an edit changed: written and sent, the others left as they are.
       for (const tile of tiles.values()) if (tile.dirty) writeTile(net, tile);
     },
@@ -487,6 +584,7 @@ export function createDensityCars(heightAt: (x: number, y: number, segment: Segm
       shape.dispose();
       material.dispose();
       texture.dispose();
+      pictures?.dispose();
     },
   };
 }
