@@ -74,7 +74,7 @@ import { DEFAULT_OPTIMIZATIONS, qualityOptionsDiffer, withOptimizations, type Op
 import { createOptimizer } from './optimizationsApply';
 import { createInspector, type Inspector } from './inspector';
 import { buildRoadSurfaces, disposeSurfaceReuse, roadSurfaceSteps, type RoadSurfaces, type SurfaceReuse, type TileBundle } from './roadSurfaces';
-import { CELL as ROAD_BLOCK, ROAD_INPUT_RESIDENCY, SurfaceInputs } from './roadSurfaceInputs';
+import { CELL as ROAD_BLOCK, type PartKey, ROAD_INPUT_RESIDENCY, SurfaceInputs } from './roadSurfaceInputs';
 import { NetworkFarRoads } from './networkFarRoads';
 import type { RoadWindowLink } from './roadWindowLink';
 import { TILE, tileKey } from '@world/tiles';
@@ -149,8 +149,6 @@ const ROOM_LIGHTS = 6;
 declare const __ROAD_TILES_HASH__: string | undefined;
 /** The fingerprint of the road tiles' code (`cook-plugin.ts`): their tiles are kept under it between sessions. */
 const ROAD_TILES_HASH = typeof __ROAD_TILES_HASH__ !== 'undefined' && __ROAD_TILES_HASH__ ? __ROAD_TILES_HASH__ : null;
-/** How long the opening's roads wait for the kept tiles to be read, ms: past it they are built. */
-const KEPT_TILES_WAIT_MS = 3000;
 /** The view a zoom belongs to, for its budgets (`core/perfBudget.ts` `VIEW_BUDGETS`): the street from 8 px a metre, the district from 0.8, the map under. */
 const STREET_ZOOM = perM(8);
 const DISTRICT_ZOOM = perM(0.8);
@@ -260,6 +258,9 @@ export interface SceneHandle {
   /** What the opening still waits for (`draw`'s reveal): asked by the probes, never each frame. */
   /** What the reveal waits for, and the roads' cells as the view has them: `solvePending`, the roads past a scoped opening's view still being solved; `roadsWanted`, the cells the view wants not built yet; `roadsTaken`, the cells built or being built (`mesh/roadResidency.ts`). */
   openingState(): { readonly roadsIn: boolean; readonly coarsePending: boolean; readonly viewPending: boolean; readonly treesStarted: boolean; readonly treesPending: boolean; readonly programs: string; readonly worked: number; readonly worldBusy: boolean; readonly solvePending: boolean; readonly roadsWanted: number; readonly roadsTaken: number };
+  /** A road tile's key as a build makes it (`roadSurfaces.ts`): what its inputs read (`SurfaceInputs.reachOf`), the ground under it and the roads'
+   *  heights round it (`SurfaceReuse.dependsOn`), each a number: asked by the probes, to tell what of a kept tile's key moved between sessions. */
+  roadTileKey(pass: string, part: string): { readonly inputs: number; readonly terrain: number; readonly elevation: number } | null;
   /** Which renderer draws the frame (`gpu/backendChoice.ts`): WebGL, or three's WebGPU renderer with `?gpu=webgpu` (`MIGRACAO-WEBGPU.md`). */
   readonly backend: 'three-webgl' | 'three-webgpu';
   /** The same view drawn by the WebGL and the WebGPU renderer and the pictures compared (`gpu/webgpuView.ts`, `scripts/look.mjs` "compare"). */
@@ -1046,6 +1047,8 @@ export function createSceneRenderer(
   /** What the store holds now, by `storedKey`, and by place (`pass|tile`): a tile built again at its place replaces what was kept of it. */
   const storedKeys = new Set<string>();
   const storedAt = new Map<string, string>();
+  /** What the builds asked of the kept tiles since the last build landed (`worldSteps`, its diary entry): told kept or not, read, found. */
+  const keptAsked = { yes: 0, no: 0, fetched: 0, found: 0 };
   const placeOf = (key: string): string => key.slice(0, key.lastIndexOf('|'));
   const noteStored = (key: string): void => {
     const place = placeOf(key);
@@ -1121,8 +1124,8 @@ export function createSceneRenderer(
     retired: [],
     // DO NOT read the whole store at the opening: it grows with every place the camera went (CLAUDE.md, "Streaming world").
     stored: {
-      has: (key) => storedKeys.has(key),
-      fetch: (keys) => fetchTiles(keys),
+      has: (key) => { const kept = storedKeys.has(key); if (kept) keptAsked.yes++; else keptAsked.no++; return kept; },
+      fetch: (keys) => { keptAsked.fetched += keys.length; return fetchTiles(keys).then((got) => { keptAsked.found += got.size; return got; }); },
     },
     // Kept by the road tile workers that make them (`roadTile.worker.ts`): the page only marks the key.
     workersKeep: tilesPrefix && typeof Worker !== 'undefined' ? tilesPrefix : null,
@@ -1152,7 +1155,7 @@ export function createSceneRenderer(
     forgetOtherDerived('roadtiles', ROAD_TILES_HASH);
     void readDerivedKeys(tilesPrefix).then((kept) => {
       for (const key of kept) noteStored(key);
-    }).finally(() => { storedRead = true; });
+    }).finally(() => { storedRead = true; performance.mark('roads:kept-keys', { detail: storedKeys.size }); });
   }
 
 
@@ -2483,11 +2486,10 @@ export function createSceneRenderer(
     pendingBlocks = [];
     worldJobGround = false;
     yield;
-    // The tiles kept from the last session, read while the game started: a sliced build waits for them a little
-    if (sliced && !storedRead) {
-      const since = performance.now();
-      while (!storedRead && performance.now() - since < KEPT_TILES_WAIT_MS) yield 'wait';
-    }
+    // The keys of the tiles kept from the last session, read while the game started: a sliced build waits for them all (the read always ends,
+    // its `finally`). DO NOT wait a fixed time and build what was not known by then: the 10 km city's keys were read 8 s after its roads' build
+    // began, its 3 s wait ran out, and every opening built its 10,458 road tiles again, 38 s of it, the store holding them (2026-10-27).
+    while (sliced && !storedRead) yield 'wait';
     // Sliced, the tiles are shaped by the workers while the frames go on (`roadTilePool.ts`); built in one go
     // Only the tiles the changed blocks reach are digested again (`roadSurfaces.ts` `depends`): the blocks hold where the land moved too (`landBlocks`), null when that cannot be said.
     // The blocks every build since the last finished one changed (a build replaced halfway left its own for this one).
@@ -2497,7 +2499,8 @@ export function createSceneRenderer(
     performance.mark('world:surfaced');
     surfaceBlocks = [];
     derived(net, 'surfaces', freshRoads.rebuilt, 'road surfaces rebuilt', worldCause,
-      { ms: freshRoads.workMs, detail: `${freshRoads.built} tiles built, ${freshRoads.reused} reused` });
+      { ms: freshRoads.workMs, detail: `${freshRoads.built} tiles built, ${freshRoads.reused} reused; the store: ${keptAsked.yes} of ${keptAsked.yes + keptAsked.no} tiles kept, ${keptAsked.fetched} read, ${keptAsked.found} found, ${storedKeys.size} keys known${storedRead ? '' : ' (not all read yet)'}` });
+    keptAsked.yes = keptAsked.no = keptAsked.fetched = keptAsked.found = 0;
     // The structures' details, the poles and the street furniture are each kept as they are when the edit's blocks reach none
     const atdetails = performance.now();
     // The structures of the cells this build takes and lets go, with the blocks the roads changed in; a build that cannot say where: every cell held. Never the map's (`within`: the view's cells).
@@ -3134,6 +3137,13 @@ export function createSceneRenderer(
     inspect,
     census: () => agents.census(),
     backend: backend === 'webgpu' ? 'three-webgpu' : 'three-webgl',
+    roadTileKey(pass, part) {
+      if (!elevation) return null;
+      const key = part as PartKey;
+      const rect = surfaceReuse.inputs!.rectOf(key);
+      const [x0, y0, x1, y1] = [rect[0] - 1, rect[1] - 1, rect[2] + 1, rect[3] + 1];
+      return { inputs: surfaceReuse.inputs!.reachOf(pass, key).digest, terrain: terrain.digest(x0, y0, x1, y1), elevation: elevation.digest(x0, y0, x1, y1, SURFACE_READ_REACH) };
+    },
     async compare(options) {
       // Under WebGL, a WebGPU renderer of its own on a canvas never shown, made at the first comparison.
       comparer ??= gpuView ? Promise.resolve(gpuView) : import('./gpu/webgpuView').then((module) => module.createWebGpuView(document.createElement('canvas')));

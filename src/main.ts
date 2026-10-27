@@ -245,6 +245,8 @@ const streamedAtBoot: string | null = null;
 // The autosave: the small key, or IndexedDB for a map too large for it (`Persistence.loadSessionAsync`); not read under a streamed world (its tiles are its save).
 /** Buildings from which a saved map is restored through one table (`prepareCity`): a small map loads as it did. */
 const TABLE_RESTORE_BUILDINGS = 1000;
+/** Buildings past which a map opens as a large one: its first world covers its view's district alone, its solve scoped to it (`scopeOpening`). */
+const LARGE_MAP_BUILDINGS = 5_000;
 performance.mark('boot:session-asked');
 /** The autosave read and restored into the document; what the boot reads on - the save's settings, whether the player had a map, whether it failed to load.
  *  DO NOT keep the loaded save in the module's scope: it held the save's whole map (every building decoded, ~8 KB of heap each) for the whole session,
@@ -2318,7 +2320,7 @@ function openSession(session: Extract<ImportResult, { status: 'ok' }>['session']
   history.begin(doc);
   try {
     // The page's network opens holding the tiles round the map's view alone (`world/networkWindow.ts`); a large map opens at its view's district, as a generated city does.
-    const large = (session.document.buildings?.length ?? 0) > 5_000;
+    const large = (session.document.buildings?.length ?? 0) > LARGE_MAP_BUILDINGS;
     if (large) scene.scopeOpening(true);
     networkWindow.open(openingTilesOf(session.document.nodes, large, session.settings?.camera ? { x: session.settings.camera.x, y: session.settings.camera.y } : undefined));
     applySnapshot(session.document, 'import');
@@ -2615,6 +2617,14 @@ window.addEventListener('blur', () => cameraMotion.releaseAll());
 // ------------------------------------------------------------- run loop
 /** The frame asked for, and the time between frames (`frameLoop.ts`). */
 const frameClock = new FrameClock(frame, () => booted && scene.opening);
+// The saved map put in place at the boot (`restoreBootSave`, before the scene was made) opens as any map opened does, once the frames can be
+// asked for (`beginLoad` asks one: before `frameClock` it threw and the boot stopped): a large one at its view's
+// district (`scopeOpening`). DO NOT let the boot's large map build its whole first world: the 10 km city reopened solving its whole network and
+// building the road tiles of 5 x 5 km before its curtain fell (10,458 tiles, 67 s of its opening), where a map opened from the menu builds its view's.
+if (hadSavedMap && !bootFailed && doc.buildings.size > LARGE_MAP_BUILDINGS) {
+  scene.scopeOpening(true);
+  scene.beginLoad();
+}
 graphics.attach(scene, frameClock, requestDraw);
 effects.attach(scene, () => graphics.fullRatio(), requestDraw);
 /** The debugging lab (F7, `lab/lab.ts`): the switches, what each system costs, the code that runs, recordings and tests. */
@@ -4090,6 +4100,7 @@ if (PROBES) (window as unknown as { __roadcraft: unknown }).__roadcraft = {
   backend: scene.backend,
   /** The view drawn by the WebGL and the WebGPU renderer in the same instant, the pictures compared (`scripts/look.mjs` "compare"). */
   compare: (options?: Parameters<SceneHandle['compare']>[0]) => scene.compare(options),
+  roadTileKey: (pass: string, part: string) => scene.roadTileKey(pass, part),
   /** What the WebGPU renderer left out of its frames so far, by reason. */
   webgpuLeftOut: () => scene.webgpuLeftOut(),
   /** The buildings' occlusion culling (`render/occlusion.ts`): `enabled` switches it, `stats` the last frame's walls laid, boxes hidden and ms. */
