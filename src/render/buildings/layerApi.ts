@@ -22,6 +22,8 @@ export type GroundDigestOf = (minX: number, minY: number, maxX: number, maxY: nu
 
 export interface BuildingLayer {
   readonly group: Group;
+  /** The masses standing for the town from afar (`massCells.ts`): drawn into the depth before the scene (`depthFirst.ts`). */
+  readonly occluders: Object3D;
   readonly triangles: number;
   /** The highest point of any building drawn, world height (-Infinity with none): kept as cells land, never a walk of the meshes. */
   readonly top: number;

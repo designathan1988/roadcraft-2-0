@@ -702,6 +702,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
 
   return {
     group,
+    occluders: massCells.group,
     get triangles() {
       let shown = 0;
       for (const map of [partCells, facadeParts]) for (const cell of map.values()) if (cell.group.visible) shown += cell.triangles;

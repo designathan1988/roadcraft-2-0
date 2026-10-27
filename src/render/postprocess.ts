@@ -20,6 +20,7 @@ import { createCanyonLight } from './canyonLight';
 import { DEPTH_GLSL } from './depthConvention';
 import { CloudShadowStamp } from './cloudShadowStamp';
 import { ALL_EFFECTS_ON, type PostSwitches } from './effectSwitches';
+import { type DepthFirst, renderDepthFirst } from './depthFirst';
 import type { CameraSolids } from '@world/buildings/cameraSolids';
 
 /** The post chain: ambient occlusion, then anti-aliasing */
@@ -78,10 +79,12 @@ export function createPostChain(
   camera: Camera,
   quality: QualitySettings,
   level: QualityLevel,
+  /** Drawn into the scene's depth before it (`depthFirst.ts`): the far masses, so what they cover is not shaded. */
+  first: DepthFirst | null = null,
 ): PostChain {
   if (!quality.postProcessing) {
     // A canvas made for the chain has no multisampling of its own (`renderer.ts`): the scene multisampled in a target, then tone mapped onto it, as the canvas did.
-    const plain = renderer.getContext().getContextAttributes()?.antialias === false ? plainChain(renderer, scene, camera) : null;
+    const plain = renderer.getContext().getContextAttributes()?.antialias === false ? plainChain(renderer, scene, camera, first) : null;
     return {
       enabled: false,
       target: plain?.target ?? null,
@@ -89,7 +92,7 @@ export function createPostChain(
       targets: () => (plain ? [plain.target] : []),
       render() {
         if (plain) plain.render();
-        else renderer.render(scene, camera);
+        else renderDepthFirst(renderer, scene, camera, first);
       },
       setSize(width, height, pixelRatio) {
         // Otherwise the renderer's own resize is enough.
@@ -152,6 +155,8 @@ export function createPostChain(
   // The passes, for the browser checks (a pass switched off to find what draws a defect).
   if (import.meta.env.DEV) Object.assign(window, { __composer: composer });
   const scenePass = new RenderPass(scene, camera);
+  // Cleared below, before the masses' depth is drawn into it (`first`).
+  scenePass.clear = false;
   composer.addPass(scenePass);
   /** The depth the scene was drawn with THIS frame. */
   const sceneDepth: DepthTexture | null = sceneTarget.depthTexture;
@@ -161,10 +166,13 @@ export function createPostChain(
     const draw = scenePass.render.bind(scenePass);
     scenePass.render = (...args: Parameters<RenderPass['render']>) => {
       // Into the scene's own target; its resolved picture copied into the buffer the next pass reads only where that pass does not read the target itself.
-      const [, writeBuffer, readBuffer, delta, mask] = args;
-      draw(args[0], writeBuffer, sceneTarget, delta, mask);
+      const [gl, writeBuffer, readBuffer, delta, mask] = args;
+      // Cleared as the pass would clear it (`RenderPass.clear`), then the far masses' depth (`depthFirst.ts`), then the scene over it.
+      gl.setRenderTarget(sceneTarget);
+      gl.clear(gl.autoClearColor, gl.autoClearDepth, gl.autoClearStencil);
+      first?.draw(gl, camera);
+      draw(gl, writeBuffer, sceneTarget, delta, mask);
       if (!sceneRead()) {
-        const gl = args[0];
         (copyQuad.material as ShaderMaterial).uniforms['tDiffuse']!.value = sceneTarget.texture;
         const previous = gl.getRenderTarget();
         gl.setRenderTarget(readBuffer);
@@ -582,7 +590,7 @@ export function plainTarget(width: number, height: number, samples: number): Web
   return target;
 }
 
-function plainChain(renderer: WebGLRenderer, scene: Scene, camera: Camera): { target: WebGLRenderTarget; render(): void; setSize(width: number, height: number, pixelRatio: number): void; dispose(): void } {
+function plainChain(renderer: WebGLRenderer, scene: Scene, camera: Camera, first: DepthFirst | null): { target: WebGLRenderTarget; render(): void; setSize(width: number, height: number, pixelRatio: number): void; dispose(): void } {
   const size = renderer.getDrawingBufferSize(new Vector2());
   // Four samples: a browser's own for an antialiased canvas.
   const target = plainTarget(Math.max(1, size.x), Math.max(1, size.y), Math.min(4, renderer.capabilities.maxSamples));
@@ -596,7 +604,7 @@ function plainChain(renderer: WebGLRenderer, scene: Scene, camera: Camera): { ta
     render() {
       const previous = renderer.getRenderTarget();
       renderer.setRenderTarget(target);
-      renderer.render(scene, camera);
+      renderDepthFirst(renderer, scene, camera, first);
       renderer.setRenderTarget(null);
       copy.render(renderer);
       renderer.setRenderTarget(previous);

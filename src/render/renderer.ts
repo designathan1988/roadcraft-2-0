@@ -68,6 +68,7 @@ import { deviceGpuCap, gpuLedger, readGpuDevice } from './gpuLedger';
 import { screenSizer } from './screenSize';
 import { WEAK_MACHINE } from '@core/weakMachine';
 import { DEFAULT_ATMOSPHERE, createPostChain, type Atmosphere, type PostChain } from './postprocess';
+import { createDepthFirst } from './depthFirst';
 import { ALL_EFFECTS_ON, DEFAULT_BUILDING_CHOICES, createFrameHider, type BuildingChoices, type EffectSwitches } from './effectSwitches';
 import { createBuildingSwitcher } from './buildingSwitches';
 import { DEFAULT_OPTIMIZATIONS, qualityOptionsDiffer, withOptimizations, type Optimizations } from './optimizations';
@@ -1485,6 +1486,11 @@ export function createSceneRenderer(
   // Buildings are placed once, never moved: a still tree.
   holdStill(buildings.group);
   scene.add(buildings.group);
+  /** The far masses' depth drawn before the scene (`depthFirst.ts`): what they cover is not shaded. */
+  const depthFirst = createDepthFirst();
+  depthFirst.root = buildings.occluders;
+  // For the browser checks: the masses' depth switched off (`root` null) to compare the scene pass with and without it.
+  if (import.meta.env.DEV) Object.assign(window, { __depthFirst: depthFirst });
   // Each sun cascade draws the parts wider than its own texel only, not every part the finest one draws.
   // And every layer that registered its meshes by size (`shadowCasters.ts`): cellInstances, flags, signals, things in the hand.
   // The far cascades (1 and 2) take the buildings by their masses only (`BuildingLayer.castInto` coarse).
@@ -2732,14 +2738,14 @@ export function createSceneRenderer(
     if (buildingChoices.detailMemoryMB < 0) buildings.setDetailBudget(quality.detailMemoryMB * 1048576);
     applyGeometryBudget();
     post?.dispose();
-    post = createPostChain(renderer, scene, rig.camera, quality, level);
+    post = createPostChain(renderer, scene, rig.camera, quality, level, depthFirst);
     post.setNight(Math.max(0, lastDark));
     resize();
     // DO NOT force one with `networkRevision = -1`
     shadowMoved = true;
   };
 
-  let post: PostChain = createPostChain(renderer, scene, rig.camera, quality, tier);
+  let post: PostChain = createPostChain(renderer, scene, rig.camera, quality, tier, depthFirst);
   /** The chain's targets that hold memory on the GPU now: those bound at least once (three makes a target's framebuffer at its first `setRenderTarget`, r186 `WebGLTextures.setupRenderTarget`; a disposed one loses it). DO NOT charge the ledger for targets never drawn into (the clouds' with no cloud placed, the bloom's mips by day): ~40 MB at 1440p taken from the buildings' detail for nothing (RND-19). */
   const livePostTargets = (): ReturnType<PostChain['targets']>[number][] => liveTargets(post.targets(), renderer.properties);
   /** How many were live when the ledger was last told: told again when that changes (a target drawn into for the first time, the bloom at nightfall). */
@@ -3355,7 +3361,7 @@ export function createSceneRenderer(
       rig.setPerspective(on);
       // The passes hold the camera they were made with.
       post.dispose();
-      post = createPostChain(renderer, scene, rig.camera, quality, tier);
+      post = createPostChain(renderer, scene, rig.camera, quality, tier, depthFirst);
       post.setNight(Math.max(0, lastDark));
       resize();
       onAssetsReady();
@@ -4286,6 +4292,7 @@ export function createSceneRenderer(
       materials.dispose();
       environment.dispose();
       post.dispose();
+      depthFirst.dispose();
       lotOverlay?.dispose();
       renderer.dispose();
     },
