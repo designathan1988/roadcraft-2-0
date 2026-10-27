@@ -27,7 +27,9 @@ export function coverJobAsk(): CoverAsk | null {
   const rowsNear = coverRows();
   return (rect, buildings) => new Promise<CoverCell>((done, fail) => {
     submitJob({
-      service: 'coverCells', key: null, priority: COVER_BAND * TIER_SPAN, at: [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2], crosses: true,
+      // The page's own threads alone (no `crosses`): they read the map's table where it stands (`refs`), nothing copied on the page. DO NOT send
+      // it to a job process: each of its asks copied the cell's buildings' rows on the page, 0.32 s of 3.3 s of frames of a camera move (2026-10-27).
+      service: 'coverCells', key: null, priority: COVER_BAND * TIER_SPAN, at: [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2],
       // Its rows read when a thread takes it: the buildings as they stand then (an answer asked before a change is let go, `createCoverIndex`).
       write: (to) => {
         const near = to.sharesMemory ? refsNear(rect, buildings) : null;
