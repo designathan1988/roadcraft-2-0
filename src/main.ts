@@ -14,6 +14,7 @@ import { profiler } from '@core/profiler';
 import { mountProfilerHud } from '@ui/profilerHud';
 import { hookProfiler } from '@render/profilerHooks';
 import { hasTransit } from '@world/transit';
+import { JournalCursor } from '@world/derived';
 import { mountCompass, northOnScreen, northTurn, type Compass } from '@ui/v2/compass';
 import { flipProfile, streetChain } from '@world/roads/streetChain';
 import { furnitureChosen } from '@ui/roads/furnitureChoice';
@@ -32,7 +33,7 @@ import { type Vec2, dist } from '@core/vec2';
 import { clamp } from '@core/scalar';
 import { flattenSegment } from '@core/bezier';
 import { RoadDoc, type JunctionControl } from '@world/doc';
-import { cutLotsByRoads } from '@world/lots';
+import { cutLotsByRoads, roadEditRects } from '@world/lots';
 import { DOC_CHANGE_KINDS, type Change, type ChangeKind, type ChangeRect } from '@world/changes';
 import { MIN_LINK_LENGTH } from '@world/approach';
 import { MAX_AUTHORED_GRADE } from '@world/elevation';
@@ -912,6 +913,9 @@ function mutateBuilt(fn: () => boolean): boolean {
   // The network up to the map before the edit (a tile may have come in this frame): the road-wins look takes the edit's own changes only.
   followNetwork(doc, net);
   const roadsBefore = net.state;
+  // The roads' diary read up to the edit: its own road entries are what it reads after (`roadEditRects`), let go at its end.
+  const editRoads = new JournalCursor(['roads']);
+  editRoads.read(doc.changes);
   history.begin(doc);
   measureHitch('hitch:mutate/before', mutateAt);
   // What the diary says this edit came from (`world/changes.ts`).
@@ -922,12 +926,12 @@ function mutateBuilt(fn: () => boolean): boolean {
     if (net.revision !== doc.revision) net.rebuild();
     // A road over a building demolishes it (where the network changed only).
     buildings.afterRoadEdit(roadsBefore);
-    // And cuts the lots it crosses: the pieces left on land, each a lot of its zone (`world/lots.ts` cutLotsByRoads).
-    const roadDelta = net.changesSince(roadsBefore);
-    cutLotsByRoads(doc, net, roadDelta === null ? null : roadDelta.rects);
+    // And cuts the lots it crosses: the pieces left on land, each a lot of its zone (`world/lots.ts` cutLotsByRoads), where the edit moved the paving (`roadEditRects`).
+    cutLotsByRoads(doc, net, roadEditRects(doc, net, editRoads, net.changesSince(roadsBefore)));
     // And nothing stands in a turning circle's carriageway (V8): what stood on a road end's footway goes.
     clearBulbs(doc, net);
   }
+  editRoads.reset();
   doc.changes.causeNext('game');
   // An edit that reports success without changing anything
   const recorded = history.end(doc);

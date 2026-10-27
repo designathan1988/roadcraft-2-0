@@ -6,6 +6,7 @@ import { Level, type SurfaceLevel, halfWidth } from './roadTypes';
 import type { NodeId, SegmentId } from './ids';
 import type { Junction } from './junction/build';
 import type { NetworkDelta } from './networkDelta';
+import type { JournalCursor } from './derived';
 import type { SegmentRibbon } from './ribbons';
 import { type MultiPoly, difference, union } from '@core/clipper';
 import { levelRingsOf } from './surfaces';
@@ -1069,11 +1070,33 @@ const PAVING_MARGIN = m(2);
 /** Area a road takes off a lot under which it counts as crossing it: less is the paving's own outline round the lot, not a road through it. */
 const CROSSED_AREA = m(1) * m(1);
 
-/** A ROAD EDIT CUTS THE LOTS IT CROSSES (`main.ts` mutateBuilt, beside the buildings it razes): each lot the changed paving (`rects`; null, every lot) takes land from is replaced by the pieces of it left on land, each a lot of its zone where it is big enough, the rest let go - DO NOT leave a lot whole over a new road (its zone painted over the asphalt and nothing grown there, 2026-10-18). In the edit's own undo step. The lots cut. */
-export function cutLotsByRoads(doc: RoadDoc, net: Network, rects: readonly ChangeRect[] | null): number {
-  if (!net.ribbons.size || rects?.length === 0) return 0;
+/**
+ * Where a road edit moved the paving (`cutLotsByRoads`): what the network built again (`delta`), or, where it was built from nothing
+ * (`NetworkBuild.rebuild` null), where the edit's own road entries say the roads were and are (`roads`: a cursor of the roads read before
+ * the edit) - a segment's rectangle holds its casing (`RoadDoc.segmentRect`), an entry with no rectangle the paving of the segments and the
+ * junctions it names. DO NOT answer the whole map: every lot of the 10 km map was cut against the paving on the page for one road (2026-10-26).
+ */
+export function roadEditRects(doc: RoadDoc, net: Network, roads: JournalCursor, delta: NetworkDelta | null): ChangeRect[] {
+  if (delta) return [...delta.rects];
+  const entries = roads.read(doc.changes);
+  if (entries === null) {
+    console.error('[lots] the entries of the road edit are gone from the diary: no lot cut by it');
+    return [];
+  }
+  const out: ChangeRect[] = [];
+  for (const e of entries) {
+    if (e.rects) { out.push(...e.rects); continue; }
+    for (const id of e.segments ?? []) { const r = net.segmentCells.rectOf(id as SegmentId) ?? doc.segmentRect(id as SegmentId); if (r) out.push(r); }
+    for (const id of e.nodes ?? []) { const r = net.junctionCells.rectOf(id as NodeId) ?? doc.nodeRect(id as NodeId); if (r) out.push(r); }
+  }
+  return out;
+}
+
+/** A ROAD EDIT CUTS THE LOTS IT CROSSES (`main.ts` mutateBuilt, beside the buildings it razes): each lot the changed paving (`rects`, `roadEditRects`) takes land from is replaced by the pieces of it left on land, each a lot of its zone where it is big enough, the rest let go - DO NOT leave a lot whole over a new road (its zone painted over the asphalt and nothing grown there, 2026-10-18). In the edit's own undo step. The lots cut. */
+export function cutLotsByRoads(doc: RoadDoc, net: Network, rects: readonly ChangeRect[]): number {
+  if (!net.ribbons.size || rects.length === 0) return 0;
   const seen = new Set<number>();
-  const lots = rects === null ? [...doc.lotStore.all()] : rects.flatMap((r) => doc.lotsIn(r));
+  const lots = rects.flatMap((r) => doc.lotsIn(r));
   let cut = 0;
   for (const lot of lots) {
     if (seen.has(lot.id)) continue;

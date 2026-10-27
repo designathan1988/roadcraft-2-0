@@ -4,7 +4,8 @@ import { History } from '@editor/history';
 import { RoadDoc } from '@world/doc';
 import { Network } from '@world/network';
 import { m } from '@world/units';
-import { addPolygonLot, cutLotsByRoads, lotArea, zoneLots } from '@world/lots';
+import { addPolygonLot, cutLotsByRoads, lotArea, roadEditRects, zoneLots } from '@world/lots';
+import { JournalCursor } from '@world/derived';
 import { touchesRoad } from '@world/buildings/validate';
 
 /** A ROAD THROUGH A ZONED LOT CUTS IT (`world/lots.ts` cutLotsByRoads, `main.ts` mutateBuilt): the pieces left on land each a lot of its zone, none over the road; the edit's undo gives the lot back whole (the grid's road across two zoned blocks left both lots whole over it, 2026-10-18) */
@@ -26,12 +27,13 @@ function zonedBlock(): { doc: RoadDoc; net: Network; lot: number } {
 function drawRoad(doc: RoadDoc, net: Network, history: History, from: [number, number], to: [number, number]): void {
   if (net.revision !== doc.revision) net.rebuild();
   const before = net.state;
+  const roads = new JournalCursor(['roads']);
+  roads.read(doc.changes);
   history.begin(doc);
   const result = commitDraft(doc, net, { kind: 'free', at: { x: m(from[0]), y: m(from[1]) } }, { kind: 'free', at: { x: m(to[0]), y: m(to[1]) } }, 1, null, 'ground');
   expect(result.committed).toBe(true);
   if (net.revision !== doc.revision) net.rebuild();
-  const delta = net.changesSince(before);
-  cutLotsByRoads(doc, net, delta === null ? null : delta.rects);
+  cutLotsByRoads(doc, net, roadEditRects(doc, net, roads, net.changesSince(before)));
   history.end(doc);
 }
 
@@ -62,5 +64,30 @@ describe('a road through a zoned lot', () => {
     const history = new History();
     drawRoad(doc, net, history, [-60, -80], [60, -80]);
     expect(doc.lots.map((l) => l.id)).toEqual([lot]);
+  });
+
+  it('is cut where the edit says the roads moved when the network was built from nothing, never every lot of the map read', () => {
+    const { doc, net, lot } = zonedBlock();
+    // A lot far away, whole: no road comes near it.
+    const far = addPolygonLot(doc, [{ x: m(900), y: m(900) }, { x: m(940), y: m(900) }, { x: m(940), y: m(930) }, { x: m(900), y: m(930) }], 0)!;
+    zoneLots(doc, [far.id], { use: 'residential', density: 'low' });
+    if (net.revision !== doc.revision) net.rebuild();
+    const before = net.state;
+    const roads = new JournalCursor(['roads']);
+    roads.read(doc.changes);
+    const history = new History();
+    history.begin(doc);
+    expect(commitDraft(doc, net, { kind: 'free', at: { x: m(-70), y: m(-60) } }, { kind: 'free', at: { x: m(70), y: m(60) } }, 1, null, 'ground').committed).toBe(true);
+    // Built again from nothing: the network cannot say what moved.
+    net.rebuild({ full: true });
+    expect(net.changesSince(before)).toBeNull();
+    let all = 0;
+    const each = doc.lotStore.all.bind(doc.lotStore);
+    doc.lotStore.all = (() => { all++; return each(); }) as typeof doc.lotStore.all;
+    expect(cutLotsByRoads(doc, net, roadEditRects(doc, net, roads, net.changesSince(before)))).toBe(1);
+    history.end(doc);
+    expect(all).toBe(0);
+    expect(doc.lot(lot)).toBeUndefined();
+    expect(doc.lot(far.id)).toBeDefined();
   });
 });
