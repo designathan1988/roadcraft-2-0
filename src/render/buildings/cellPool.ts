@@ -1,4 +1,4 @@
-import { canQueueJobs, type JobTicket, submitJob, warmJobWorkers } from '../../jobs/jobPool';
+import { canQueueJobs, type JobTicket, jobPort, submitJob, warmJobWorkers } from '../../jobs/jobPool';
 import type { GroundAt } from '@world/buildings/foundation';
 import type { Finish } from '@world/buildings/materials';
 import type { PavingSource } from '@world/paving';
@@ -12,7 +12,8 @@ import { levelCells, squareKeyOf } from './levelKeys';
 import { groundAround } from '../sharedGround';
 import { Digest } from '../../core/digest';
 import { IdSlots, grown } from '../../core/idSlots';
-import { forgetDerivedKeys, forgetOtherDerived, keepDerivedNow, readDerived, readDerivedKeys, readDerivedSome } from '../derivedCache';
+import { forgetDerivedKeys, forgetOtherDerived, keepDerivedNow, readDerivedKeys, readDerivedSome } from '../derivedCache';
+import { DerivedWriterLane } from '../derivedWriterLane';
 
 declare const __CELL_WORK_HASH__: string | undefined;
 /** The cells' jobs kept from one session to the next, by this build's fingerprint of their code (`cook-plugin.ts` DERIVED). */
@@ -37,16 +38,33 @@ export interface SliceStore {
   keep(key: string, slice: CellSlice, was: string | null): void;
 }
 
+/** Where the kept entries of a prefix are read: the store's entries of these keys, by key. */
+type KeptRead = <T>(prefix: string, keys: readonly string[]) => Promise<Map<string, T>>;
+
+/** Bytes of writes the cells' reader lane may hold: it only reads (`DerivedWriterLane.read`), the cells' results kept on the page (`keepDerivedNow`). */
+const KEPT_READER_BYTES = 2 ** 20;
+
+/**
+ * THE CELLS' KEPT RESULTS AND SLICES READ OFF THE PAGE (the derived cache's writer, `derivedWriter.worker.ts`), their arrays handed over; read on
+ * the page where no job queue runs (tests). DO NOT read them on the page: IndexedDB rebuilds every value where it is read, and a reopened 10 km
+ * city's masses, far levels and slices rebuilt there took 770 ms in every few seconds of the open city (`request.onsuccess`, one F7 profile, 2026-10-26).
+ */
+function keptReader(workers: boolean): KeptRead {
+  if (!workers || !canQueueJobs() || typeof Worker === 'undefined') return readDerivedSome;
+  const lane = new DerivedWriterLane(jobPort('derivedWriter'), KEPT_READER_BYTES);
+  return (prefix, keys) => lane.read(prefix, keys);
+}
+
 /** The slices in the derived cache (IndexedDB, `core/derivedCache.ts`) under this build's fingerprint of the cells' code, beside the jobs' results
  *  kept (`CELL_PREFIX`): never in the page's memory between jobs. None without a fingerprint: every building of a level walked, as before slices. */
-function derivedSlices(prefix: string | null): SliceStore | null {
+function derivedSlices(prefix: string | null, readKept: KeptRead = readDerivedSome): SliceStore | null {
   if (prefix === null) return null;
   return {
     read: async (keys) => {
       // Only the keys kept (`keptCellKeys`, read once at the start): a level none of whose cells is kept asks the store nothing.
       const kept = await keptCellKeys();
       const some = keys.filter((key) => kept.has(prefix + key));
-      return some.length ? readDerivedSome<CellSlice>(prefix, some) : new Map<string, CellSlice>();
+      return some.length ? readKept<CellSlice>(prefix, some) : new Map<string, CellSlice>();
     },
     keep: (key, slice, was) => {
       if (keepDerivedNow(prefix + key, slice)) void keptCellKeys().then((keys) => keys.add(prefix + key));
@@ -235,10 +253,17 @@ export class CellPool {
   /** `workers`: false does every job on the page (tests). `tone`: each finish's colour from afar, for the masses (`kit.ts`). */
   /** `text`: where an entry's record is read (`recordTable.ts`), taken when the job is sent. `slices`: where the cells' slices of their levels are kept (`SliceStore`). */
   constructor(private readonly boxes: () => KitBoxes, private readonly text: (entry: CellEntry) => () => RecordRef, private readonly workers = true,
-    private readonly tone?: Readonly<Record<Finish, readonly [number, number, number]>>, private readonly slices: SliceStore | null = derivedSlices(CELL_PREFIX)) {
+    private readonly tone?: Readonly<Record<Finish, readonly [number, number, number]>>, slices?: SliceStore | null) {
+    this.readKept = keptReader(workers);
+    this.slices = slices === undefined ? derivedSlices(CELL_PREFIX, this.readKept) : slices;
     // The kept keys read now, at the start, before the town's writes come (`keptCellKeys`).
     if (workers && canQueueJobs()) void keptCellKeys();
   }
+
+  /** Where the cells' kept results and slices are read (`keptReader`): off the page where jobs run. */
+  private readonly readKept: KeptRead;
+  /** Where the cells' slices of their levels are kept (`SliceStore`). */
+  private readonly slices: SliceStore | null;
 
   /** Jobs asked and not answered. */
   get running(): number {
@@ -273,7 +298,7 @@ export class CellPool {
     void keptCellKeys().then((keys) => {
       if (this.asked.get(asked.id) !== asked) return undefined;
       if (!keys.has(stored)) { this.send(asked); return undefined; }
-      return readDerived<CellResult>(stored).catch(() => undefined).then((kept) => {
+      return this.readKept<CellResult>(CELL_PREFIX!, [stored.slice(CELL_PREFIX!.length)]).then((got) => got.values().next().value, () => undefined).then((kept) => {
         if (this.asked.get(asked.id) !== asked) return;
         if (kept && typeof kept === 'object' && 'summaries' in kept) { this.forget(asked); this.learn(asked, kept); asked.done(kept); return; }
         this.send(asked);
