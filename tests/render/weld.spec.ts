@@ -15,8 +15,21 @@ function same(a: BufferGeometry, b: BufferGeometry): void {
     expect(Array.from(x.array)).toEqual(Array.from(y.array));
   }
   expect(a.index!.constructor).toBe(b.index!.constructor);
-  expect(Array.from(a.index!.array)).toEqual(Array.from(b.index!.array));
+  // Three's index less the triangles the weld closed up (two corners one vertex): they draw nothing (`weldGeometry`).
+  expect(Array.from(a.index!.array)).toEqual(open(Array.from(b.index!.array)));
   expect(a.groups).toEqual(b.groups);
+}
+
+/** An index without its closed triangles. */
+function open(index: number[]): number[] {
+  // Not a list of triangles: the weld leaves it whole.
+  if (index.length % 3 !== 0) return index;
+  const out: number[] = [];
+  for (let t = 0; t + 2 < index.length; t += 3) {
+    const [x, y, z] = [index[t]!, index[t + 1]!, index[t + 2]!];
+    if (x !== y && y !== z && x !== z) out.push(x, y, z);
+  }
+  return out;
 }
 
 /** A loose triangle list with corners repeated, some a hair apart, and a colour. */

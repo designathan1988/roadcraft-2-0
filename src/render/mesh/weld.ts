@@ -65,9 +65,36 @@ export function weldGeometry(geometry: BufferGeometry, tolerance = 1e-4): Buffer
     const Attr = out.constructor as new (array: BufferAttribute['array'], itemSize: number, normalized: boolean) => BufferAttribute;
     result.setAttribute(names[j]!, new Attr(out.array.slice(0, next * out.itemSize), out.itemSize, out.normalized));
   }
-  // Three's choice of index width (`arrayNeedsUint32`: any index at or past 65535).
-  result.setIndex(next - 1 >= 65535 ? new Uint32BufferAttribute(remap, 1) : new Uint16BufferAttribute(remap, 1));
+  // The triangles the weld closed up (two corners one vertex, every attribute the same) left out: they draw no pixel and cost their
+  // corners' work at every instance. DO NOT keep them: the cars' shells carried a tenth of their triangles so (1,192 of the sedan's
+  // 11,352, the model audit, 2026-10-27). DO NOT leave out a triangle for its area alone: a card drawn by its shader (its corners at one
+  // point, told apart by another attribute) has none. Each group keeps the triangles it had less those it lost.
+  const kept = count % 3 === 0 ? openTriangles(remap, result) : remap;
+  result.setIndex(next - 1 >= 65535 ? new Uint32BufferAttribute(kept, 1) : new Uint16BufferAttribute(kept, 1));
   return result;
+}
+
+/** The index without its closed triangles (`weldGeometry`); `geometry`'s groups moved to the triangles they keep. */
+function openTriangles(index: Uint32Array, geometry: BufferGeometry): Uint32Array {
+  const out = new Uint32Array(index.length);
+  /** How many index entries were kept before each triangle: the groups' new starts and counts. */
+  const before = new Uint32Array(index.length / 3 + 1);
+  let n = 0;
+  for (let t = 0; t < index.length; t += 3) {
+    before[t / 3] = n;
+    const a = index[t]!, b = index[t + 1]!, c = index[t + 2]!;
+    if (a === b || b === c || a === c) continue;
+    out[n++] = a; out[n++] = b; out[n++] = c;
+  }
+  before[index.length / 3] = n;
+  const groups = geometry.groups.map((g) => {
+    const from = Math.min(index.length, g.start), to = Math.min(index.length, g.start + g.count);
+    const start = before[Math.floor(from / 3)]!, end = before[Math.ceil(to / 3)]!;
+    return { start, count: end - start, materialIndex: g.materialIndex ?? 0 };
+  });
+  geometry.clearGroups();
+  for (const g of groups) geometry.addGroup(g.start, g.count, g.materialIndex);
+  return out.slice(0, n);
 }
 
 /** Whether two keys are the same; NaN equal to NaN, as three's strings are. */
@@ -78,3 +105,4 @@ function sameKey(keys: Float64Array, at: number, key: Float64Array, width: numbe
   }
   return true;
 }
+
