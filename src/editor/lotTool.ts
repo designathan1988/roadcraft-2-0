@@ -82,6 +82,27 @@ function forWindowCells(box: ChangeRect, visit: (key: number) => void): void {
   }
 }
 
+/** A rectangle of the window's cells, both ends in: [i0, j0, i1, j1]. */
+type CellRange = readonly [number, number, number, number];
+const cellRange = (box: ChangeRect): CellRange =>
+  [Math.floor(box[0] / WINDOW_CELL), Math.floor(box[1] / WINDOW_CELL), Math.floor(box[2] / WINDOW_CELL), Math.floor(box[3] / WINDOW_CELL)];
+const sameRange = (a: CellRange | null, b: CellRange | null): boolean => !!a && !!b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+/** Each cell of `range` outside `minus` (null: every cell of it), a strip at a time: the cells a moved window came to or left, never the
+ *  window's every cell again. */
+function forCellsOutside(range: CellRange, minus: CellRange | null, visit: (key: number) => void): void {
+  const [i0, j0, i1, j1] = range;
+  const strip = (a0: number, b0: number, a1: number, b1: number): void => {
+    for (let i = a0; i <= a1; i++) for (let j = b0; j <= b1; j++) visit(windowKey(i, j));
+  };
+  if (!minus || minus[0] > i1 || minus[2] < i0 || minus[1] > j1 || minus[3] < j0) { strip(i0, j0, i1, j1); return; }
+  // Below and above it, then left and right of it between them.
+  strip(i0, j0, i1, Math.min(j1, minus[1] - 1));
+  strip(i0, Math.max(j0, minus[3] + 1), i1, j1);
+  const jLo = Math.max(j0, minus[1]), jHi = Math.min(j1, minus[3]);
+  strip(i0, jLo, Math.min(i1, minus[0] - 1), jHi);
+  strip(Math.max(i0, minus[2] + 1), jLo, i1, jHi);
+}
+
 /** What a lot's group is drawn with besides the lot itself (`LotTool.drawLot`): -1 for no lot. */
 interface LotDecor {
   readonly editing: boolean;
@@ -662,6 +683,9 @@ export class LotTool {
    */
   private seen: ChangeRect | null = null;
   private readonly windowCells = new Set<number>();
+  /** The cells the window was last drawn over and kept over (`moveWindow`): every cell of `windowCells` is within the kept one. */
+  private drawnRange: CellRange | null = null;
+  private keptRange: CellRange | null = null;
   private readonly drawnLots = new Set<number>();
   private drawnWith: LotDecor | null = null;
   private readonly lotsCursor = LotStore.cursor();
@@ -718,20 +742,30 @@ export class LotTool {
     return this.lotsSeen;
   }
 
-  /** The view moved over the ground: the lots of the cells it came to drawn, those of the cells it left behind (past `WINDOW_KEEP`) let go; whether any was. */
+  /**
+   * The view moved over the ground: the lots of the cells it came to drawn, those of the cells it left behind (past `WINDOW_KEEP`) let go;
+   * whether any was. Only the cells that came into or left the window are looked at (`forCellsOutside`). DO NOT walk the window's every cell
+   * each frame: from the Home view of the 10 km map it reaches the far plane, ~20,000 cells looked up in every frame the zones are shown, the
+   * view still or not (556 ms of a road's edit, 2026-10-27).
+   */
   private moveWindow(d: LotDecor): boolean {
     const seen = this.seen;
     if (!seen) return false;
+    const drawn = cellRange(grow(seen, WINDOW_REACH)), kept = cellRange(grow(seen, WINDOW_KEEP));
+    if (sameRange(drawn, this.drawnRange) && sameRange(kept, this.keptRange)) return false;
     let moved = false;
-    forWindowCells(grow(seen, WINDOW_REACH), (key) => {
+    forCellsOutside(drawn, this.drawnRange, (key) => {
       if (this.windowCells.has(key)) return;
       this.windowCells.add(key);
       for (const lot of this.doc.lotsIn(windowCellRect(key))) if (!this.drawnLots.has(lot.id)) { this.drawLot(lot.id, d); moved = true; }
     });
-    const keep = grow(seen, WINDOW_KEEP);
-    for (const key of [...this.windowCells]) {
+    // The cells kept before and no longer: every cell of the window stood in the range kept before.
+    const left: number[] = [];
+    if (this.keptRange) forCellsOutside(this.keptRange, kept, (key) => { if (this.windowCells.has(key)) left.push(key); });
+    this.drawnRange = drawn;
+    this.keptRange = kept;
+    for (const key of left) {
       const rect = windowCellRect(key);
-      if (rect[0] <= keep[2] && rect[2] >= keep[0] && rect[1] <= keep[3] && rect[3] >= keep[1]) continue;
       this.windowCells.delete(key);
       for (const lot of this.doc.lotsIn(rect)) {
         if (!this.drawnLots.has(lot.id) || this.inWindow(lotBox(lot))) continue;
@@ -756,6 +790,7 @@ export class LotTool {
     for (const name of [...this.book.groups.keys()]) if (name.startsWith('l')) this.book.put(name, null);
     this.drawnLots.clear();
     this.windowCells.clear();
+    this.drawnRange = this.keptRange = null;
     if (!this.seen) { for (const lot of this.doc.lotStore.all()) this.drawLot(lot.id, d); return; }
     this.moveWindow(d);
   }

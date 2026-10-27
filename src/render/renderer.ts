@@ -163,7 +163,7 @@ import { wantAllTexels, whenTexelsRefilled } from './surfaceTextures';
 import { BLUEPRINTS, instantiate } from '@world/buildings/blueprints';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { GEOMETRY_BUDGETS, type GeometryBudget, QUALITY, type QualityLevel, type QualitySettings } from './quality';
-import { geometryBytesOf } from './memoryCounters';
+import { geometryBytesOf, geometryBytesSteps } from './memoryCounters';
 import { ViewCells } from '@world/viewCells';
 import { type GroundRecord, type Rect, unionRect } from './groundChanges';
 import { FOREST_SPECIES, createGroundCoverKit } from './groundCover';
@@ -410,8 +410,11 @@ const OPENING_SOLVE_MARGIN = m(320);
 const KEYS_A_PLACE = 2;
 /** The far roads' cells made from the network at a scoped opening (`networkFarRoads.ts`): a road block's side (`roadSurfaces.ts` CHUNK tiles). */
 const FAR_ROAD_CELL = ROAD_BLOCK;
-/** Frames between two reads of the scene's geometry against the tier's budget (`governGeometry`): a walk of the scene's objects, ~1-3 ms. */
+/** Frames between two reads of the scene's geometry against the tier's budget (`governGeometry`): a walk of the scene's objects, read a slice a frame. */
 const GOVERN_FRAMES = 60;
+/** The objects of the scene the governor's walk reads between two looks at the frame's time, and that time a frame, ms (`geometryBytesSteps`). */
+const GOVERN_SLICE = 256;
+const GOVERN_SLICE_MS = 1;
 /** The road cells the view wants taken at a step past those within the detail's reach (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
 const STEP_CELLS = 2;
 /** How far round the eye the road cells in the view are wanted in detail (`mesh/roadResidency.ts` wantReach): past it, and past the tier's far budget within it, the network's far level draws them. */
@@ -1481,8 +1484,11 @@ export function createSceneRenderer(
    * (`MassCells.cap`) - never a hole. Given back as the rest shrinks, up to the tier's `detailMemoryMB`. The lab's own detail budget
    * (`buildingChoices.detailMemoryMB`) is left as it is set. Returns the geometry counted, bytes.
    */
-  const governGeometry = (): number => {
-    const geometry = geometryBytesOf(scene);
+  const governGeometry = (): number => govern(geometryBytesOf(scene));
+  /** The scene's geometry being read for the governor, a slice a frame (`geometryBytesSteps`); null between two reads. */
+  let geometryWalk: Generator<void, number, void> | null = null;
+  /** The detail's budget given by the geometry counted (`governGeometry`). */
+  const govern = (geometry: number): number => {
     if (buildingChoices.detailMemoryMB >= 0) return geometry;
     const total = budgetNow().totalMB * 1048576;
     const tierDetail = quality.detailMemoryMB * 1048576;
@@ -4136,8 +4142,16 @@ export function createSceneRenderer(
         // The page's network moved to the tiles the view wants (`roadWindowLink.ts` step: those solved off the page come in, those let go leave), between the builds; then the cells the view wants built and the ones it let go, a few at a step (`cellStep`).
         if (roadWindow !== null && worldJob === null && !openingBuild && !openingSolvePending) roadWindow.step();
         if (roadLook !== null && worldJob === null && !openingBuild && !openingSolvePending && (roadLook.build.length > 0 || roadLook.release.length > 0)) cellStep(net);
-        // The tier's geometry budget kept (`governGeometry`), a read of the scene now and then.
-        if (++governFrames >= GOVERN_FRAMES) { governFrames = 0; governGeometry(); }
+        // The tier's geometry budget kept (`governGeometry`), a read of the scene now and then, a slice a frame.
+        if (!geometryWalk && ++governFrames >= GOVERN_FRAMES) { governFrames = 0; geometryWalk = geometryBytesSteps(scene, GOVERN_SLICE); }
+        if (geometryWalk) {
+          const until = performance.now() + GOVERN_SLICE_MS;
+          for (;;) {
+            const step = geometryWalk.next();
+            if (step.done) { geometryWalk = null; govern(step.value); break; }
+            if (performance.now() > until) break;
+          }
+        }
         // Round the frame's whole drawing: the shadow, the scene, every pass.
         gpuTimer.poll();
         // The effects panel's switches: the passes skipped, the layers hidden for this drawing only, the shadows kept as they stand.

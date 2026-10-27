@@ -6,10 +6,10 @@ import { m } from '@world/units';
 import { applyLots, lotCentre, planLots, zoneLots } from '@world/lots';
 import { LotTool } from '@editor/lotTool';
 
-/** A town of one street with its lots, and the Zoning tool over it. */
-function street(): { doc: RoadDoc; tool: LotTool } {
+/** A town of one street with its lots (`half`: its half length), and the Zoning tool over it. */
+function street(half = m(120)): { doc: RoadDoc; tool: LotTool } {
   const doc = new RoadDoc();
-  const a = doc.addNode({ x: m(-120), y: 0 }).id, b = doc.addNode({ x: m(120), y: 0 }).id;
+  const a = doc.addNode({ x: -half, y: 0 }).id, b = doc.addNode({ x: half, y: 0 }).id;
   doc.addSegment(a, b, 1);
   const net = new Network(doc);
   net.rebuild();
@@ -122,5 +122,32 @@ describe('the lots overlay for the ground the view sees', () => {
     // A view of both: every lot, as the whole overlay.
     book = windowed.overlay(false, [m(-300), m(-300), m(3300), m(300)]);
     expect(lotGroups(book.groups.keys()).sort()).toEqual(lotGroups(whole.groups.keys()).sort());
+  });
+
+  it('drawn over a window the view moves, holds the lots a window opened where the view stopped holds', () => {
+    const { doc, tool } = street(m(2400));
+    zoneLots(doc, doc.lots.map((l) => l.id), { use: 'residential', density: 'low' });
+    const view = (x: number): [number, number, number, number] => [x - m(300), m(-300), x + m(300), m(300)];
+    // The view walked along the street a step at a time, back a little, and still for a frame.
+    let book = tool.overlay(false, view(m(-2000)));
+    for (const x of [-1700, -1200, -1250, -600, 0, 0, 700, 1300]) book = tool.overlay(false, view(m(x)));
+    const moved = lotGroups(book.groups.keys()).filter((name) => book.groups.get(name)).sort();
+    const fresh = street(m(2400));
+    zoneLots(fresh.doc, fresh.doc.lots.map((l) => l.id), { use: 'residential', density: 'low' });
+    const opened = fresh.tool.overlay(false, view(m(1300)));
+    const there = lotGroups(opened.groups.keys()).filter((name) => opened.groups.get(name)).sort();
+    expect(there.length).toBeGreaterThan(10);
+    // Every lot the window opened there draws, and those of the cells it came over still kept (within 500 m of the view, `WINDOW_KEEP`): no more.
+    for (const name of there) expect(moved).toContain(name);
+    const kept: [number, number, number, number] = [m(1300) - m(800), m(-800), m(1300) + m(800), m(800)];
+    const cell = m(250);
+    for (const name of moved) {
+      const lot = doc.lots.find((l) => `l${l.id}` === name)!;
+      const xs = lot.corners.map((c) => c.x);
+      // Its box meets a cell of the range kept.
+      expect(Math.floor(Math.max(...xs) / cell)).toBeGreaterThanOrEqual(Math.floor(kept[0] / cell));
+      expect(Math.floor(Math.min(...xs) / cell)).toBeLessThanOrEqual(Math.floor(kept[2] / cell));
+    }
+    expect(moved.length).toBeGreaterThan(there.length);
   });
 });

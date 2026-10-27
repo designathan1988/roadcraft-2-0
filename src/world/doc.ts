@@ -724,13 +724,23 @@ export class RoadDoc {
     if (n > 0) this.streetNameCount.set(item.text, n); else this.streetNameCount.delete(item.text);
   }
 
-  /** @rebuild The street names in use counted from every item, once, when first asked after a table was loaded (`streetNamesInUse`). */
+  /**
+   * @rebuild The street names in use counted from every item, once, when first asked after a table was loaded (`streetNamesInUse`): a row of
+   * the table by its fields alone (`TableRows.field`: its kind, and a plate's text), a record written over it as itself. DO NOT decode every
+   * item for it: the 10 km city's 513,411 were made objects on the page by the first street it named (456 ms of a road's edit, 2026-10-27).
+   */
   private countStreetNames(): Map<string, number> {
     const out = new Map<string, number>();
-    for (const item of this.landscapeMap.values()) {
-      if (item.kind !== 'streetname' || !item.text) continue;
-      out.set(item.text, (out.get(item.text) ?? 0) + 1);
-    }
+    const count = (kind: unknown, text: unknown): void => {
+      if (kind !== 'streetname' || typeof text !== 'string' || !text) return;
+      out.set(text, (out.get(text) ?? 0) + 1);
+    };
+    const items = this.landscapeMap;
+    if (items instanceof TableItems) {
+      (items as TableItems<number, LandscapeItem>).eachRow((rows, row) => {
+        if (rows.field(row, 'kind') === 'streetname') count('streetname', rows.field(row, 'text'));
+      }, (item) => count(item.kind, item.text));
+    } else for (const item of items.values()) count(item.kind, item.text);
     return out;
   }
 

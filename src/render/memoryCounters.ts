@@ -74,7 +74,21 @@ function geometryBuffers(o: Object3D, add: (a: Attribute) => void): void {
 /** The scene's geometry on the GPU, bytes (`MemoryCounters.geometryBytes`) and nothing else: what the tier's governor reads of the
  *  scene every second (`renderer.ts` governGeometry), with none of the names, the textures and the uniforms the full count works out. */
 export function geometryBytesOf(root: Object3D): number {
+  const steps = geometryBytesSteps(root, Infinity);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+/**
+ * `geometryBytesOf` a share of the scene at a time: it yields after each `every` objects, and returns the bytes once every object under
+ * `root` was read (the objects in `traverse`'s order, each material once). What the governor reads a slice a frame (`renderer.ts`): DO NOT
+ * read the whole scene in one frame for it - the 10 km city's 2,500 to 3,600 objects took 5-11 ms, a frame of every second (2026-10-27).
+ */
+export function* geometryBytesSteps(root: Object3D, every: number): Generator<void, number, void> {
   const buffers = new Set<object>();
+  const materials = new Set<object>();
   let bytes = 0;
   const add = (a: Attribute): void => {
     const owner = ownerOf(a);
@@ -84,7 +98,24 @@ export function geometryBytesOf(root: Object3D): number {
   };
   // The buffers an object or a material holds as its own fields (an instanced mesh's matrices).
   const fields = (holder: object): void => { for (const value of Object.values(holder)) if (isAttribute(value)) add(value); };
-  eachHolder(root, (o) => { fields(o); geometryBuffers(o, add); }, fields);
+  const material = (m: object): void => {
+    if (materials.has(m)) return;
+    materials.add(m);
+    fields(m);
+  };
+  // Pre-order, as `traverse`: an object, then its children in their order.
+  const stack: Object3D[] = [root];
+  let read = 0;
+  while (stack.length) {
+    const o = stack.pop()!;
+    fields(o);
+    geometryBuffers(o, add);
+    const m = (o as { material?: object | object[] }).material;
+    if (Array.isArray(m)) for (const one of m) material(one as object);
+    else if (m) material(m);
+    for (let i = o.children.length - 1; i >= 0; i--) stack.push(o.children[i]!);
+    if (++read % every === 0) yield;
+  }
   return bytes;
 }
 

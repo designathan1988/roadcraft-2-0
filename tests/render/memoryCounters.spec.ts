@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BatchedMesh, BoxGeometry, BufferAttribute, BufferGeometry, CanvasTexture, DataArrayTexture, DataTexture, Group, InstancedMesh, InterleavedBuffer, InterleavedBufferAttribute, Mesh, MeshBasicMaterial, ShaderMaterial, WebGLRenderTarget } from 'three';
-import { countMemory, geometryBytesOf, textureGpuBytes } from '@render/memoryCounters';
+import { countMemory, geometryBytesOf, geometryBytesSteps, textureGpuBytes } from '@render/memoryCounters';
 
 /** THE SCENE'S MEMORY, COUNTED (`render/memoryCounters.ts`) */
 describe('countMemory', () => {
@@ -143,6 +143,13 @@ describe('countMemory', () => {
     const full = countMemory(root);
     expect(full.releasedBuffers).toBe(1);
     expect(geometryBytesOf(root)).toBe(full.geometryBytes);
+    // Read a few objects at a time (the governor's slices): the same bytes.
+    const steps = geometryBytesSteps(root, 2);
+    let slices = 0;
+    for (let step = steps.next(); ; step = steps.next(), slices++) {
+      if (step.done) { expect(step.value).toBe(full.geometryBytes); break; }
+    }
+    expect(slices).toBeGreaterThan(2);
   });
 
   it("shows a BatchedMesh's capacity held on the CPU", () => {
