@@ -12,8 +12,8 @@ import { levelCells, squareKeyOf } from './levelKeys';
 import { groundAround } from '../sharedGround';
 import { Digest } from '../../core/digest';
 import { IdSlots, grown } from '../../core/idSlots';
-import { forgetDerivedKeys, forgetOtherDerived, keepDerivedNow, readDerivedKeys, readDerivedSome } from '../derivedCache';
-import { DerivedWriterLane } from '../derivedWriterLane';
+import { bytesOf, forgetDerivedKeys, forgetOtherDerived, keepDerivedNow, readDerivedKeys, readDerivedSome } from '../derivedCache';
+import { DerivedWriterLane, transferCopy } from '../derivedWriterLane';
 
 declare const __CELL_WORK_HASH__: string | undefined;
 /** The cells' jobs kept from one session to the next, by this build's fingerprint of their code (`cook-plugin.ts` DERIVED). */
@@ -38,36 +38,49 @@ export interface SliceStore {
   keep(key: string, slice: CellSlice, was: string | null): void;
 }
 
-/** Where the kept entries of a prefix are read: the store's entries of these keys, by key. */
-type KeptRead = <T>(prefix: string, keys: readonly string[]) => Promise<Map<string, T>>;
+/** Where the cells' results and slices are kept: the store's entries of these keys under a prefix, by key; a value kept under its whole key, its
+ *  arrays copied now (they are the layer's after), false when it is not kept (made again next time). */
+interface KeptStore {
+  read<T>(prefix: string, keys: readonly string[]): Promise<Map<string, T>>;
+  keep(key: string, value: unknown): boolean;
+}
 
-/** Bytes of writes the cells' reader lane may hold: it only reads (`DerivedWriterLane.read`), the cells' results kept on the page (`keepDerivedNow`). */
-const KEPT_READER_BYTES = 2 ** 20;
+/** Bytes of writes handed to the cells' writer and not committed: past it a result is not kept (made again next time, `DerivedWriterLane.post`). */
+const KEPT_WRITES_BYTES = 96 * 2 ** 20;
 
 /**
- * THE CELLS' KEPT RESULTS AND SLICES READ OFF THE PAGE (the derived cache's writer, `derivedWriter.worker.ts`), their arrays handed over; read on
- * the page where no job queue runs (tests). DO NOT read them on the page: IndexedDB rebuilds every value where it is read, and a reopened 10 km
- * city's masses, far levels and slices rebuilt there took 770 ms in every few seconds of the open city (`request.onsuccess`, one F7 profile, 2026-10-26).
+ * THE CELLS' KEPT RESULTS AND SLICES READ AND WRITTEN OFF THE PAGE (the derived cache's writer, `derivedWriter.worker.ts`): read there, their
+ * arrays handed over; written there, a copy of their arrays handed to it (`transferCopy`). On the page where no job queue runs (tests). DO NOT
+ * read nor write them on the page: IndexedDB rebuilds every value where it is read and serialises it where it is put, and a 10 km city's masses,
+ * far levels and slices took 770 ms read in every few seconds of the open city, and 3.7 s written in every ten while it made them again
+ * (`request.onsuccess`, `put`, two F7 profiles, 2026-10-26).
  */
-function keptReader(workers: boolean): KeptRead {
-  if (!workers || !canQueueJobs() || typeof Worker === 'undefined') return readDerivedSome;
-  const lane = new DerivedWriterLane(jobPort('derivedWriter'), KEPT_READER_BYTES);
-  return (prefix, keys) => lane.read(prefix, keys);
+function keptStore(workers: boolean): KeptStore {
+  if (!workers || !canQueueJobs() || typeof Worker === 'undefined') return { read: readDerivedSome, keep: keepDerivedNow };
+  const lane = new DerivedWriterLane(jobPort('derivedWriter'), KEPT_WRITES_BYTES);
+  return {
+    read: (prefix, keys) => lane.read(prefix, keys),
+    keep(key, value) {
+      const transfer: Transferable[] = [];
+      const copy = transferCopy(value, transfer);
+      return lane.post('', [[key, copy]], transfer, bytesOf(copy));
+    },
+  };
 }
 
 /** The slices in the derived cache (IndexedDB, `core/derivedCache.ts`) under this build's fingerprint of the cells' code, beside the jobs' results
  *  kept (`CELL_PREFIX`): never in the page's memory between jobs. None without a fingerprint: every building of a level walked, as before slices. */
-function derivedSlices(prefix: string | null, readKept: KeptRead = readDerivedSome): SliceStore | null {
+function derivedSlices(prefix: string | null, store: KeptStore = { read: readDerivedSome, keep: keepDerivedNow }): SliceStore | null {
   if (prefix === null) return null;
   return {
     read: async (keys) => {
       // Only the keys kept (`keptCellKeys`, read once at the start): a level none of whose cells is kept asks the store nothing.
       const kept = await keptCellKeys();
       const some = keys.filter((key) => kept.has(prefix + key));
-      return some.length ? readKept<CellSlice>(prefix, some) : new Map<string, CellSlice>();
+      return some.length ? store.read<CellSlice>(prefix, some) : new Map<string, CellSlice>();
     },
     keep: (key, slice, was) => {
-      if (keepDerivedNow(prefix + key, slice)) void keptCellKeys().then((keys) => keys.add(prefix + key));
+      if (store.keep(prefix + key, slice)) void keptCellKeys().then((keys) => keys.add(prefix + key));
       if (was === null || was === key) return;
       forgetDerivedKeys(prefix, [was]);
       void keptCellKeys().then((keys) => keys.delete(prefix + was));
@@ -254,14 +267,14 @@ export class CellPool {
   /** `text`: where an entry's record is read (`recordTable.ts`), taken when the job is sent. `slices`: where the cells' slices of their levels are kept (`SliceStore`). */
   constructor(private readonly boxes: () => KitBoxes, private readonly text: (entry: CellEntry) => () => RecordRef, private readonly workers = true,
     private readonly tone?: Readonly<Record<Finish, readonly [number, number, number]>>, slices?: SliceStore | null) {
-    this.readKept = keptReader(workers);
-    this.slices = slices === undefined ? derivedSlices(CELL_PREFIX, this.readKept) : slices;
+    this.kept = keptStore(workers);
+    this.slices = slices === undefined ? derivedSlices(CELL_PREFIX, this.kept) : slices;
     // The kept keys read now, at the start, before the town's writes come (`keptCellKeys`).
     if (workers && canQueueJobs()) void keptCellKeys();
   }
 
-  /** Where the cells' kept results and slices are read (`keptReader`): off the page where jobs run. */
-  private readonly readKept: KeptRead;
+  /** Where the cells' results and slices are kept and read (`keptStore`): off the page where jobs run. */
+  private readonly kept: KeptStore;
   /** Where the cells' slices of their levels are kept (`SliceStore`). */
   private readonly slices: SliceStore | null;
 
@@ -298,7 +311,7 @@ export class CellPool {
     void keptCellKeys().then((keys) => {
       if (this.asked.get(asked.id) !== asked) return undefined;
       if (!keys.has(stored)) { this.send(asked); return undefined; }
-      return this.readKept<CellResult>(CELL_PREFIX!, [stored.slice(CELL_PREFIX!.length)]).then((got) => got.values().next().value, () => undefined).then((kept) => {
+      return this.kept.read<CellResult>(CELL_PREFIX!, [stored.slice(CELL_PREFIX!.length)]).then((got) => got.values().next().value, () => undefined).then((kept) => {
         if (this.asked.get(asked.id) !== asked) return;
         if (kept && typeof kept === 'object' && 'summaries' in kept) { this.forget(asked); this.learn(asked, kept); asked.done(kept); return; }
         this.send(asked);
@@ -472,9 +485,9 @@ export class CellPool {
     }
     this.forget(asked);
     if (reply.kind === 'done') {
-      // Kept before it is handed on: the store clones it now, its arrays are the layer's after (`keepDerivedNow`).
+      // Kept before it is handed on: its arrays copied now, they are the layer's after (`KeptStore.keep`).
       const stored = asked.stored;
-      if (stored !== null && keepDerivedNow(stored, reply.result)) void keptCellKeys().then((keys) => keys.add(stored));
+      if (stored !== null && this.kept.keep(stored, reply.result)) void keptCellKeys().then((keys) => keys.add(stored));
       // The slices it made of its cells, kept; each cell's slice before them forgotten.
       for (const { cell, slice } of reply.result.slices ?? []) {
         const key = asked.sliceKeys?.get(cell);
