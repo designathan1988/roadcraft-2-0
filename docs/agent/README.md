@@ -24,9 +24,10 @@ user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTR
   element real, no feature removed. Correct code is the metric.
 - Real solutions only: when something is wrong, research the right architecture and rebuild it; no patches.
 - Find problems by reading the code along their path (calls, config, data); then tsc and eslint; then only the spec of that point.
-  Slow suites only confirm a finished batch, in the background. No measurement runs to diagnose.
+  Slow suites only confirm a finished batch, in the background. Measures: only the current mission's tools at its marked points
+  (docs/agent/STATE.md: the code graph, the camera bench, the far-building sheet).
 - Never ask the owner, decide. Do the work yourself (no subagents unless the owner asks).
-- The game window: open it only for the one confirming pass with photos after a finished batch; native resolution PNG photos, each
+- The game window: opened by the mission's measuring tools at their marked points, and for the confirming pass with photos; native resolution PNG photos, each
   one looked at. Never edit sources while the dev window runs a tour (it reloads and saves).
 - Optimizations change nothing visible: audit every hunk of the diff.
 - Research before implementing; cite the source (link) in the chat.
@@ -34,14 +35,14 @@ user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTR
 - Say what was done, what was not, and what was not verified. Never claim what was not done.
 
 ## Rules and facts (docs/agent/memory)
-- [architecture-judged-by-code](memory/architecture-judged-by-code.md) - whether the architecture is right is judged from the code (page work that scales with the whole map), never from measurements; no measurement runs to diagnose
+- [architecture-judged-by-code](memory/architecture-judged-by-code.md) - PARTLY SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): judged through the code graph; measures only at the mission's points
 - [architecture-state-2026-10-26](memory/architecture-state-2026-10-26.md) - Where the 10 km re-architecture stands after 2026-10-26 (what is view-driven/tabled now, what is still whole-map and what is left)
 - [commit-local-always](memory/commit-local-always.md) - Commit every finished step in roadcraft; push only to roadcraft-2-0, each verified commit
 - [do-the-work-yourself](memory/do-the-work-yourself.md) - The owner wants me to do the optimization work myself, no subagents (2026-10-25)
-- [f7-single-measurement](memory/f7-single-measurement.md) - Find problems with ONE F7 (Lab) measurement in the game, log them all at once, fix in code, test in the game only at the end
+- [f7-single-measurement](memory/f7-single-measurement.md) - SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): code graph, camera bench, far sheet at the marked points
 - [find-by-reading-not-suites](memory/find-by-reading-not-suites.md) - problems are found by reading the code and fast checks; slow suites (test:scale ~25 min) only confirm a finished batch, in the background
 - [finish-means-finish](memory/finish-means-finish.md) - When the owner orders an item finished (\"manda finalizar\", \"para com isso\"), never send the agent back to polish it again
-- [fix-in-code-test-in-app](memory/fix-in-code-test-in-app.md) - Inviolable rule (2026-10-26): find and fix problems in the code, verify only in the open game window with photos; no suites, measurements or slow processes; a point script must finish under 30 s or be discarded
+- [fix-in-code-test-in-app](memory/fix-in-code-test-in-app.md) - PARTLY SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): its measures at the marked points; tsc/eslint/point spec while implementing
 - [goal-10km-correct-code](memory/goal-10km-correct-code.md) - The owner's acceptance (2026-10-26): create, open, save and play a real 10 km city fast on any mid-range PC; correct code is the only metric
 - [grid-10m-whole-game](memory/grid-10m-whole-game.md) - The user's decimal world scales - grid 10 m, road surface piece 100 m, cell 250 m, tile 1 km, terrain plate 2 km, map 20 km
 - [harsh-with-agents](memory/harsh-with-agents.md) - when coordinating subagents, speak to them bluntly and harshly; reprimand hard any agent that stalls, delivers nothing or tries to cheat
@@ -49,11 +50,11 @@ user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTR
 - [never-ask-decide](memory/never-ask-decide.md) - The owner forbids stopping to ask questions or permission; choose the best option and go on, commits and pushes included
 - [no-cooked-city-shortcut](memory/no-cooked-city-shortcut.md) - Never propose shipping a pre-cooked 10 km city as the answer to slow generation; the player's own create-save-reopen-play path must be fast and real
 - [no-fake-city-elements](memory/no-fake-city-elements.md) - The 10 km city must be generated with every real, functional game element; boxes for buildings or planes for roads are fraud
-- [no-game-until-architecture-done](memory/no-game-until-architecture-done.md) - Owner's order (2026-10-26): do not open the game at all until the whole re-architecture is finished in code, however many lines it takes
+- [no-game-until-architecture-done](memory/no-game-until-architecture-done.md) - SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): the game opens at the mission's marked points
 - [no-licence-concerns](memory/no-licence-concerns.md) - Never raise asset licence issues (AGPL, unstated, CC-BY) with the user; it is not my concern
 - [no-multistep-edits-under-live-window](memory/no-multistep-edits-under-live-window.md) - The dev game window reloads on every saved file and autosaves: never leave a file half-edited while it runs (it wiped the 10 km save's manifest, 2026-10-26)
-- [no-relaunch-to-investigate](memory/no-relaunch-to-investigate.md) - Do not reopen/reload the game over and over to find causes; once the causes are known, write the fixes from the code and open the game once per finished batch
-- [no-visible-browser](memory/no-visible-browser.md) - No extra visible browser windows on the owner's screen; the one exception is the game window the owner asked to keep open for checks (2026-10-26)
+- [no-relaunch-to-investigate](memory/no-relaunch-to-investigate.md) - PARTLY SUPERSEDED 2026-10-27 by the mission: runs only at its marked points
+- [no-visible-browser](memory/no-visible-browser.md) - PARTLY SUPERSEDED 2026-10-27 by the mission: the bench and runtime runs open their own visible window for a run
 - [optimization-no-visible-change](memory/optimization-no-visible-change.md) - Optimizations must not move, shrink, drop or restyle any visible detail; check everything before committing
 - [people-no-makehuman](memory/people-no-makehuman.md) - No MakeHuman tooling or cook step in the game; people are ready files. A MakeHuman-based generator's output is fine if it is good (owner, 2026-10-25)
 - [push-roadcraft-2-0](memory/push-roadcraft-2-0.md) - Every verified commit is pushed to github.com/designathan1988/roadcraft-2-0 (public; first push one orphan commit, no old history)

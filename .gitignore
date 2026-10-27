@@ -19,3 +19,6 @@ lab-reports/
 
 # Local MCP servers (holds a GitHub token: never commit)
 .mcp.json
+
+# The code graph (scripts/codegraph): rebuilt in seconds, never committed
+reports/codegraph/*.db

@@ -8,6 +8,9 @@ metadata:
   modified: 2026-10-26T20:44:07.046Z
 ---
 
+**PARTLY SUPERSEDED 2026-10-27 (evening) by the owner's mission (docs/agent/STATE.md): the camera bench and the code graph's runtime layer open their own visible Chrome window, in the foreground, at a fixed size, for the length of a run.**
+
+
 On 2026-10-25 the owner complained about Chrome windows popping up on the owner's screen from agents' runs: "NÃO ABRIREM CHROME NA MINHA CARA".
 
 On 2026-10-26 the owner ordered the opposite for the game itself: open the game, keep its window open, never close it, have it reload on every code change, and run every game check in that same open instance so the owner can watch closely ("vou fiscalizar de perto").

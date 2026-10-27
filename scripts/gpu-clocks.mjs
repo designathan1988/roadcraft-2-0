@@ -31,6 +31,8 @@ export function startClockLog(file) {
     }
   });
   return {
+    /** The rows logged so far (the same array `stop` resolves with). */
+    rows,
     stop: () => {
       if (!ended && child.exitCode === null) child.kill();
       return finished;

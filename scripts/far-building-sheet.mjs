@@ -14,6 +14,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { chromium } from '@playwright/test';
 import { clocksDuring, startClockLog } from './gpu-clocks.mjs';
+import { deltaE2000 } from './lib/deltaE.mjs';
 
 const args = process.argv.slice(2);
 const flag = (name) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
@@ -63,7 +64,22 @@ try {
       return { ...rest, clocks: clock };
     });
     for (const t of towers) console.log(`${t.tower} ${t.level} at ${t.distance} m: ${t.triangles} triangles in ${t.drawCalls} draws; +x ${rgb(t.faces.x.rgb)} (${t.faces.x.pixels} px), +z ${rgb(t.faces.z.rgb)} (${t.faces.z.pixels} px), roof ${rgb(t.faces.roof.rgb)} (${t.faces.roof.pixels} px)`);
-    writeFileSync(join(out, 'sheet.json'), JSON.stringify({ url, made: new Date().toISOString(), towers, districts }, null, 1));
+    // Each level's faces against the detail's (L0) at the same distance: Delta E 2000 (`lib/deltaE.mjs`); a face with no pixel in either is not compared.
+    const deltaE = [];
+    for (const t of towers) {
+      if (t.level === 'L0') continue;
+      const l0 = towers.find((u) => u.tower === t.tower && u.distance === t.distance && u.level === 'L0');
+      const face = (k) => (t.faces[k].pixels && l0.faces[k].pixels ? Math.round(deltaE2000(t.faces[k].rgb, l0.faces[k].rgb) * 100) / 100 : null);
+      deltaE.push({ tower: t.tower, level: t.level, distance: t.distance, x: face('x'), z: face('z'), roof: face('roof') });
+    }
+    const worst = deltaE.reduce((w, d) => Math.max(w, d.x ?? 0, d.z ?? 0, d.roof ?? 0), 0);
+    const over = deltaE.filter((d) => [d.x, d.z, d.roof].some((v) => v !== null && v > 2));
+    const table = ['| Building | Level | Distance m | dE +x | dE +z | dE roof |', '|---|---|---|---|---|---|',
+      ...deltaE.map((d) => `| ${d.tower} | ${d.level} | ${d.distance} | ${d.x ?? '-'} | ${d.z ?? '-'} | ${d.roof ?? '-'} |`)];
+    const head = `# Delta E 2000 of each level's faces against L0 at the same distance\n\nWorst ${worst.toFixed(2)}; cases over 2: ${over.length} of ${deltaE.length}.\n\n`;
+    writeFileSync(join(out, 'deltaE.md'), `${head}${table.join('\n')}\n`);
+    console.log(`Delta E 2000 against L0: worst ${worst.toFixed(2)}, ${over.length} of ${deltaE.length} level/distance cases over 2`);
+    writeFileSync(join(out, 'sheet.json'), JSON.stringify({ url, made: new Date().toISOString(), towers, districts, deltaE }, null, 1));
     // The towers' sheet: a row a tower and distance, its levels side by side.
     const rows = [];
     for (const name of [...new Set(towers.map((t) => t.tower))]) {
@@ -72,7 +88,7 @@ try {
         const scale = scaleOf(Math.max(...shots.map((t) => t.crop.h)));
         const p = shots[0].pxPerMetre;
         rows.push({
-          title: `${name} tower at ${distance} m (${p.x.toFixed(2)} / ${p.z.toFixed(2)} px a metre across, ${p.up.toFixed(2)} up; crops x${scale})`,
+          title: `${name} at ${distance} m (${p.x.toFixed(2)} / ${p.z.toFixed(2)} px a metre across, ${p.up.toFixed(2)} up; crops x${scale})`,
           cells: shots.map((t) => ({ png: dataUrl(join(out, 'towers', t.file)), scale, caption: `${t.level}: ${t.triangles} tri, ${t.drawCalls} draws`, swatches: swatches(t) })),
         });
       }

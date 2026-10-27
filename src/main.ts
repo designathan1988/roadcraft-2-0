@@ -677,6 +677,10 @@ canvas.parentElement?.insertBefore(canvas3d, canvas);
 /** The graphics options (`graphicsWiring.ts`): the tier the player chose, or the one this GPU holds at the first start, and their settings on it. */
 /** Every frame's whole time, the last 40 s (`sampleRing.ts`): the CPU the process spends a frame, sampled while it runs (`__roadcraft.usage`). Declared before the session's summary reads it: a page closed while it boots (a reload) sent the summary before the ring stood (ReferenceError, 2026-10-26). */
 const frameTimes = new SampleRing(2400);
+/** The camera bench's frames while it records (`scripts/bench-camera.mjs`): six numbers a frame - its end, its own CPU time (the frame's
+ *  work from input to overlay, not the interval between animation frames), the draws and triangles drawn, and the WebGL bytes uploaded and
+ *  programs linked so far (`window.__glCount`, kept by the bench's script installed before the game's code); `frames` null when not recording. */
+const bench: { frames: number[] | null } = { frames: null };
 /** The session's summary told to the field log as the page closes (`fieldReport.ts`): the GPU, the tiers, the frames' times, the heap's peak. */
 const fieldSession = new SessionSummary(() => performance.now(), () => frameTimes, () => scene.gpu.label);
 const graphics = createGraphicsWiring((preset) => gameState.set('quality', preset, 'quality menu'), (level, by) => fieldSession.level(level, by));
@@ -2789,6 +2793,10 @@ function frame(now: number): void {
   frameTimer.mark('panels');
   const timed = frameTimer.end();
   frameTimes.push(timed.end - timed.start);
+  if (bench.frames) {
+    const gl = (window as { __glCount?: { bytes: number; programs: number } }).__glCount;
+    bench.frames.push(timed.end, timed.end - timed.start, scene.stats.drawCalls, scene.stats.drawnTriangles, gl?.bytes ?? 0, gl?.programs ?? 0);
+  }
   // The heap's peak and the worst 40 s of frames for the session's summary, looked at every 15 s.
   fieldSession.tick(heapBytes);
   healthWatch.frameEnded(timed.start, timed.end);
@@ -4025,6 +4033,11 @@ function gpuLines(): string[] {
   const s = t.samples.stats(STUTTER_MS);
   return [`gpu: p50 ${s.p50} · p95 ${s.p95} · p99 ${s.p99} · max ${s.max} ms · n ${s.n}`, `gpuName: ${name}`];
 }
+/** The camera bench's recorder (`bench`): `start()` empties it and records every frame from then; `stop()` hands the numbers and stops. */
+if (PROBES) (window as unknown as { __bench: unknown }).__bench = {
+  start: (): void => { bench.frames = []; },
+  stop: (): number[] => { const out = bench.frames ?? []; bench.frames = null; return out; },
+};
 if (PROBES) (window as unknown as { __gpu: unknown }).__gpu = (reset = false): unknown => {
   const t = scene.gpu;
   const out = { supported: t.supported, label: t.label, ...t.samples.stats(STUTTER_MS), skipped: t.skipped, disjoint: t.disjoint };

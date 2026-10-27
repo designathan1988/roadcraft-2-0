@@ -2,6 +2,7 @@ import { Box3, Group, type InstancedMesh, Mesh, MeshStandardMaterial, type Objec
 import { Rng } from '@core/rng';
 import { CELL } from '@world/cells';
 import { instantiate } from '@world/buildings/blueprints';
+import { materialAt } from '@world/buildings/materials';
 import { madeToMeasure } from '@world/buildings/procedural';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { m } from '@world/units';
@@ -37,8 +38,8 @@ const PX_AT_METRE = HEIGHT / 2 / Math.tan((FOV * Math.PI) / 360);
 /** The Home view's look down at downtown (V0: the camera at (932, 1464, 932) over the origin, 48.0° down; five wheel steps in, V5, 47.2°, both
  *  measured in the game, 2026-10-25) and its bearing, from the +x, +z quadrant of three's world. */
 const DOWN = (47.6 * Math.PI) / 180, BEARING = Math.PI / 4;
-/** The eyes' distances to a tower, m: the facade level's reach, V5's nearest and farthest towers (1.9 and 1.2 px a metre), V0's (0.86 to 0.71). */
-const DISTANCES = [350, 900, 1400, 2000, 2400].map(m);
+/** The eyes' distances to a building, m: from inside the detail's reach to past the whole city's view (the mission's sheet, 2026-10-27). */
+const DISTANCES = [300, 700, 1400, 2000, 4000].map(m);
 /** The district's eyes: V0's distance to the origin, and V5's. */
 const V0_DISTANCE = m(1975), V5_DISTANCE = m(1041);
 /** The hour the game opens on (its clock at the V0 to V5 shots, 06:35). */
@@ -284,23 +285,42 @@ function onFrame(camera: PerspectiveCamera, p: Vector3): { x: number; y: number 
   return { x: ((v.x + 1) / 2) * WIDTH, y: ((1 - v.y) / 2) * HEIGHT };
 }
 
-/** A tower of the study: the made-to-measure building of `use` and the high density on the large lot (40 x 36 m), `seed` its variety, at the plan's (x, y). */
-function tower(use: 'commercial' | 'residential', seed: number, at: { x: number; y: number }, id: number): Building {
-  const made = madeToMeasure(use, 'high', { W: m(40), D: m(36) }, new Rng(seed));
-  return { ...instantiate(made.body, at, 0), id: id as BuildingId } as Building;
+type Use = 'commercial' | 'residential';
+type Density = 'low' | 'medium' | 'high';
+/** A building of the study: the made-to-measure building of `use` and `density` on a lot of `lot` metres, `seed` its variety, at the plan's (x, y). */
+function made(use: Use, density: Density, lot: { w: number; d: number }, seed: number, at: { x: number; y: number }, id: number): Building {
+  const body = madeToMeasure(use, density, { W: m(lot.w), D: m(lot.d) }, new Rng(seed)).body;
+  return { ...instantiate(body, at, 0), id: id as BuildingId } as Building;
+}
+/** A tower of the district: the high density on the large lot (40 x 36 m). */
+const tower = (use: Use, seed: number, at: { x: number; y: number }, id: number): Building => made(use, 'high', { w: 40, d: 36 }, seed, at, id);
+
+/** One kind of building of the study. `glassWalls`: the first seed from `seed` up whose walls are the 'glass' finish is taken. */
+interface StudyKind { readonly name: string; readonly use: Use; readonly density: Density; readonly lot: { w: number; d: number }; readonly seed: number; readonly glassWalls?: boolean }
+/** The study's buildings: the two towers (an office of the glass style, 73 m, and a block of flats in ceramic, 77 m), a house, a shop, and a
+ *  smaller office whose walls are glass. */
+const STUDY: readonly StudyKind[] = [
+  { name: 'glass', use: 'commercial', density: 'high', lot: { w: 40, d: 36 }, seed: 1 },
+  { name: 'masonry', use: 'residential', density: 'high', lot: { w: 40, d: 36 }, seed: 1 },
+  { name: 'house', use: 'residential', density: 'low', lot: { w: 14, d: 24 }, seed: 1 },
+  { name: 'shop', use: 'commercial', density: 'medium', lot: { w: 24, d: 24 }, seed: 1 },
+  { name: 'glass-office', use: 'commercial', density: 'high', lot: { w: 28, d: 28 }, seed: 2, glassWalls: true },
+];
+/** The study building of a kind, at the plan's (x, y). */
+function studyBuilding(kind: StudyKind, at: { x: number; y: number }, id: number): Building {
+  if (!kind.glassWalls) return made(kind.use, kind.density, kind.lot, kind.seed, at, id);
+  for (let seed = kind.seed; seed < kind.seed + 64; seed++) {
+    const b = made(kind.use, kind.density, kind.lot, seed, at, id);
+    if (materialAt(b, { scope: 'building', slot: 'wall' })?.finish === 'glass') return b;
+  }
+  throw new Error(`[far sheet] no seed from ${kind.seed} makes a ${kind.name} with glass walls`);
 }
 
-/** The study's towers: an office of the glass style (its walls the 'glass' finish, 73 m) and a block of flats in ceramic (77 m). */
-const TOWERS = [
-  { name: 'glass', use: 'commercial', seed: 1 },
-  { name: 'masonry', use: 'residential', seed: 1 },
-] as const;
-
-/** Each study tower drawn by each level from each distance. */
+/** Each study building drawn by each level from each distance. */
 async function towerShots(kit: BuildingKit, at: Stage): Promise<FarTowerShot[]> {
   const out: FarTowerShot[] = [];
-  for (const [k, spec] of TOWERS.entries()) {
-    const b = tower(spec.use, spec.seed, { x: m(60), y: m(60) }, 1 + k);
+  for (const [k, spec] of STUDY.entries()) {
+    const b = studyBuilding(spec, { x: m(60), y: m(60) }, 1 + k);
     const levels = levelsOf(kit, [b], FAR_LEVELS);
     for (const drawn of levels.values()) at.scene.add(drawn.group);
     // The tower's box from its cell masses (`CellMass.bounds`, the world's).
