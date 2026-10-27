@@ -54,6 +54,7 @@ import {
 import { angleOf } from '@core/vec2';
 import { WIRE_WIND_UNIFORMS_GLSL, windUniforms, wireWindGlsl } from './wind';
 import { cylinderWith } from './mesh/cylinder';
+import { weldGeometry } from './mesh/weld';
 
 /** Pin insulator on the cross-arm. */
 const INSULATOR_RADIUS = m(0.07);
@@ -678,7 +679,8 @@ function mastShape(sides: number): PartLevel {
  */
 function roundShape(top: number, bottom: number, tall: number, sides: number, full: number, ends: { readonly top: boolean; readonly bottom: boolean }): PartLevel {
   const widen = sides >= full ? 1 : Math.PI / (sides * Math.sin(Math.PI / sides));
-  const geometry = cylinderWith(top * widen, bottom * widen, tall, sides, ends);
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once (the model audit, 2026-10-27).
+  const geometry = weldGeometry(cylinderWith(top * widen, bottom * widen, tall, sides, ends));
   const r = Math.max(top, bottom), R = r * widen;
   const error = sides >= full ? 0 : Math.max(R - r, r - R * Math.cos(Math.PI / sides));
   return { geometry, error };

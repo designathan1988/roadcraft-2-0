@@ -14,6 +14,7 @@ import {
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { weldGeometry } from '../mesh/weld';
 import { dropBuried, dropHiddenFaces } from '../mesh/hiddenFaces';
 
 import type { Finish } from '@world/buildings/materials';
@@ -234,8 +235,11 @@ function boxWithout(w: number, h: number, d: number, x: number, y: number, z: nu
 function mergedParts(parts: readonly BufferGeometry[]): BufferGeometry {
   dropHiddenFaces(parts, false);
   dropBuried(parts);
-  const merged = mergeGeometries([...parts]) as BufferGeometry;
+  const joined = mergeGeometries([...parts]) as BufferGeometry;
   for (const p of parts) p.dispose();
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once (the model audit, 2026-10-27).
+  const merged = weldGeometry(joined);
+  joined.dispose();
   return merged;
 }
 

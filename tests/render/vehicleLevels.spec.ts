@@ -93,12 +93,12 @@ describe('vehicle part levels', () => {
         finer = triangles(level);
       }
     }
-    // A car's glazing: the whole and one level within 1.25 cm (its levels measured both ways, `partLevelsWork.ts` ladderIndices: 992 -> 70
-    // triangles, its corners closed up by the weld left out, `weldGeometry`), a draw's worth fewer (above), not six levels a few
-    // triangles apart. Before the weld left them out the level held 199, 129 of them closed, and a coarse level of 30 stood under it;
-    // from 70 it sheds less than a draw's worth, so none.
+    // A car's glazing: the whole, a level within 1.25 cm and at most one coarser one, each a draw's worth fewer (above), not six levels a
+    // few triangles apart; the coarsest a tenth of the whole at most. The count of them follows the glazing's own triangles (its corners
+    // the weld closed up left out, `weldGeometry`; its stations those its shape needs, `carBody.ts` stationsFor).
     const glass = await maker.levels(model.glass, 'smooth');
-    expect(new Set(glass).size).toBe(2);
+    expect(new Set(glass).size).toBeGreaterThanOrEqual(2);
+    expect(new Set(glass).size).toBeLessThanOrEqual(3);
     expect(triangles(glass[glass.length - 1]!)).toBeLessThanOrEqual(triangles(model.glass) * 0.1);
   });
 });

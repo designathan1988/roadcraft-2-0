@@ -8,6 +8,7 @@ import {
   Vector3,
   type MeshDepthMaterial,
 } from 'three';
+import { weldGeometry } from './mesh/weld';
 
 import type { GeologyKind } from '@world/terrainPaint';
 import type { SlotFormat } from './cellInstances';
@@ -154,8 +155,11 @@ export function scrubGeometry(seed: number): BufferGeometry {
   geometry.setAttribute('position', new BufferAttribute(new Float32Array(positions), 3));
   geometry.setAttribute('color', new BufferAttribute(new Float32Array(colours), 3));
   geometry.setAttribute('normal', new BufferAttribute(new Float32Array(normals), 3));
-  geometry.computeBoundingSphere();
-  return geometry;
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once (the model audit, 2026-10-27).
+  const welded = weldGeometry(geometry);
+  geometry.dispose();
+  welded.computeBoundingSphere();
+  return welded;
 }
 
 

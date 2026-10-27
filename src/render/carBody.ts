@@ -379,6 +379,45 @@ function seatIndex(side: DoorSide, row: number, perSide: number): number {
   return (side === -1 ? 0 : perSide) + row;
 }
 
+/** How far a section the hull's stations leave out may stand from the hull drawn between its neighbours, metres: under half a pixel at the
+ *  nearest a car is seen (5 m, 35 degrees, 1,080 lines: a pixel is 2.9 mm). */
+const STATION_ERROR = 0.001;
+
+/**
+ * The stations a hull is drawn with: of `sampled` (in order), those its shape needs - each one left out only where the hull drawn straight
+ * between the stations kept round it stands within `error` of its section at every point (Douglas-Peucker along the length, over whole
+ * sections), and never a `locked` one (a feature edge: a door's, a pane's, an arch's end). DO NOT draw a car at every sample: 64 even
+ * stations a car's length and 21 round each arch made a sedan's shell 10,748 triangles, its flat flanks a strip of 7 cm (the model audit,
+ * 2026-10-27); taking out stations evenly moved its nose 9 to 12 cm (the optimisation sheets).
+ */
+function stationsFor<P extends { readonly y: number; readonly z: number; readonly lifted: boolean }>(sampled: readonly number[], locked: (x: number) => boolean,
+  sectionAt: (x: number) => readonly P[], error: number): number[] {
+  if (sampled.length <= 2) return [...sampled];
+  const sections = sampled.map(sectionAt);
+  /** Whether every section strictly between `a` and `b` stands within `error` of the hull drawn straight from `a` to `b`. */
+  const spans = (a: number, b: number): boolean => {
+    const sa = sections[a]!, sb = sections[b]!, xa = sampled[a]!, xb = sampled[b]!;
+    for (let k = a + 1; k < b; k++) {
+      const t = (sampled[k]! - xa) / (xb - xa), sk = sections[k]!;
+      for (let j = 0; j < sk.length; j++) {
+        const p = sk[j]!, q = sa[j]!, r = sb[j]!;
+        if (p.lifted !== q.lifted || p.lifted !== r.lifted) return false;
+        if (Math.hypot(p.y - (q.y + (r.y - q.y) * t), p.z - (q.z + (r.z - q.z) * t)) > error) return false;
+      }
+    }
+    return true;
+  };
+  const kept = [sampled[0]!];
+  // From each station kept, on to the farthest the hull drawn straight from it spans; a locked station ends the reach (it is kept).
+  for (let anchor = 0; anchor < sampled.length - 1;) {
+    let j = anchor + 1;
+    while (j + 1 < sampled.length && !locked(sampled[j]!) && spans(anchor, j + 1)) j++;
+    kept.push(sampled[j]!);
+    anchor = j;
+  }
+  return kept;
+}
+
 export function buildCarModel(a: Archetype, styleName: CarStyle = (a.style ?? 'sedan') as CarStyle): VehicleModel {
   const st = STYLES[styleName];
   const shape = carShape(a, styleName);
@@ -417,13 +456,15 @@ export function buildCarModel(a: Archetype, styleName: CarStyle = (a.style ?? 's
   const lastDoor = doorEdges[doorEdges.length - 1]!;
   const glassBack = st.quarter && rear ? Math.max(rear.top + M(0.12), lastDoor - M(0.55)) : lastDoor + M(0.05);
 
-  // ---- stations: uniform, plus every feature edge.
+  // ---- stations: uniform, plus every feature edge. The uniform ones, the ends' rounding and the arches' inner samples are only where
+  // the shape is sampled (`free`): those the shape does not need are left out below (`stationsFor`); every feature edge is kept.
   const xs = new Set<number>();
+  const free = new Set<number>();
   const N = 64;
-  for (let i = 0; i <= N; i++) xs.add(lerp(back, front, i / N));
-  for (let i = 1; i <= 8; i++) { xs.add(front - (M(0.06) * i) / 8 * 2); xs.add(back + (M(0.06) * i) / 8 * 2); }
+  for (let i = 0; i <= N; i++) { const x = lerp(back, front, i / N); xs.add(x); if (i > 0 && i < N) free.add(x); }
+  for (let i = 1; i <= 8; i++) { const f = front - (M(0.06) * i) / 8 * 2, r = back + (M(0.06) * i) / 8 * 2; xs.add(f); xs.add(r); free.add(f); free.add(r); }
   for (const ax of axles) {
-    for (let i = 0; i <= 18; i++) xs.add(ax - archR + (2 * archR * i) / 18);
+    for (let i = 0; i <= 18; i++) { const x = ax - archR + (2 * archR * i) / 18; xs.add(x); if (i > 0 && i < 18) free.add(x); }
     xs.add(ax - archR - M(0.002));
     xs.add(ax + archR + M(0.002));
   }
@@ -431,7 +472,7 @@ export function buildCarModel(a: Archetype, styleName: CarStyle = (a.style ?? 's
   for (const x of [screenBase, screenBase - frame, screenTop, screenTop + frame, glassFront, glassFront - frame, glassBack, glassBack + frame]) xs.add(x);
   if (rear) for (const x of [rear.top, rear.top - frame, rear.base, rear.base + frame]) xs.add(x);
   if (Number.isFinite(bedFrom)) { xs.add(bedFrom); xs.add(bedFrom - M(0.04)); }
-  const stations = [...xs].filter((x) => x >= back - 1e-9 && x <= front + 1e-9).sort((p, q) => p - q)
+  const sampled = [...xs].filter((x) => x >= back - 1e-9 && x <= front + 1e-9).sort((p, q) => p - q)
     .filter((x, i, list) => i === 0 || x - list[i - 1]! > M(0.004));
 
   // ---- one section per station: the right half, bottom centre to top centre.
@@ -515,6 +556,7 @@ export function buildCarModel(a: Archetype, styleName: CarStyle = (a.style ?? 's
     return pts;
   };
 
+  const stations = stationsFor(sampled, (x) => !free.has(x), sectionAt, M(STATION_ERROR));
   const sections = stations.map(sectionAt);
   // Full ring per station: right half (z >= 0) then the left half mirrored, without repeating the centres.
   const RING = HALF * 2 - 2;

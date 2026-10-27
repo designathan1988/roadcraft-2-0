@@ -14,6 +14,7 @@ import {
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { weldGeometry } from './mesh/weld';
 
 import { cylinderWith } from './mesh/cylinder';
 import { dropHiddenFaces } from './mesh/hiddenFaces';
@@ -102,9 +103,12 @@ function merge(parts: BufferGeometry[], floor = true): BufferGeometry {
   }), false);
   for (const geometry of parts) geometry.dispose();
   if (!merged) throw new Error('prop parts could not be merged');
-  merged.computeBoundingSphere();
-  merged.computeBoundingBox();
-  return merged;
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once. DO NOT leave the parts' shared corners apart: every instance drew them twice (the model audit, 2026-10-27).
+  const welded = weldGeometry(merged);
+  merged.dispose();
+  welded.computeBoundingSphere();
+  welded.computeBoundingBox();
+  return welded;
 }
 
 /** A box with the faces of `drop` left out (three's BoxGeometry groups: +x, -x, +y, -y, +z, -z): its ends sunk in a housing, its top under a dome. */

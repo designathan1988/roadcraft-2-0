@@ -79,5 +79,13 @@ describe('every model the game builds', () => {
       ...rows.map((r) => `| ${r.item} | ${r.piece} | ${r.level} | ${r.triangles} | ${r.vertices} | ${r.repeated} | ${r.closed} | ${r.flat} | ${r.indexed ? 'yes' : 'no'} |`)];
     writeFileSync(join(dir, 'models.md'), `# Every model the game builds (${rows.length} pieces and levels, ${items.length} models)\n\n${lines.join('\n')}\n`);
     expect(rows.length).toBeGreaterThan(50);
+    // No triangle the weld would close (two corners one vertex): it draws nothing at every instance.
+    expect(rows.filter((r) => r.closed > 0).map((r) => `${r.item} ${r.piece} L${r.level}: ${r.closed}`)).toEqual([]);
+    // Triangles of no area only where they are meant: a card its shader opens, or a vehicle's piece (`agents.ts` drawnOf leaves them out
+    // as it draws, `withoutHidden`).
+    const opened = (r: Row): boolean => /card|picture|billboard|quad/i.test(r.piece) || r.item.startsWith('Vehicles/');
+    expect(rows.filter((r) => r.flat > 0 && !opened(r)).map((r) => `${r.item} ${r.piece} L${r.level}: ${r.flat}`)).toEqual([]);
+    // A model's corners welded: no more than a tenth of them the same in every attribute as another.
+    expect(rows.filter((r) => r.vertices >= 24 && r.repeated > r.vertices * 0.1).map((r) => `${r.item} ${r.piece} L${r.level}: ${r.repeated}/${r.vertices}`)).toEqual([]);
   }, 120_000);
 });

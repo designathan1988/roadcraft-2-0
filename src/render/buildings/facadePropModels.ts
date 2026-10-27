@@ -77,8 +77,11 @@ function blockWithout(w: number, h: number, d: number, x: number, y: number, z: 
 function merged(parts: BufferGeometry[], floor = false): BufferGeometry {
   dropHiddenFaces(parts, floor);
   dropBuried(parts);
-  const g = mergeGeometries(parts) as BufferGeometry;
+  const joined = mergeGeometries(parts) as BufferGeometry;
   for (const p of parts) p.dispose();
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once. DO NOT leave the parts' shared corners apart: every instance drew them twice (the model audit, 2026-10-27).
+  const g = weldGeometry(joined);
+  joined.dispose();
   g.computeBoundingBox();
   g.computeBoundingSphere();
   return g;

@@ -220,10 +220,13 @@ function tint<T extends BufferGeometry>(g: T, hex: number): T {
 /** Merges parts into one indexed geometry with position, normal and colour: corners equal in all three shared, so a hard edge stays split. */
 export function merge(parts: BufferGeometry[]): BufferGeometry {
   const ready = parts.map((g) => weldPart(g));
-  const merged = mergeGeometries(ready, false);
+  const joined = mergeGeometries(ready, false);
   for (const g of parts) g.dispose();
   for (const g of ready) g.dispose();
-  if (!merged) throw new Error('vehicle model: parts could not be merged');
+  if (!joined) throw new Error('vehicle model: parts could not be merged');
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once (the model audit, 2026-10-27).
+  const merged = weldGeometry(joined);
+  joined.dispose();
   return merged;
 }
 

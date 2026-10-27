@@ -5,6 +5,7 @@ import {
 } from 'three';
 import { castBySize } from '../shadowCasters';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { weldGeometry } from '../mesh/weld';
 
 /** What people hold while they do something (`sim/people` gestures) */
 export type HeldKind = 'newspaper' | 'cup' | 'phone' | 'camera' | 'bag' | 'umbrella' | 'box';
@@ -74,7 +75,10 @@ function model(kind: HeldKind): BufferGeometry {
   const merged = mergeGeometries(parts, false)!;
   for (const g of parts) g.dispose();
   merged.computeVertexNormals();
-  return merged;
+  // Welded whole (`weldGeometry`): a corner its parts share drawn once. DO NOT leave the parts' shared corners apart: every instance drew them twice (the model audit, 2026-10-27).
+  const welded = weldGeometry(merged);
+  merged.dispose();
+  return welded;
 }
 
 /** Things that hang or stand by their own weight - a cup, a bag, an umbrella */

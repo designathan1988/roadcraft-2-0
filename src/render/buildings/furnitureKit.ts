@@ -379,9 +379,12 @@ export function createFurnitureGeometries(): Record<FurnitureKind, BufferGeometr
       }
       return g;
     });
-    const merged = mergeGeometries(parts) as BufferGeometry;
-    merged.computeBoundingSphere();
+    const joined = mergeGeometries(parts) as BufferGeometry;
     for (const p of parts) p.dispose();
+    // Welded whole (`weldGeometry`): a corner its parts share drawn once. DO NOT leave the parts' shared corners apart: every instance drew them twice (the model audit, 2026-10-27).
+    const merged = weldGeometry(joined);
+    joined.dispose();
+    merged.computeBoundingSphere();
     out[kind] = merged;
   }
   return out;
