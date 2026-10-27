@@ -143,12 +143,6 @@ if (facadeKind > ${K.none}) {
   vec3 glassColour = mix(FACADE_GLASS, FACADE_GLASS_DARK, facadeDark) * 0.06;
   vec3 solidColour = mix(FACADE_DOOR, FACADE_SHUTTER, facadeShutter);
   diffuseColor.rgb = diffuseColor.rgb * facadeTone * facadeWall * facadeStreak +vFacadeTrim.rgb * facadeFrame + glassColour * facadeGlass + solidColour * facadeSolid;
-  // A level from afar's bays: what stands out of their walls in the detail (balconies, slabs, fins, bands: \`CoverShell\`), its colour over its
-  // share of the bay as the bay falls under the pixels, as the windows fade to their mean (Haegler et al. 2010, the grammar's terminals at their
-  // mean); none on the detail's and the facade level's runs, whose elements are their own.
-  float facadeCovered = vFacadeCover.a * facadeSub;
-  diffuseColor.rgb = mix(diffuseColor.rgb, vFacadeCover.rgb, facadeCovered);
-  facadeWall *= 1.0 - facadeCovered;
   // Its room lit at night: the share awake once the window is under a pixel, its lamp from the mix the detailed panes draw from.
   // By day (\`massingNight\` 0, a uniform: every pixel takes the same branch) no window glows, so none is worked out.
   if (massingNight > 0.0) {
@@ -159,6 +153,12 @@ if (facadeKind > ${K.none}) {
     facadeLamp = mix(roomLamp(fract(lot * 17.31), office), roomLampMean(office), sub);
   }
 }
+// A level from afar's bays, with windows or none: what stands out of their walls in the detail (balconies, slabs, fins, bands: \`CoverShell\`), its colour over its
+// share of the bay as the bay falls under the pixels, as the windows fade to their mean (Haegler et al. 2010, the grammar's terminals at their
+// mean); none on the detail's and the facade level's runs, whose elements are their own.
+float facadeCovered = vFacadeCover.a * facadeSub;
+diffuseColor.rgb = mix(diffuseColor.rgb, vFacadeCover.rgb, facadeCovered);
+facadeWall *= 1.0 - facadeCovered;
 `;
 }
 
@@ -224,6 +224,6 @@ totalEmissiveRadiance += (facadeLamp * massingNight * facadeLit + ${ROOM_SEEN_GL
     // The shell's own after: each of its additions lands right after its chunk, so before these (its finish's map, roughness, metalness and relief first).
     baseCompile(shader, renderer);
   };
-  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v9`;
+  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v10`;
   return material;
 }

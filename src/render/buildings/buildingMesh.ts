@@ -713,8 +713,9 @@ class Shell {
   /** `tap`: told to the catalogue (`setShellTap`); false for the second level a face is laid in (`LevelShell`). */
   face(points: readonly (readonly [number, number, number])[], n: readonly [number, number, number], c: Paint, shades?: readonly number[], tap = true): void {
     if (tap && Shell.tap) Shell.tap(points, n, c);
-    // A far run of bays with no opening (kind 0) draws as a wall: it needs no window grid. A detail run keeps it: its tone is the shader's.
-    const st = this.stamp && (this.stamp.kind !== FACADE_KIND.none || this.stamp.near) ? this.stamp : null;
+    // A far run of bays with no opening (kind 0) draws as a wall: it needs no window grid. A detail run keeps it: its tone is the shader's;
+    // and a level from afar's run that carries what stands out of its wall (`FacadeStamp.cover`): the facade shader draws it over the wall.
+    const st = this.stamp && (this.stamp.kind !== FACADE_KIND.none || this.stamp.near || (this.stamp.cover?.[3] ?? 0) > 0) ? this.stamp : null;
     const parts = st ? this.runs : this.parts;
     let part = parts.get(c.finish);
     if (!part) {
