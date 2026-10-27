@@ -140,6 +140,8 @@ export class AmbientWorld {
     this.opening = true;
     this.openTicks = OPEN_TICKS;
     this.openSpots.length = 0;
+    this.filledAt = null;
+    this.refillTicks = 0;
     // DO NOT keep them going: the same map opened twice filled other streets with other people at other ticks.
     this.clock = 0;
     this.nextEdgeLook = 0;
@@ -155,8 +157,8 @@ export class AmbientWorld {
     for (const id of this.walkers) if (!walkerAlive(w, id)) this.walkers.delete(id);
     for (const id of this.drivers) if (!w.vehicles.has(id)) { this.drivers.delete(id); this.sighted.delete(id); }
     if (this.source === 'edges') {
-      // A map just opened is filled at once, the panel's numbers on its streets
-      if (this.opening) this.open(w);
+      // A map just opened is filled at once, the panel's numbers on its streets; a micro window moved, its new streets the same way
+      if (this.opening) this.open(w); else this.refill(w);
       this.keepWalking(w);
     }
     this.clock += DT;
@@ -570,6 +572,30 @@ export class AmbientWorld {
   private endOpening(): void {
     this.opening = false;
     this.openSpots.length = 0;
+  }
+
+  /** Where the micro window stood when its streets were last filled (`refill`), and the ticks of its fill left. */
+  private filledAt: { x: number; y: number } | null = null;
+  private refillTicks = 0;
+
+  /**
+   * The micro window's streets filled where it moved (`SimWorld.useMeso`), as a map's opening fills them (`openPeople`, `OPEN_PEOPLE` a tick
+   * for at most `OPEN_TICKS`): its people on its footways, going about the hour's business. DO NOT leave a moved window to the road ends and
+   * the gates alone: they make two people a second (`edgePeople`), and the window's thousand took eight minutes to come - a 10 km city's
+   * streets stood empty wherever the camera went (the player: "nem vi pessoas no jogo", 2026-10-26).
+   */
+  private refill(w: SimWorld): void {
+    const win = w.microScoped ? w.meso?.microWindow() ?? null : null;
+    if (!win) return;
+    if (!this.filledAt || this.filledAt.x !== win.x || this.filledAt.y !== win.y) {
+      this.filledAt = { x: win.x, y: win.y };
+      this.refillTicks = OPEN_TICKS;
+      this.openSpots.length = 0;
+    }
+    if (this.refillTicks <= 0) return;
+    const people = this.peopleTarget(w) - this.walkers.size;
+    if (people > 0) this.openPeople(w, Math.min(people, OPEN_PEOPLE));
+    if (--this.refillTicks <= 0 || people <= 0) { this.refillTicks = 0; this.openSpots.length = 0; }
   }
 
   /** Cars on link lanes of the whole map, each lane drawn by its length */

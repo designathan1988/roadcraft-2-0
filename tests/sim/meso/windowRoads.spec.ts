@@ -183,6 +183,26 @@ describe("the micro window's roads", () => {
     for (const p of w.pedViews) expect(Math.hypot(p.x - moved.x, p.y - moved.y), `person ${p.id}`).toBeLessThan(moved.r + m(200));
   });
 
+  it("fills the streets where the window moved as a map's opening fills them, not two people a second", () => {
+    const { w, meso, frames } = game(true);
+    w.usePedestrianEngine(createAgentWalkEngine());
+    w.ambient.enabled = true;
+    w.ambient.source = 'edges';
+    w.pedestrianCount = 400;
+    w.trafficIntensity = 0;
+    meso.want(m(-600), m(-600), m(250));
+    frames(30);
+    const before = w.pedViews.length;
+    expect(before).toBeGreaterThan(10);
+    // A window of the same street elsewhere: within three seconds its people are out, as many as the last one's nearly.
+    const moved = { x: m(0), y: m(-600), r: m(250) };
+    meso.want(moved.x, moved.y, moved.r);
+    frames(3);
+    const inside = w.pedViews.filter((p) => Math.hypot(p.x - moved.x, p.y - moved.y) < moved.r + m(200)).length;
+    // Two people a second from the edges and gates alone would be six.
+    expect(inside).toBeGreaterThan(Math.max(12, before * 0.6));
+  });
+
   it('run the buses on the road inside the window and by the timetable beyond it, a bus bound for a stop beyond driving out at the edge', () => {
     const { w, meso, frames } = game(false, true);
     w.trafficIntensity = 0;
