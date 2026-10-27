@@ -195,6 +195,22 @@ describe('an edit in one tile writes that tile, whatever the size of the map', (
     expect(big.keys).toEqual([`map:R8:poles:${origin}`, `map:R8:trees:${origin}`, 'map:regions8']);
   });
 
+  it('finds the records of the squares it writes by their place, never walking every pole of the map', async () => {
+    const doc = field(81);
+    const store = memoryStore();
+    const saves = new TiledSaves(store, 'map');
+    await saves.save(doc, {});
+    const poles = doc.poles as Map<number, unknown>;
+    const keys = poles.keys.bind(poles);
+    let walked = 0;
+    poles.keys = (() => { walked++; return keys(); }) as typeof poles.keys;
+    doc.addPole({ x: 300, y: 300 });
+    await saves.save(doc, {});
+    expect(walked).toBe(0);
+    poles.keys = keys;
+    same(await saves.read(), doc);
+  });
+
   it('keeps the order of a list spread over tiles through cuts and plantings', async () => {
     // The order is meaning (the oldest trees go first at the cap; stamps and dabs are laid in turn).
     const doc = RoadDoc.fromJSON({ version: 1, nodes: [], segments: [] } as never);

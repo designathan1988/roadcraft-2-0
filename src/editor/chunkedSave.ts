@@ -8,7 +8,7 @@ import { GLOBAL_MAGIC, MANIFEST_MAGIC, REGION_CODEC, readValueFrame, squareFrame
 import { JSON_CODEC, type SquareCodec, readWears, withWear } from './tileCodec';
 import {
   GLOBAL_KINDS, KEYED, KEYED_NAMES, type KeyedName, LAYER_NAMES, LISTS, LIST_NAMES, type LayerName, type ListName,
-  SAVE_TILE, freshKeyed, freshLists, meets, placeInOrder, squareAt, squareRect,
+  NOWHERE, SAVE_TILE, freshKeyed, freshLists, meets, placeInOrder, squareAt, squareRect,
 } from './saveLayers';
 import { type SavedLayout, type SavedTables, type SquaresRead, type TiledManifest, type TiledSession, decodeSquares, isObject } from './squaresDecode';
 import type { SquaresReadAsk, SquaresReadReply } from './squaresRead.worker';
@@ -227,9 +227,11 @@ export class TiledSaves {
 
   /** One record of a layer looked up by id: the square it stands in now written again (the one it left is reached by the entry's rectangles). */
   private touch(doc: RoadDoc, name: KeyedName, id: number): void {
-    const spec = KEYED[name];
+    const spec = KEYED[name], st = this.keyed[name];
     if (!spec.items(doc).has(id)) return;
-    this.keyed[name].dirty.add(squareAt(spec.placeOf(doc, id), spec.side));
+    const at = spec.placeOf(doc, id);
+    if (st.placeless) { if (at) st.placeless.delete(id); else st.placeless.add(id); }
+    st.dirty.add(squareAt(at, spec.side));
   }
 
   /** @rebuild The squares a layer's records stand in, each once: one pass of the ids and places (a table's columns, no record decoded). */
@@ -247,14 +249,35 @@ export class TiledSaves {
     for (const square of this.occupied(doc, name)) st.dirty.add(square);
   }
 
-  /** A change over rectangles naming no ids: the squares of the records standing in them written again. */
+  /** A change over rectangles naming no ids: the squares of the records standing in them written again - each square a rectangle reaches asked of the kind's index by place (`KeyedSpec.idsIn`), DO NOT walk the layer's every record for it. */
   private squaresMeeting(doc: RoadDoc, name: KeyedName, rects: readonly ChangeRect[]): void {
     const spec = KEYED[name], st = this.keyed[name];
-    for (const square of this.occupied(doc, name)) {
-      if (st.dirty.has(square)) continue;
-      const rect = squareRect(square, spec.side);
-      if (rects.some((r) => meets(r, rect))) st.dirty.add(square);
+    for (const r of rects) {
+      for (let i = Math.floor(r[0] / spec.side); i <= Math.floor(r[2] / spec.side); i++) {
+        for (let j = Math.floor(r[1] / spec.side); j <= Math.floor(r[3] / spec.side); j++) {
+          const square = `${i},${j}`;
+          if (st.dirty.has(square)) continue;
+          if (this.standingIn(doc, name, square).length) st.dirty.add(square);
+        }
+      }
     }
+  }
+
+  /** The records standing in a square, by id in increasing order: the kind's index by place asked for its rectangle (`KeyedSpec.idsIn`), each id tested by its place; the square at the origin (`NOWHERE`) holds those of a kind found with no place too (`KeyedState.placeless`, looked for once after the map was read). */
+  private standingIn(doc: RoadDoc, name: KeyedName, square: string): number[] {
+    const spec = KEYED[name], st = this.keyed[name];
+    const items = spec.items(doc);
+    const candidates = new Set<number>(spec.idsIn(doc, squareRect(square, spec.side)));
+    if (square === NOWHERE && spec.placeless) {
+      if (!st.placeless) {
+        st.placeless = new Set();
+        for (const id of items.keys()) if (!spec.placeOf(doc, id)) st.placeless.add(id);
+      }
+      for (const id of st.placeless) candidates.add(id);
+    }
+    const out: number[] = [];
+    for (const id of candidates) if (items.has(id) && squareAt(spec.placeOf(doc, id), spec.side) === square) out.push(id);
+    return out.sort((a, b) => a - b);
   }
 
   /** An ordered list whose kind changed: each item's place in the order kept (new ones between their neighbours) and its square checked. */
@@ -287,16 +310,10 @@ export class TiledSaves {
     st.rects = [];
   }
 
-  /** The records standing in each of `squares`, by id in increasing order: one pass of the layer's ids and places (a table's columns, no record decoded), never a walk a square. */
+  /** The records standing in each of `squares`, by id in increasing order (`standingIn`: the kind's index by place, each square's rectangle). DO NOT walk the layer's every id for the squares a save writes: the 10 km map's 700,000 records of buildings, lots and landscaping were read at every save of one edit (2026-10-26). */
   private membersOf(doc: RoadDoc, name: KeyedName, squares: ReadonlySet<string>): Map<string, number[]> {
-    const spec = KEYED[name];
     const out = new Map<string, number[]>();
-    for (const square of squares) out.set(square, []);
-    for (const id of spec.items(doc).keys()) {
-      const list = out.get(squareAt(spec.placeOf(doc, id), spec.side));
-      if (list) list.push(id);
-    }
-    for (const list of out.values()) list.sort((a, b) => a - b);
+    for (const square of squares) out.set(square, this.standingIn(doc, name, square));
     return out;
   }
 

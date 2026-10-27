@@ -1870,6 +1870,37 @@ export class RoadDoc {
     };
   }
 
+  /** The ids of the nodes standing in the tiles a rectangle reaches (`tileRoads`, a superset: test each), no node walked. */
+  nodeIdsIn(rect: ChangeRect): number[] {
+    const out: number[] = [];
+    for (let i = Math.floor(rect[0] / TILE); i <= Math.floor(rect[2] / TILE); i++) {
+      for (let j = Math.floor(rect[1] / TILE); j <= Math.floor(rect[3] / TILE); j++) for (const id of this.tileIndex.roadsOf(tileKey(i, j)).nodes) out.push(id);
+    }
+    return out;
+  }
+
+  /** The ids of the poles standing in the cells a rectangle reaches (`PoleIndex.near`, a superset: test each), none decoded. */
+  poleIdsIn(rect: ChangeRect): number[] {
+    return this.poleIndex.near(rect);
+  }
+
+  /** The ids of the wires reaching the poles in the cells a rectangle reaches (a superset of those filed by a pole there: test each), none decoded. */
+  spanIdsAtPolesIn(rect: ChangeRect): number[] {
+    const out: number[] = [];
+    for (const pole of this.poleIndex.near(rect)) for (const span of this.poleIndex.spansAt(pole)) out.push(span);
+    return out;
+  }
+
+  /** The ids of the landscaping items standing in the cells a rectangle reaches (a superset: test each), none decoded. */
+  landscapeIdsIn(rect: ChangeRect): number[] {
+    return this.landscapeCells.idsMeeting(rect, this.landscapeAt);
+  }
+
+  /** The ids of the barriers whose box reaches a rectangle (a superset: test each). */
+  barrierIdsIn(rect: ChangeRect): number[] {
+    return this.barrierCells.idsMeeting(rect);
+  }
+
   /** The ids of a tile's own roads and nodes now (`tileIndex.ts`, by `OWNER`): what the micro window finds its roads by (`SimWorld.scopeOf`), DO NOT walk every road of the map for it. */
   tileRoads(key: number): { readonly nodes: ReadonlySet<number>; readonly segments: ReadonlySet<number> } {
     return this.tileIndex.roadsOf(key);

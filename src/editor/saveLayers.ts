@@ -43,6 +43,10 @@ interface KeyedSpec<T extends Keyed = Keyed> {
   items(doc: RoadDoc): ReadonlyMap<number, T>;
   /** Where a record stands, nothing decoded for one of a table; undefined: nowhere (a road whose end is gone), the square at the origin. */
   placeOf(doc: RoadDoc, id: number): Place | undefined;
+  /** The ids of the records that may stand in a rectangle (a superset, each tested by `placeOf`), from the kind's own index by place: none decoded, no record of the map walked (`chunkedSave.ts` membersOf). */
+  idsIn(doc: RoadDoc, rect: ChangeRect): Iterable<number>;
+  /** A record of the kind may have no place (a road whose end `a` is gone, a wire whose pole `a` is): no index by place finds it (`KeyedState.placeless`). */
+  readonly placeless?: true;
   /** A record written on the page, as the file holds it. */
   saved(record: T): unknown;
   /** The record's place in its store's order, where the order means something (the lots: the first one holds a point). */
@@ -65,36 +69,47 @@ const nodeOf = (doc: RoadDoc, id: number): RoadNode | undefined => (doc.nodes as
 export const KEYED: Readonly<Record<KeyedName, KeyedSpec>> = {
   nodes: keyed<RoadNode>({
     side: SAVE_TILE, kinds: ['roads', 'traffic'], table: null, items: (doc) => doc.nodes as ReadonlyMap<number, RoadNode>, placeOf: nodeOf, saved: savedNode,
+    idsIn: (doc, rect) => doc.nodeIdsIn(rect),
   }),
   segments: keyed<RoadSegment>({
     side: SAVE_TILE, kinds: ['roads', 'traffic'], table: null, items: (doc) => doc.segments as ReadonlyMap<number, RoadSegment>,
     placeOf: (doc, id) => { const s = (doc.segments as ReadonlyMap<number, RoadSegment>).get(id); return s && nodeOf(doc, s.a); }, saved: savedSegment,
+    // A road is filed by its end `a`: the roads on the nodes there.
+    idsIn: (doc, rect) => doc.nodeIdsIn(rect).flatMap((id) => nodeOf(doc, id)?.incident ?? []), placeless: true,
   }),
   poles: keyed<UtilityPole>({
     side: SAVE_TILE, kinds: ['utilities'], table: 'poles', items: (doc) => doc.poles as ReadonlyMap<number, UtilityPole>,
     placeOf: (doc, id) => doc.recordPlace('poles', id), saved: savedPole, ref: (doc, id) => doc.recordRef('poles', id),
+    idsIn: (doc, rect) => doc.poleIdsIn(rect),
   }),
   spans: keyed<UtilitySpan>({
     side: SAVE_TILE, kinds: ['utilities'], table: 'spans', items: (doc) => doc.poleSpans as ReadonlyMap<number, UtilitySpan>,
     placeOf: (doc, id) => doc.recordPlace('spans', id), saved: savedSpan, ref: (doc, id) => doc.recordRef('spans', id), columns: spanPlace,
+    // A wire is filed by its pole `a`: the wires of the poles there.
+    idsIn: (doc, rect) => doc.spanIdsAtPolesIn(rect), placeless: true,
   }),
   landscape: keyed<LandscapeItem>({
     side: SAVE_TILE, kinds: ['landscape'], table: 'landscape', items: (doc) => doc.landscape,
     placeOf: (doc, id) => doc.recordPlace('landscape', id), saved: savedLandscape, ref: (doc, id) => doc.recordRef('landscape', id),
+    idsIn: (doc, rect) => doc.landscapeIdsIn(rect),
   }),
   barriers: keyed<Barrier>({
     side: SAVE_TILE, kinds: ['barriers'], table: null, items: (doc) => doc.barriers, placeOf: (doc, id) => doc.barriers.get(id)?.points[0], saved: savedBarrier,
+    idsIn: (doc, rect) => doc.barrierIdsIn(rect),
   }),
   // `JSON.stringify` of a record is the text of its copy (`cloneBuilding` is a JSON round trip): the record itself is handed on.
   buildings: keyed<Building>({
     side: DENSE_SQUARE, kinds: ['buildings'], table: 'buildings', items: (doc) => doc.buildings.itemsOf(),
     placeOf: (doc, id) => doc.buildings.placeOf(id as BuildingId), saved: (b) => b, ref: (doc, id) => doc.buildings.tableRef(id as BuildingId),
     box: (b) => storedBounds(b), summary: buildingSummaryColumns,
+    // The grid files a building by its box and its anchor (`BuildingGrid`), from the table's columns.
+    idsIn: (doc, rect) => doc.buildings.nearIds(rect[0], rect[1], rect[2], rect[3]),
   }),
   lots: keyed<Lot>({
     side: DENSE_SQUARE, kinds: ['lots'], table: 'lots', items: (doc) => doc.lotStore.itemsOf(), placeOf: (doc, id) => doc.lotStore.placeOf(id),
     saved: (lot) => lot, order: (doc, id) => doc.lotStore.orderOf(id) ?? 0, ref: (doc, id) => doc.lotStore.tableRef(id), columns: lotCentre, box: lotBounds,
     summary: lotSummaryColumns,
+    idsIn: (doc, rect) => doc.lotStore.idsPlacedIn(rect),
   }),
 };
 
@@ -129,7 +144,7 @@ export const GLOBAL_KINDS: Readonly<Record<GlobalPart, readonly ChangeKind[]>> =
 };
 
 /** A record with no place (a road whose end is gone) is filed in the square at the origin. */
-const NOWHERE = '0,0';
+export const NOWHERE = '0,0';
 export const squareAt = (at: Place | undefined, side: number): string => (at && Number.isFinite(at.x) && Number.isFinite(at.y) ? `${Math.floor(at.x / side)},${Math.floor(at.y / side)}` : NOWHERE);
 export function squareRect(square: string, side: number): ChangeRect {
   const comma = square.indexOf(',');
@@ -146,6 +161,8 @@ export class KeyedState {
   dirty = new Set<string>();
   /** The buildings' squares whose wears alone changed. */
   wear = new Set<string>();
+  /** The records of a kind that may have none (`KeyedSpec.placeless`) found with no place, filed at `NOWHERE` with those standing there; null: not looked for since the map was read (the first write of that square walks the kind's ids once). */
+  placeless: Set<number> | null = null;
 
   /** The stored squares a change reaches (null: all of them) made dirty. */
   dirtyStored(rects: readonly ChangeRect[] | null, side: number): void {

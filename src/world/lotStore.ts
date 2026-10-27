@@ -187,6 +187,12 @@ export class LotStore {
     return this.items.has(id) ? this.centreOf(id) : undefined;
   }
 
+  /** The ids of the lots whose centre (their place, `placeOf`) stands in the cells a rectangle reaches (a superset: test each), none decoded. */
+  idsPlacedIn(rect: ChangeRect): number[] {
+    if (this.below) return this.below.idsPlacedIn(rect);
+    return this.cells().idsMeeting(rect, this.centreOf);
+  }
+
   /** The lots whose box meets `rect`, in increasing id order: a superset of those whose shape reaches it */
   in(rect: ChangeRect): Lot[] {
     if (this.below) return this.below.in(rect);
