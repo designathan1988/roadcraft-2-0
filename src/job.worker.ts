@@ -32,6 +32,8 @@ const LOADERS: Readonly<Record<JobService, () => Promise<{ serve: Serve }>>> = {
   roadFarTile: () => import('./render/networkFarTile.worker'),
   // A cell of the buildings' cover, what the plants stand clear of (`render/buildings/coverJobs.ts`).
   coverCells: () => import('./render/buildings/coverCell.worker'),
+  // The gardens about a near cell or a far block of the props, placed (`render/gardens.ts`).
+  gardenCells: () => import('./render/gardenCell.worker'),
   // A city's tiles grown many at once, and joined (`editor/cityTiles.ts`).
   cityGrowth: () => import('./cityGrowth.worker'),
   terrainLight: () => import('./render/terrainLight.worker'),

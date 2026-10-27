@@ -27,6 +27,7 @@ import { createFarBands, showLadder, type Banded, type FarLadder, type FarRung }
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
 import { PICTURE_PX, type PlantImpostors } from './plantImpostors';
 import { castBySize } from './shadowCasters';
+import { createPropAsks } from './propAsks';
 
 /**
  * THE PROPS HELD ROUND THE VIEW, NOT FOR THE MAP: the gardens' plants, the street furniture and its plants (`gardens.ts`,
@@ -160,6 +161,11 @@ export interface PropLayerSpec {
   readonly stills?: readonly PlantImpostors[];
   /** The things standing about a rectangle, from the document as it is: a pure function of the rectangle and the document. */
   place(rect: ChangeRect): PropPlacement;
+  /** The same placing worked out off the page (a job, `gardens.ts`): its answer to come; null where it cannot be asked now (placed on the page then).
+   *  None: placed on the page, within the frame's time. */
+  ask?(rect: ChangeRect): Promise<PropPlacement> | null;
+  /** A placement asked off the page came: what the view wants may be drawn now (a frame asked). */
+  arrived?(): void;
   /** Budgets: the near cells' CPU bytes, the far blocks' CPU bytes before their upload and their GPU bytes. */
   readonly nearBytes?: number;
   readonly farBytes?: number;
@@ -220,6 +226,8 @@ export interface PropLayer {
   follow(journal: ChangeJournal): void;
   /** The cells and blocks with a thing that grows with the hour dropped (a new city hour). */
   forgetGrowing(): void;
+  /** Every placement asked off the page let go, its answer never taken (the layer placed from another document). */
+  forgetAsked(): void;
   /** The near cells of the square's rings placed (within the frame's time), up to `k`: the rings in. */
   ringsIn(square: PropSquare, deadline: number): number;
   /** The square drawn near: the cells within `k` of its middle put in the cells' instances, the rest taken out; then the far blocks the view wants placed (within the frame's time). */
@@ -273,6 +281,8 @@ const packBytes = (packs: ReadonlyMap<number, Pack>): number => {
 
 /** A layer of things held round the view. */
 export function createPropLayer(spec: PropLayerSpec): PropLayer {
+  /** What is asked off the page (`propAsks.ts`): a cell derived once its placement came. */
+  const { ready, placementFor, prune, follow: followOff, clear: clearAsked } = createPropAsks(spec);
   const group = new Group();
   group.name = spec.name;
   const cells: CellInstances = createCellInstances(spec.kinds, YAW_POSE, spec.margin);
@@ -308,7 +318,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     name: `${spec.name} near`, version: spec.version, side: PROP_CELL, reach: 0,
     cpuBudget: spec.nearBytes ?? 48 * 1048576, kinds: spec.changes, pad: spec.pad,
     derive(key, rect) {
-      const placed = spec.place(rect);
+      const placed = placementFor(near, key, rect);
       const cx = columnOf(key), cy = rowOf(key);
       const packs = within(placed.packs, cx, cy, cx, cy);
       note(packs);
@@ -361,16 +371,17 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
   const laddered = (kindSpec: KindSpec): boolean => kindSpec.levels?.far !== undefined && kindSpec.meshes.some((s) => s.far);
 
   /** A far block's batches of one class: the meshes, from its things (codes set), with their arrays let go once uploaded. */
-  const batches = (cls: FarClass, key: CellKey, rect: ChangeRect, onUploaded: () => void): { block: FarBlock; arrays: number } => {
+  const batches = (cls: FarClass, key: CellKey, rect: ChangeRect, first: PropPlacement, onUploaded: () => void): { block: FarBlock; arrays: number } => {
     const bx = columnOf(key), by = rowOf(key);
     const cx0 = bx * FAR_CELLS, cy0 = by * FAR_CELLS;
-    const make = (): { packs: Map<number, Pack>; growing: boolean } => {
-      const placed = spec.place(rect);
+    const pick = (placed: PropPlacement): { packs: Map<number, Pack>; growing: boolean } => {
       const packs = within(placed.packs, cx0, cy0, cx0 + FAR_CELLS - 1, cy0 + FAR_CELLS - 1, nearCode);
       for (const kind of [...packs.keys()]) if (classOf[kind] !== cls) packs.delete(kind);
       return { packs, growing: placed.growing };
     };
-    const { packs, growing } = make();
+    // Its arrays made again (a context restored, `gpuOnlyAttributes`): placed on the page from the document as it is.
+    const make = (): { packs: Map<number, Pack>; growing: boolean } => pick(spec.place(rect));
+    const { packs, growing } = pick(first);
     note(packs);
     const meshes: InstancedMesh[] = [], uncast: (() => void)[] = [];
     const fading: { mesh: InstancedMesh; beyond: number }[] = [];
@@ -532,7 +543,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       cpuBudget: spec.farBytes ?? 24 * 1048576, gpuBudget: spec.gpuBytes ?? 192 * 1048576, kinds: spec.changes, pad: spec.pad,
       derive(key, rect) {
         let block: FarBlock | null = null;
-        const made = batches(cls, key, rect, () => {
+        const made = batches(cls, key, rect, placementFor(cellsOf, key, rect), () => {
           // Every array of the block on the GPU: what it holds is the GPU's now.
           if (!block || --block.waiting > 0) return;
           cellsOf.account(key, FAR_OVERHEAD * block.meshes.length + FAR_OVERHEAD, block.gpu);
@@ -625,9 +636,11 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     get largestPicture() { return largestPicture; },
     get busy() { return busy; },
     follow(journal) {
+      followOff(journal);
       near.follow(journal);
       for (const f of far) f.follow(journal);
     },
+    forgetAsked() { clearAsked(); },
     forgetGrowing() {
       near.forget([...growingNear]);
       far.forEach((f, cls) => f.forget([...growingFar[cls]!]));
@@ -643,6 +656,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         }
       }
       near.want(keys);
+      // Every cell of the square asked off the page at once (nearest first in the queue), whatever the frame's time: asking costs nothing here.
+      for (const key of keys) if (!near.has(key)) ready(near, key);
       let ring = -1, at = 0;
       for (let r = 0; r <= square.k; r++) {
         const n = r === 0 ? 1 : 8 * r;
@@ -650,6 +665,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         for (let i = at; i < at + n; i++) {
           const key = keys[i]!;
           if (near.has(key)) continue;
+          // Its placement not come from off the page yet: the ring not in, its other cells derived meanwhile.
+          if (!ready(near, key)) { whole = false; continue; }
           if (r > 0 && performance.now() > deadline) { whole = false; break; }
           near.ensure(key);
         }
@@ -693,6 +710,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         let first = true;
         for (const key of f.wantedKeys) {
           if (f.has(key)) continue;
+          // Its placement asked off the page and not come: the next one derived meanwhile.
+          if (!ready(f, key)) { busy = true; continue; }
           if (!first && performance.now() > deadline) { busy = true; break; }
           f.ensure(key);
           first = false;
@@ -710,6 +729,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
           if (block.group.visible) for (const f of block.fading) f.mesh.visible = !fadedOut(f.mesh, f.beyond, view.view);
         }
       });
+      prune();
     },
     setMap(map) { cells.setMap(map); },
     warm() {
@@ -741,6 +761,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
       cells.cull(frustum, view);
     },
     dispose() {
+      clearAsked();
       near.clear();
       for (const f of far) f.clear();
       cells.dispose();

@@ -19,6 +19,7 @@ import { cylinderWith } from './mesh/cylinder';
 import { dropHiddenFaces } from './mesh/hiddenFaces';
 
 import { Rng } from '@core/rng';
+import type { BushKind, TreeSpecies } from './plantKinds';
 import { lowPolyTreeParts, type LowPolyKind, type LowPolyParts } from './lowPolyTrees';
 import { m } from '@world/units';
 import { TREE_PIT } from '@world/streetFurniture';
@@ -141,8 +142,8 @@ function faceNoise(p: Vector3, seed: number): number {
 
 // ------------------------------------------------------------------ species
 
-export type TreeSpecies = 'broadleaf' | 'broadleafTall' | 'conifer' | 'ipeYellow' | 'ipePink';
-export const TREE_SPECIES: readonly TreeSpecies[] = ['broadleaf', 'broadleafTall', 'conifer', 'ipeYellow', 'ipePink'];
+// The kinds themselves, without the models (`plantKinds.ts`): what the jobs placing plants read.
+export { TREE_SPECIES, BUSH_KINDS, type TreeSpecies, type BushKind } from './plantKinds';
 
 /** Each street and garden species as the game's one tree style grows it (`lowPolyTrees.ts`). */
 const TREE_KIND: Readonly<Record<TreeSpecies, LowPolyKind>> = {
@@ -154,8 +155,6 @@ export function treeParts(species: TreeSpecies): LowPolyParts {
   return lowPolyTreeParts(TREE_KIND[species], 0x7ee + species.length * 131 + species.charCodeAt(3));
 }
 
-export type BushKind = 'bush' | 'bushFlowering' | 'hedge';
-export const BUSH_KINDS: readonly BushKind[] = ['bush', 'bushFlowering', 'hedge'];
 
 /** A bush's or hedge's body and its foliage cards (`lowPolyTrees.ts`). */
 export function bushParts(kind: BushKind): LowPolyParts {

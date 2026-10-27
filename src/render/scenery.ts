@@ -17,7 +17,6 @@ import {
   type MeshDepthMaterial,
 } from 'three';
 
-import type { Rng } from '@core/rng';
 import type { FurnitureKind } from '@world/streetFurniture';
 import { m, perM } from '@world/units';
 import { applyWind, windDepthMaterial, type WindResponse } from './wind';
@@ -367,8 +366,5 @@ export const SHADOW_REACH = m(28);
 /** Below this zoom the plants' leaf cards are left out (`Scenery.setMap`). */
 export const PLANT_MAP_ZOOM = perM(2.5);
 
-/** A near-white multiplier, so no two plants of one species are identical. */
-export function foliageTint(rng: Rng): Color {
-  const warm = rng.float();
-  return new Color(0.9 + warm * 0.18, 0.93 + rng.float() * 0.12, 0.86 + (1 - warm) * 0.14);
-}
+// A near-white multiplier, so no two plants of one species are identical (`plantKinds.ts`).
+export { foliageTint } from './plantKinds';

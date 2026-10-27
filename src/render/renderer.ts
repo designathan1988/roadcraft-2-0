@@ -3483,7 +3483,7 @@ export function createSceneRenderer(
       }
       // The gardens held round the view (`gardens.ts` createGardenCells): placed from the buildings as the view asks (`lookProps`), the cells an edit or the ground reached dropped once the ground is settled (a stroke over).
       if (!gardens) {
-        gardens = createGardenCells(sceneryKit);
+        gardens = createGardenCells(sceneryKit, onAssetsReady);
         world.add(gardens.layer.group);
       }
       gardens.source(net.doc.buildings, terrain.renderedHeightAt);

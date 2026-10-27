@@ -26,8 +26,10 @@ describe('the matrix of a plant turned about the up axis', () => {
   });
 
   it('is what the gardens draw with, from poses, with no object made for each plant and no matrix sent', () => {
+    // The plants placed in `gardenPlace.ts` (on the page or by a job off it), drawn by `gardens.ts`.
+    const placing = readFileSync('src/render/gardenPlace.ts', 'utf8');
+    const pack = placing.slice(placing.indexOf('const pack = (kind'), placing.indexOf('const pack = (kind') + 900);
     const source = readFileSync('src/render/gardens.ts', 'utf8');
-    const pack = source.slice(source.indexOf('const pack = (key'), source.indexOf('const pack = (key') + 900);
     expect(pack).toMatch(/poses\[at\] = placement\.x/);
     expect(pack).not.toMatch(/updateMatrix|new Object3D|\.set\(\[/);
     // The pose (`YAW_POSE`) sent as it is, only for a plant drawn at a new position (`cellInstances.ts` `write`); the GPU makes the matrix.

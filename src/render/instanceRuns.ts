@@ -9,6 +9,7 @@ import {
   type MeshDepthMaterial,
 } from 'three';
 import { createCellInstances, warmMesh, type KindLevels, type KindMesh, type KindSpec, type Pack, type SlotFormat } from './cellInstances';
+import { NEVER_NEAR, YAW_STRIDE } from './poseCodes';
 
 /** The same design as the buildings' gardens (`gardens.ts`, which keeps a run per garden list), on the same cells (`cellInstances.ts`) */
 
@@ -35,12 +36,11 @@ export const NEAR_SQUARE = { value: new Vector3(0, 0, -1) };
 /** A far batch's cell (`propCells.ts`) as a pose's eighth float: exact in float32 for |column|, |row| < 2048 (512 km of 250 m cells). */
 const NEAR_CODE_SPAN = 4096;
 export const nearCode = (cx: number, cy: number): number => (cx + NEAR_CODE_SPAN / 2) * NEAR_CODE_SPAN + (cy + NEAR_CODE_SPAN / 2);
-/** The eighth float of a thing drawn wherever it stands (never by a far batch). */
-export const NEVER_NEAR = -1;
+export { NEVER_NEAR } from './poseCodes';
 
 /** A thing turned about the up axis: its place in the scene's frame (x, y, z), its yaw, its scale on three axes, and the cell whose near drawing hides it (8 floats, not 12). */
 export const YAW_POSE: PoseFormat = {
-  stride: 8,
+  stride: YAW_STRIDE,
   key: 'yaw',
   pars: /* glsl */ 'uniform vec3 uNearSquare;',
   uniforms: { uNearSquare: NEAR_SQUARE },
