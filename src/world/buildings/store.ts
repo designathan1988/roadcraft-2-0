@@ -175,6 +175,38 @@ export class BuildingStore {
     return this.grid.near(minX, minY, maxX, maxY).map((id) => this.items.get(id)!);
   }
 
+  /** The ids of the buildings whose box (or anchor) may reach the rectangle, in the order of `all()`, no record decoded (the grid files the table's rows from their box columns). */
+  nearIds(minX: number, minY: number, maxX: number, maxY: number): BuildingId[] {
+    if (this.below) return this.below.nearIds(minX, minY, maxX, maxY);
+    this.grid ??= this.gridOf();
+    return this.grid.near(minX, minY, maxX, maxY);
+  }
+
+  /** Each building's box as the store files it (`storedBounds`): a row of the table from its box columns (`TableItems.eachBox`), nothing decoded. */
+  eachBox(visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {
+    if (this.below) { this.below.eachBox(visit); return; }
+    const items = this.items;
+    if (items instanceof BuildingItems) { items.eachBox((b) => storedBounds(b), visit); return; }
+    for (const b of items.values()) { const box = storedBounds(b); visit(box.minX, box.minY, box.maxX, box.maxY); }
+  }
+
+  /** Each building as it stands: a row of the table as its table and row (`row`, nothing decoded), a record written on the page as itself (`record`). */
+  eachStanding(row: (id: BuildingId, table: TableRows, at: number) => void, record: (b: Building) => void): void {
+    if (this.below) { this.below.eachStanding(row, record); return; }
+    const items = this.items;
+    if (!(items instanceof BuildingItems)) { for (const b of items.values()) record(b); return; }
+    items.eachRow((rows, at) => row(rows.idAt(at), rows, at), record);
+  }
+
+  /** The table's row a building reads as its own (its record not written on the page), nothing decoded; null otherwise. */
+  standing(id: BuildingId): { readonly table: TableRows; readonly row: number } | null {
+    if (this.below) return this.below.standing(id);
+    const items = this.items;
+    if (!(items instanceof BuildingItems) || !items.table) return null;
+    const row = items.standing(id);
+    return row ? { table: items.table, row: row.row } : null;
+  }
+
   /** The buildings `meets` keeps for one of `rects`, asked of those within `pad` of it, each once, in the store's order */
   nearAny(rects: readonly (readonly [number, number, number, number])[], pad: number,
     meets: (b: Building, rect: readonly [number, number, number, number]) => boolean): Building[] {

@@ -126,7 +126,7 @@ function addWork(n: number): Record<string, number> {
   const solidsGround = groundSince(doc);
   solids.follow(doc.buildings, solidsGround);
   solids.solids();
-  const sites = siteGrading(flat, undefined, m(9.6), bankBox);
+  const sites = siteGrading(flat, undefined, m(9.6), m(40));
   sites.changedSites(doc.buildings);
   sites.rebuild(doc.buildings);
   // The gardens on a town of the same buildings with a tree in each garden

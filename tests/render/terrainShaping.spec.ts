@@ -4,9 +4,7 @@ import { layCity } from '@editor/cityGenerator';
 import { growOnLot } from '@world/growth/zoning';
 import { type BlockDigestAsk, type GroundJob, type GroundShapeAsk, type NaturalPlate, type PlateShapeAnswer, askPlate, blockDigest, cornerBoxes, runGroundJob } from '@render/groundShape';
 import { type CornerGrid, type TerrainRegion, type TerrainShaper, boxRegion, sampleCorners, shapeBoth, shapeCorners } from '@render/terrainShaping';
-import { storedBounds } from '@world/buildings/geometry';
 import { siteGrading } from '@world/buildings/siteGrading';
-import type { Building } from '@world/buildings/types';
 import { DEFAULT_CITY, planCity } from '@world/cityGen/plan';
 import type { RoadDoc } from '@world/doc';
 import { buildRoadElevation } from '@world/elevation';
@@ -76,11 +74,7 @@ describe('a shaping pass over regions', () => {
   const elevation = buildRoadElevation(net, groundAt);
   // As the renderer grades them (`renderer.ts` `sitesGraded`, `bankBox`, `regionOf`).
   const reach = CELL * 1.5 + m(40) + CELL;
-  const bank = (b: Building): readonly [number, number, number, number] => {
-    const r = storedBounds(b, reach);
-    return [r.minX, r.minY, r.maxX, r.maxY];
-  };
-  const sites = siteGrading(groundAt, undefined, CELL * 1.5, bank);
+  const sites = siteGrading(groundAt, undefined, CELL * 1.5, reach);
   const changed = sites.changedSites(doc.buildings) ?? [];
   sites.rebuild(doc.buildings);
   const pads = sites.pads!;
@@ -149,11 +143,7 @@ describe('a shaping pass off the page', () => {
   net.rebuild();
   const elevation = buildRoadElevation(net, groundAt);
   const reach = CELL * 1.5 + m(40) + CELL;
-  const bank = (b: Building): readonly [number, number, number, number] => {
-    const r = storedBounds(b, reach);
-    return [r.minX, r.minY, r.maxX, r.maxY];
-  };
-  const sites = siteGrading(groundAt, undefined, CELL * 1.5, bank);
+  const sites = siteGrading(groundAt, undefined, CELL * 1.5, reach);
   const changed = sites.changedSites(doc.buildings) ?? [];
   sites.rebuild(doc.buildings);
   const pads = sites.pads!;

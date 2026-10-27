@@ -121,7 +121,7 @@ async function heldBy(name: string): Promise<{ buildings: number; page: Held; wo
 
   // The sites' grading on level land: every site read and the town's platforms put together.
   const floors = buildingFloors(flat, undefined, (b: Building) => { const r = storedBounds(b, m(1)); return [r.minX, r.minY, r.maxX, r.maxY]; }, m(1));
-  const sites = siteGrading(flat, undefined, m(3), (b) => { const r = storedBounds(b, m(50)); return [r.minX, r.minY, r.maxX, r.maxY]; }, floors);
+  const sites = siteGrading(flat, undefined, m(3), m(50), floors);
   sites.changedSites(doc.buildings);
   sites.rebuild(doc.buildings);
   keep.push(sites, floors);

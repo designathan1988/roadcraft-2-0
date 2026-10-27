@@ -312,6 +312,201 @@ function townPads(apron: number, resolve: ((id: number) => Pad | null) | null): 
 
 const NO_IDS: readonly number[] = Object.freeze([]);
 
+/** Where a town's platforms are read from without filing the whole town (`storePads`): the ids of the buildings whose box may reach a rectangle, in the store's order (`BuildingStore.nearIds`), an id's platform worked out (null: none, or gone), and every building's box as the store files it (a shaping of the whole map). */
+export interface PadSource {
+  nearIds(minX: number, minY: number, maxX: number, maxY: number): readonly number[];
+  padOf(id: number): Pad | null;
+  eachBox(visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void;
+}
+
+/** The town's platforms filed square by square as a shaping reads them (`storePads`). */
+export interface StorePads extends TownPads {
+  /** A building changed, or its platform was worked out again (the roads round it moved): taken out of the squares filed, filed again in those its platform reaches now. */
+  changed(id: number): void;
+  /** Every square let go: the roads or the land moved where the diary cannot say, or the town was read again. */
+  forgetAll(): void;
+}
+
+/**
+ * THE TOWN'S PLATFORMS FILED A SQUARE AT A TIME, WHEN A SHAPING FIRST READS IT (`siteGrading.ts`): a square of `FILE_CELLS` cells takes the
+ * ids whose platform's box reaches it, from the buildings the store files near it (`PadSource.nearIds`: a platform stands within its
+ * building's box grown by its apron and its bank's reach), each platform worked out once and its box kept in columns by its id, the platform
+ * itself the last `PADS_KEPT` kept (`townPads` alike). A cell's platforms are its square's whose box reaches it, in the store's order. DO NOT
+ * file every building's platform to shape the ground round the view: every building of the 10 km map decoded and its platform worked out
+ * on the page at the first stroke of the land (2026-10-26).
+ */
+export function storePads(apron: number, source: PadSource): StorePads {
+  const CELL = PAD_CELL;
+  const cellKey = padCellKey;
+  const squareOf = (c: number): number => Math.floor(c / FILE_CELLS);
+  const side = CELL * FILE_CELLS;
+  /** How far past its building's box a platform's box may reach (`padOf`: its rings within the building's bounds, grown by these). */
+  const reach = apron + PAD_REACH;
+  /** The squares filed, by key: the ids whose platform reaches each, in the store's order as it was filed, those filed later after them. */
+  const squares = new Map<number, number[]>();
+  const grading = new Grading();
+  const slots = new IdSlots(1024);
+  let minX = new Float64Array(16), minY = new Float64Array(16), maxX = new Float64Array(16), maxY = new Float64Array(16);
+  /** What is known of a slot's building: 1 its platform's box, 2 that it has none. */
+  let known = new Uint8Array(16);
+  slots.onGrow = (n) => { minX = grown(minX, n); minY = grown(minY, n); maxX = grown(maxX, n); maxY = grown(maxY, n); known = grown(known, n); };
+  const HAS_PAD = 1, NO_PAD = 2;
+  /** Platforms worked out, by id, oldest first. */
+  const kept = new Map<number, Pad>();
+  /** Each cell's platforms put together from its square's ids, oldest first. */
+  const lists = new Map<number, readonly Pad[]>();
+  /** The squares a box reaches. */
+  const squaresOf = (x0: number, y0: number, x1: number, y1: number): number[] => {
+    const keys: number[] = [];
+    for (let sx = squareOf(Math.floor(x0 / CELL)); sx <= squareOf(Math.floor(x1 / CELL)); sx++) {
+      for (let sy = squareOf(Math.floor(y0 / CELL)); sy <= squareOf(Math.floor(y1 / CELL)); sy++) keys.push(cellKey(sx, sy));
+    }
+    return keys;
+  };
+  const forEachCell = (x0: number, y0: number, x1: number, y1: number, visit: (key: number) => void): void => {
+    for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) visit(cellKey(cx, cy));
+  };
+  const forget = (key: number): void => { lists.delete(key); };
+  const keep = (id: number, pad: Pad): void => {
+    kept.delete(id);
+    kept.set(id, pad);
+    if (kept.size > PADS_KEPT) kept.delete(kept.keys().next().value!);
+  };
+  /** An id's slot with its platform's box in it (worked out now if it never was): -1 when it has none. */
+  const slotOf = (id: number): number => {
+    let slot = slots.get(id);
+    if (slot >= 0) return known[slot] === HAS_PAD ? slot : -1;
+    const pad = source.padOf(id);
+    slot = slots.take(id);
+    if (!pad) { known[slot] = NO_PAD; return -1; }
+    known[slot] = HAS_PAD;
+    minX[slot] = pad.box.minX; minY[slot] = pad.box.minY; maxX[slot] = pad.box.maxX; maxY[slot] = pad.box.maxY;
+    keep(id, pad);
+    return slot;
+  };
+  /** A square's ids, filed now if it never was: the buildings near it whose platform's box reaches it, in the store's order. */
+  const squareIds = (sx: number, sy: number): readonly number[] => {
+    const key = cellKey(sx, sy);
+    let list = squares.get(key);
+    if (list) return list;
+    squares.set(key, list = []);
+    const x0 = sx * side, y0 = sy * side;
+    for (const id of source.nearIds(x0 - reach, y0 - reach, x0 + side + reach, y0 + side + reach)) {
+      const slot = slotOf(id);
+      if (slot < 0) continue;
+      if (squareOf(Math.floor(minX[slot]! / CELL)) <= sx && sx <= squareOf(Math.floor(maxX[slot]! / CELL))
+        && squareOf(Math.floor(minY[slot]! / CELL)) <= sy && sy <= squareOf(Math.floor(maxY[slot]! / CELL))) list.push(id);
+    }
+    return list;
+  };
+  /** An id's platform: kept, or worked out again. */
+  const padAt = (id: number): Pad | null => {
+    const was = kept.get(id);
+    if (was) return was;
+    const pad = source.padOf(id);
+    if (pad) keep(id, pad);
+    return pad;
+  };
+  /** The ids whose platform reaches cell (cx, cy), in its square's order; null for none. */
+  const idsIn = (cx: number, cy: number): number[] | null => {
+    const out: number[] = [];
+    for (const id of squareIds(squareOf(cx), squareOf(cy))) {
+      const slot = slots.get(id);
+      if (Math.floor(minX[slot]! / CELL) <= cx && cx <= Math.floor(maxX[slot]! / CELL) && Math.floor(minY[slot]! / CELL) <= cy && cy <= Math.floor(maxY[slot]! / CELL)) out.push(id);
+    }
+    return out.length ? out : null;
+  };
+  const listOf = (cx: number, cy: number): readonly Pad[] | undefined => {
+    const key = cellKey(cx, cy);
+    let list = lists.get(key);
+    if (!list) {
+      const ids = idsIn(cx, cy);
+      if (!ids) return undefined;
+      const out: Pad[] = [];
+      for (const id of ids) { const pad = padAt(id); if (pad) out.push(pad); }
+      lists.set(key, list = out);
+      if (lists.size > CELL_LISTS_KEPT) lists.delete(lists.keys().next().value!);
+    }
+    return list;
+  };
+  /** The squares a box reaches let go, and its cells' lists: filed again when next read, in the store's order. */
+  const unfile = (x0: number, y0: number, x1: number, y1: number): void => {
+    forEachCell(x0, y0, x1, y1, forget);
+    for (const key of squaresOf(x0, y0, x1, y1)) squares.delete(key);
+  };
+  /**
+   * An id's platform now (null: none, or gone): the squares filed its platform reached and reaches let go, filed again when next read. DO NOT
+   * keep it in its place or put it last in a square filed: a square's order is the store's (a building replaced keeps its place there, one
+   * new goes last), as a map opened again files it - the nearest platform of a tie is the first, and the ground graded after an edit was not
+   * the ground the same map graded when opened again.
+   */
+  const put = (id: number, pad: Pad | null): void => {
+    const slot = slots.get(id);
+    if (pad) unfile(pad.box.minX, pad.box.minY, pad.box.maxX, pad.box.maxY);
+    if (slot >= 0 && known[slot] === HAS_PAD) unfile(minX[slot]!, minY[slot]!, maxX[slot]!, maxY[slot]!);
+    kept.delete(id);
+    if (!pad) { if (slot >= 0) { known[slot] = 0; slots.delete(id); } return; }
+    const at = slot >= 0 ? slot : slots.take(id);
+    known[at] = HAS_PAD;
+    minX[at] = pad.box.minX; minY[at] = pad.box.minY; maxX[at] = pad.box.maxX; maxY[at] = pad.box.maxY;
+    keep(id, pad);
+  };
+  return {
+    get count() {
+      let n = 0;
+      slots.forEach((_id, slot) => { if (known[slot] === HAS_PAD) n++; });
+      return n;
+    },
+    // The boxes a platform of each building may reach (its box as the store files it, grown by its apron and its bank): a shaping of the whole map, made when asked, never kept.
+    shapeBounds: () => {
+      const out: Aabb[] = [];
+      source.eachBox((x0, y0, x1, y1) => { out.push({ minX: x0 - reach, minY: y0 - reach, maxX: x1 + reach, maxY: y1 + reach }); });
+      return out;
+    },
+    put,
+    changed(id) {
+      // Worked out again only where a square filed may hold it; one filed later reads it then.
+      const slot = slots.get(id);
+      if (squares.size === 0) { if (slot >= 0) { known[slot] = 0; slots.delete(id); } kept.delete(id); return; }
+      put(id, source.padOf(id));
+    },
+    forgetAll() {
+      squares.clear();
+      slots.clear();
+      known.fill(0);
+      kept.clear();
+      lists.clear();
+    },
+    shapeAt: (x, y, ground) => shapeOverPads(listOf(Math.floor(x / CELL), Math.floor(y / CELL)), apron, x, y, ground, grading),
+    cut(boxes) {
+      const pads: Pad[] = [];
+      const indexOf = new Map<number, number>();
+      const out = new Map<number, Int32Array>();
+      for (const box of boxes) {
+        for (let cx = Math.floor(box[0] / CELL); cx <= Math.floor(box[2] / CELL); cx++) {
+          for (let cy = Math.floor(box[1] / CELL); cy <= Math.floor(box[3] / CELL); cy++) {
+            const key = cellKey(cx, cy);
+            if (out.has(key)) continue;
+            const at: number[] = [];
+            for (const id of idsIn(cx, cy) ?? NO_IDS) {
+              let k = indexOf.get(id);
+              if (k === undefined) {
+                const pad = padAt(id);
+                k = pad ? pads.length : -1;
+                if (pad) pads.push(pad);
+                indexOf.set(id, k);
+              }
+              if (k >= 0) at.push(k);
+            }
+            out.set(key, Int32Array.from(at));
+          }
+        }
+      }
+      return { apron, pads, cells: out };
+    },
+  };
+}
+
 /** The platforms of a cut (`TownPads.cut`) graded as the town grades them */
 export function padShaper(cut: PadShapeCut): Pick<BuildingPads, 'shapeAt'> {
   const lists = new Map<number, readonly Pad[]>();

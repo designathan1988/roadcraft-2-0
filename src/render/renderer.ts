@@ -1805,7 +1805,9 @@ export function createSceneRenderer(
   /** Each building's platform, the town's, and the sites as last graded (`world/buildings/siteGrading.ts`). */
   /** The level ground round a platform before its bank, the page's and the ground worker's (`padsAskOf`). */
   const SITE_APRON = TERRAIN_CELL * 1.5;
-  const sitesGraded = siteGrading(builtGroundAt, pavedHeightAt, SITE_APRON, (b) => bankBox(b), floors);
+  /** How far a building's bank reaches past its own bounds. */
+  const BANK_REACH = TERRAIN_CELL * 1.5 + m(40) + TERRAIN_CELL;
+  const sitesGraded = siteGrading(builtGroundAt, pavedHeightAt, SITE_APRON, BANK_REACH, floors);
   /** The paved lots over a world box as the terrain is cut along them (`terrainSeams.ts` soft): each ring at the ground graded under its plate
    *  (`padLevelAt`), the plate standing its own thickness over it all round. */
   const pavedLotRings = (rect: readonly [number, number, number, number]): Float64Array[] => {
@@ -1841,8 +1843,6 @@ export function createSceneRenderer(
   };
   /** The box a building's bank reaches, once per record (records are never changed in place) */
   const bankBoxes = new WeakMap<Building, readonly [number, number, number, number]>();
-  /** How far a building's bank reaches past its own bounds. */
-  const BANK_REACH = TERRAIN_CELL * 1.5 + m(40) + TERRAIN_CELL;
   const bankBox = (b: Building): readonly [number, number, number, number] => {
     let box = bankBoxes.get(b);
     if (!box) {

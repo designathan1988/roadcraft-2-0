@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ChangeJournal, type ChangeKind } from '@world/changes';
 import { ChangeSweep } from '@world/derived';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
+import { storedBounds } from '@world/buildings/geometry';
 import { type SiteBox, siteGrading } from '@world/buildings/siteGrading';
 import type { Building } from '@world/buildings/types';
 import { RoadDoc } from '@world/doc';
@@ -38,16 +39,15 @@ function body(i: number, x: number, y: number): Omit<Building, 'id'> {
 describe('the sites changed', () => {
   it('are each its own box, not the box round them all', () => {
     const doc = new RoadDoc();
-    const bank = (b: Building): SiteBox => [b.x - m(30), b.y - m(30), b.x + m(30), b.y + m(30)];
-    const sites = siteGrading(() => 0, undefined, m(9.6), bank);
+    const sites = siteGrading(() => 0, undefined, m(9.6), m(30));
     sites.changedSites(doc.buildings);
-    doc.buildings.add(body(0, m(-4000), m(-4000)));
-    doc.buildings.add(body(1, m(4000), m(4000)));
+    const a = doc.buildings.add(body(0, m(-4000), m(-4000)));
+    const b = doc.buildings.add(body(1, m(4000), m(4000)));
     const boxes = sites.changedSites(doc.buildings)!;
     expect(boxes).toHaveLength(2);
-    const area = (q: SiteBox): number => (q[2] - q[0]) * (q[3] - q[1]);
-    // Each a site's bank, not the 8 km between them.
-    for (const q of boxes) expect(area(q)).toBeLessThanOrEqual(m(60) * m(60) + 1e-6);
+    // Each a site's bank (its building's bounds and 30 m round them), not the 8 km between them.
+    const bank = (x: Building): SiteBox => { const r = storedBounds(x, m(30)); return [r.minX, r.minY, r.maxX, r.maxY]; };
+    expect([...boxes].sort((p, q) => p[0] - q[0])).toEqual([bank(a), bank(b)]);
   });
 });
 
