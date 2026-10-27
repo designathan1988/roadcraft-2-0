@@ -101,6 +101,11 @@ Entry point and method of work: `docs/agent/README.md`. Rules: `docs/agent/memor
   same); photo reports/in-game/2026-10-27-one-building/13-after-drag.png. Opening 92 s, then 77.8 s once a flat roof's cover is not walked
   (1a5b0dfd; 84 s before the covers). Tried and reverted: counting the frames proud of the wall as cover (the L1's rule) took the wall to
   105,99,87, further from the detail. Left: the masonry wall at 2000 m 107,101,89 against the detail's 119,105,88 (the L1 itself 125,112,99).
+- TRIED AND REVERTED 2026-10-27 (measured worse on the far sheet): the slabs' tops as cover seen by the view (142 at 2000 m); an aggregate
+  direct light in the facade shader (RE_Direct_Facade: the wall less the slabs' shadow, the fronts lit as the wall, the tops lit from above,
+  with the stacked slabs' mutual hiding for eye and sun, t*tv, tv/tl, t*(tl-tv)) - 140 at 2000 m against the detail's 119. What it lacks to
+  be right, and what to do next: the sky the slab over hides (the ambient between the slabs), and the finish's far tone on the faces the
+  CoverShell sums (it takes their raw paint). Do those two before trying the tops again.
 - NEXT: (g) one game pass with photos (near, district, far, the whole map) of the buildings at every zoom; then push.
 - FOUND, NOT OURS: `tests/render/buildingsVisibleSame.spec.ts` "lays every shell triangle where HEAD laid it" fails on house/cut0 (12
   triangles not in its baseline); it fails the same at c97ff615, before this session, and passes at a6c86e62.
