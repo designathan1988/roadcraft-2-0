@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { RoadDoc } from '@world/doc';
-import { lotCentre, type Lot } from '@world/lots';
+import { lotBounds, lotCentre, type Lot } from '@world/lots';
+import { lotSummaryColumns } from '@world/lotSummary';
+import { encodeRecords } from '@world/buildings/recordTable';
 import { generateBody } from '@world/buildings/blueprints';
 import type { Building, BuildingId } from '@world/buildings/types';
 import { Rng } from '@core/rng';
@@ -85,5 +87,47 @@ describe('open lots', () => {
       }
     }
     check();
+  });
+});
+
+describe('open lots of a map opened from its table', () => {
+  it('are filed from the table\'s columns, no lot decoded, and answer as the loop over every lot', () => {
+    const rng = new Rng(11);
+    const built = new RoadDoc();
+    const square = (x: number, y: number): Lot['corners'] => [{ x, y }, { x: x + m(20), y }, { x: x + m(20), y: y + m(30) }, { x, y: y + m(30) }];
+    const records: Lot[] = [];
+    for (let id = 1; id <= 400; id++) {
+      const corners = square(rng.float() * m(1500), rng.float() * m(1500));
+      const zoned = rng.float() < 0.8;
+      let building: number | undefined;
+      if (zoned && rng.float() < 0.3) {
+        const c = lotCentre({ corners });
+        building = built.buildings.add({ ...generateBody('residential', 10, 10, 2), x: c.x, y: c.y, rotation: 0 } as unknown as Building).id;
+      }
+      records.push({ id, corners, ...(zoned ? { use: 'residential' as const, density: 'low' as const } : {}), ...(building !== undefined ? { building } : {}) });
+    }
+    const doc = new RoadDoc();
+    doc.buildings.shareFrom(built.buildings);
+    doc.lotStore.loadSections({ base: encodeRecords(records, lotCentre, lotBounds, lotSummaryColumns()).buffer, gone: new Float64Array(0), replaced: null, added: null }, []);
+    let read = 0;
+    const get = doc.lotStore.get.bind(doc.lotStore);
+    doc.lotStore.get = ((id: number) => { read++; return get(id); }) as typeof doc.lotStore.get;
+    const refused = new Set<number>();
+    const count = doc.openLots.count(refused);
+    expect(read).toBe(0);
+    const want = brute(doc, refused);
+    expect(count).toBe(want.open.length);
+    for (let k = 0; k < count; k++) expect(JSON.stringify(doc.openLots.at(k))).toBe(JSON.stringify(want.open[k]));
+    expect(doc.openLots.lastGrown()).toEqual(want.last);
+    // Grown on one, set one aside: in step, as the loop says.
+    const lot = doc.openLots.at(3);
+    const c = lotCentre(lot);
+    const b = doc.buildings.add({ ...generateBody('residential', 10, 10, 2), x: c.x, y: c.y, rotation: 0 } as unknown as Building);
+    doc.openLots.grew(lot, b.id as number, null, 'test');
+    doc.openLots.refuse(doc.openLots.at(0), refused);
+    const after = brute(doc, refused);
+    expect(doc.openLots.count(refused)).toBe(after.open.length);
+    for (let k = 0; k < after.open.length; k++) expect(doc.openLots.at(k).id).toBe(after.open[k]!.id);
+    expect(doc.openLots.lastGrown()).toEqual(after.last);
   });
 });

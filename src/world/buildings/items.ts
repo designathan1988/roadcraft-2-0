@@ -314,6 +314,21 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     for (const value of this.added.values()) written(value);
   }
 
+  /** Each record in the order of `entries` (the table's rows, one replaced in its place, then those added), nothing decoded: a row of the table standing as its own as its row (`row`, with the field written over it, NaN: none), a record written here as itself (`written`). */
+  eachInOrder(row: (table: TableRows<K, V>, row: number, field: number) => void, written: (value: V) => void): void {
+    const base = this.base;
+    if (base) {
+      const ids = base.table.ids;
+      for (let r = 0; r < ids.length; r++) {
+        const key = ids[r]! as K;
+        if (this.gone.has(key)) continue;
+        const over = this.replaced.get(key);
+        if (over !== undefined) written(over); else row(base, r, this.fieldOfRow(r));
+      }
+    }
+    for (const value of this.added.values()) written(value);
+  }
+
   /** Each record's box on the ground: the table's own read from its box columns (nothing decoded; a row of a table written before them, or with none, decoded for `boxOf` alone), a record written here from `boxOf`. The field written over a row moves nothing (a building's wear). */
   eachBox(boxOf: (value: V) => { readonly minX: number; readonly minY: number; readonly maxX: number; readonly maxY: number } | null,
     visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {

@@ -7,7 +7,8 @@ import { SharedMembers } from '@world/buildings/intern';
 import { migrateBuilding } from '@world/buildings/serialize';
 import { type Building, settleBuilding } from '@world/buildings/types';
 import type { LandscapeItem } from '@world/landscape';
-import { isLot, lotCentre, type Lot } from '@world/lots';
+import { isLot, lotBounds, lotCentre, type Lot } from '@world/lots';
+import { lotSummaryColumns } from '@world/lotSummary';
 import { asPoleId, asSpanId } from '@world/ids';
 import type { UtilityPole, UtilitySpan } from '@world/utilities';
 
@@ -66,7 +67,8 @@ export function prepareCity(data: SerializedDoc, repair = false): PreparedCity {
     },
     buildings,
     landscape: table(items),
-    lots: table(lots, lotCentre),
+    // The lots with their box and summary columns (`lotSummary.ts`), as the store's own table holds them (`LotStore.tableOf`).
+    lots: lots.length ? encodeRecords(lots, lotCentre, lotBounds, lotSummaryColumns()).buffer : null,
     poles: table(poles),
     spans: table(spans, spanPlace),
   };

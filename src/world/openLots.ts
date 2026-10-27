@@ -26,8 +26,14 @@ const keyOf = (i: number, j: number): number => (i + 32768) * 65536 + (j + 32768
 const MIN_ROOM = 64;
 
 export class OpenLots {
-  /** The lot in each slot (undefined: a hole), as last read: the records are replaced, never changed, so identity tells a stale one. */
-  private records: (Lot | undefined)[] = [];
+  /**
+   * Each slot's lot as numbers, never its record (NaN id: a hole): its id, whether it is zoned (1) and the building it names (NaN: none). A lot
+   * asked for (`at`, `near`) is read from the store then. DO NOT hold the lots' records here: every lot of the map stood decoded on the page
+   * from the growth's first look, the 10 km city's 111,000 (2026-10-26).
+   */
+  private ids: number[] = [];
+  private zoned: number[] = [];
+  private named: number[] = [];
   /** Each slot's place in the store's order (`LotStore.orderOf`) when it was taken. */
   private slotOrder: number[] = [];
   private readonly slotOf = new Map<number, number>();
@@ -61,6 +67,13 @@ export class OpenLots {
     return this.openCount;
   }
 
+  /** The lot of a slot, read from the store. */
+  private lotAt(slot: number): Lot {
+    const lot = this.host.lots.get(this.ids[slot]!);
+    if (!lot) throw new Error(`lot ${this.ids[slot]} of the open lots' index is not in the store`);
+    return lot;
+  }
+
   /** The `k`-th open lot (from 0), in the lots' order. Asked after `count`. */
   at(k: number): Lot {
     if (k < 0 || k >= this.openCount) throw new RangeError(`open lot ${k} of ${this.openCount}`);
@@ -69,7 +82,7 @@ export class OpenLots {
       const next = pos + step;
       if (next <= this.room && this.tree[next]! < rest) { pos = next; rest -= this.tree[next]!; }
     }
-    return this.records[pos]!;
+    return this.lotAt(pos);
   }
 
   /** The open lots whose centre may be within `reach` of `at` (a superset), in the lots' order. Asked after `count`. */
@@ -80,7 +93,7 @@ export class OpenLots {
         for (const slot of this.cells.get(keyOf(i, j)) ?? []) if (this.open[slot]) found.push(slot);
       }
     }
-    return found.sort((a, b) => a - b).map((slot) => this.records[slot]!);
+    return found.sort((a, b) => a - b).map((slot) => this.lotAt(slot));
   }
 
   /** Where the building grown last stands (the highest id standing on a lot), or null. Asked after `count`. */
@@ -92,7 +105,7 @@ export class OpenLots {
   /** `lot` took the building `id`: written in the document (`cause`, where), the index kept in step. */
   grew(lot: Lot, id: number, rects: readonly ChangeRect[] | null, cause: string): void {
     const slot = this.slotOf.get(lot.id);
-    if (slot === undefined || this.records[slot] !== lot || this.host.lots.get(lot.id) !== lot) throw new Error(`lot ${lot.id} missing from the open lots' index`);
+    if (slot === undefined || this.host.lots.get(lot.id) !== lot) throw new Error(`lot ${lot.id} missing from the open lots' index`);
     const fresh: Lot = { ...lot, building: id };
     this.host.lots.apply({ put: [fresh], ...(rects ? { also: rects } : {}) }, cause);
     // Its own entry, read again at the next question, finds the slot as it is now.
@@ -122,19 +135,21 @@ export class OpenLots {
         const slot = this.slotOf.get(id);
         if (slot !== undefined) {
           // Changed where it stands: the same slot. Gone, or put last in the store: a hole here.
-          if (lot && host.lots.orderOf(id) === this.slotOrder[slot]) { if (this.records[slot] !== lot) this.place(slot, lot); continue; }
+          if (lot && host.lots.orderOf(id) === this.slotOrder[slot]) { this.place(slot, lot); continue; }
           this.clear(slot);
         }
         if (lot) last.push(lot);
       }
-      if (this.records.length + last.length > this.room || this.holes > Math.max(MIN_ROOM, this.records.length - this.holes)) {
+      if (this.ids.length + last.length > this.room || this.holes > Math.max(MIN_ROOM, this.ids.length - this.holes)) {
         this.rebuild(refused);
         return;
       }
       last.sort((a, b) => host.lots.orderOf(a.id)! - host.lots.orderOf(b.id)!);
       for (const lot of last) {
-        const slot = this.records.length;
-        this.records.push(undefined);
+        const slot = this.ids.length;
+        this.ids.push(lot.id);
+        this.zoned.push(0);
+        this.named.push(Number.NaN);
         this.slotOrder.push(host.lots.orderOf(lot.id)!);
         this.cellOfSlot.push(-1);
         this.slotOf.set(lot.id, slot);
@@ -154,24 +169,29 @@ export class OpenLots {
     this.seenBuildings = host.buildingsRevision();
   }
 
-  /** A slot takes this record (its lot's new version, or a lot new to the slot): its cell, its building and its flag with it. */
+  /** A slot takes this record (its lot's new version, or a lot new to the slot): its numbers, its cell, its building and its flag with it. */
   private place(slot: number, lot: Lot): void {
-    const was = this.records[slot];
-    if (was?.building !== lot.building) {
-      if (was?.building !== undefined) this.unname(was.building, slot);
-      if (lot.building !== undefined) this.name(lot.building, slot);
+    const was = this.named[slot]!;
+    const now = lot.building ?? Number.NaN;
+    if (!Object.is(was, now)) {
+      if (!Number.isNaN(was)) this.unname(was, slot);
+      if (!Number.isNaN(now)) this.name(now, slot);
     }
-    this.records[slot] = lot;
+    this.ids[slot] = lot.id;
+    this.named[slot] = now;
+    this.zoned[slot] = lot.use ? 1 : 0;
     this.file(slot, lot.use ? cellOf(lot) : -1);
     this.flag(slot);
   }
 
   /** A slot left as a hole: its lot gone from the store, or put last there. */
   private clear(slot: number): void {
-    const was = this.records[slot]!;
-    if (was.building !== undefined) this.unname(was.building, slot);
-    this.slotOf.delete(was.id);
-    this.records[slot] = undefined;
+    const building = this.named[slot]!;
+    if (!Number.isNaN(building)) this.unname(building, slot);
+    this.slotOf.delete(this.ids[slot]!);
+    this.ids[slot] = Number.NaN;
+    this.named[slot] = Number.NaN;
+    this.zoned[slot] = 0;
     this.file(slot, -1);
     this.flag(slot);
     this.holes++;
@@ -215,10 +235,9 @@ export class OpenLots {
 
   /** One slot's flag read again (its lot changed, a building of it came or went, it was set aside). */
   private flag(slot: number): void {
-    const lot = this.records[slot];
-    const b = lot?.building;
-    const standing = b !== undefined && this.host.standing(b);
-    const open = lot?.use && !standing && !this.refused.has(lot.id) ? 1 : 0;
+    const b = this.named[slot]!;
+    const standing = !Number.isNaN(b) && this.host.standing(b);
+    const open = this.zoned[slot] && !standing && !this.refused.has(this.ids[slot]!) ? 1 : 0;
     if (open !== this.open[slot]) {
       this.open[slot] = open;
       this.openCount += open ? 1 : -1;
@@ -231,18 +250,25 @@ export class OpenLots {
   /** @rebuild Only when the building grown last is gone, or its lot. */
   private findLast(): void {
     let best = -1;
-    for (const l of this.records) if (l?.building !== undefined && l.building > best && this.host.standing(l.building)) best = l.building;
+    for (const b of this.named) if (!Number.isNaN(b) && b > best && this.host.standing(b)) best = b;
     this.lastId = best;
     this.lastStale = false;
   }
 
-  /** @rebuild The lots taken whole (a load, a copy), the buildings' diary forgotten, the set aside changed, or the slots laid again (the room ran out, the holes outnumber the lots): all read again. */
+  /** @rebuild The lots taken whole (a load, a copy), the buildings' diary forgotten, the set aside changed, or the slots laid again (the room ran out, the holes outnumber the lots): all read again, a lot of the table from its columns (`LotStore.eachNumbers`), nothing decoded. */
   private rebuild(refused: ReadonlySet<number>): void {
     const host = this.host;
-    this.records = [...host.lots.all()];
-    const n = this.records.length;
+    const ids: number[] = [], zoned: number[] = [], named: number[] = [], orders: number[] = [], keys: number[] = [];
+    host.lots.eachNumbers((id, x, y, use, building, order) => {
+      ids.push(id); zoned.push(use ? 1 : 0); named.push(building); orders.push(order);
+      keys.push(use ? keyOf(Math.floor(x / CELL), Math.floor(y / CELL)) : -1);
+    });
+    const n = ids.length;
+    this.ids = ids;
+    this.zoned = zoned;
+    this.named = named;
     this.room = Math.max(MIN_ROOM, 2 * n);
-    this.slotOrder = this.records.map((lot) => host.lots.orderOf(lot!.id)!);
+    this.slotOrder = orders;
     this.cellOfSlot = new Array<number>(n).fill(-1);
     this.slotOf.clear(); this.cells.clear(); this.byBuilding.clear();
     this.open = new Uint8Array(this.room);
@@ -254,17 +280,17 @@ export class OpenLots {
     this.lastId = -1;
     this.lastStale = false;
     for (let slot = 0; slot < n; slot++) {
-      const lot = this.records[slot]!;
-      this.slotOf.set(lot.id, slot);
-      const b = lot.building;
-      const standing = b !== undefined && host.standing(b);
-      if (b !== undefined) {
+      const id = ids[slot]!;
+      this.slotOf.set(id, slot);
+      const b = named[slot]!;
+      const standing = !Number.isNaN(b) && host.standing(b);
+      if (!Number.isNaN(b)) {
         this.name(b, slot);
         if (standing && b > this.lastId) this.lastId = b;
       }
-      if (!lot.use) continue;
-      this.file(slot, cellOf(lot));
-      if (!standing && !refused.has(lot.id)) { this.open[slot] = 1; this.openCount++; }
+      if (!zoned[slot]) continue;
+      this.file(slot, keys[slot]!);
+      if (!standing && !refused.has(id)) { this.open[slot] = 1; this.openCount++; }
     }
     // The tree in one pass: each node handing its sum on to its parent.
     for (let i = 1; i <= this.room; i++) {

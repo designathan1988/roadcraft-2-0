@@ -7,6 +7,7 @@ import type { Building, BuildingId } from '@world/buildings/types';
 import { type RoadDoc as RoadDocType, RoadDoc, type SerializedDoc, savedNode, savedSegment } from '@world/doc';
 import type { NodeId } from '@world/ids';
 import { type Lot, lotBounds, lotCentre } from '@world/lots';
+import { lotSummaryColumns } from '@world/lotSummary';
 import { Network } from '@world/network';
 import { LIKE_REACH } from '@world/growth/zoning';
 import { OWNER, TILE, tileKey, tileOfKey } from '@world/tiles';
@@ -187,5 +188,5 @@ export function assembleCity(layoutLots: ArrayBufferLike | null, grown: readonly
     for (let k = 0; k + 1 < tile.lotBuildings.length; k += 2) building.set(tile.lotBuildings[k]!, tile.lotBuildings[k + 1]!);
   }
   const lots = layoutLots ? tableRecords<Lot>(layoutLots).map((lot) => (building.has(lot.id) ? { ...lot, building: building.get(lot.id)! } : lot)) : [];
-  return { buildings: writer.finish().buffer, lots: lots.length ? encodeRecords(lots, lotCentre, lotBounds).buffer : null };
+  return { buildings: writer.finish().buffer, lots: lots.length ? encodeRecords(lots, lotCentre, lotBounds, lotSummaryColumns()).buffer : null };
 }

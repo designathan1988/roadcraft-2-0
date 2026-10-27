@@ -5,6 +5,7 @@ import { JournalCursor } from './derived';
 import { IdAllocator } from './ids';
 import { insideLot, lotRecord, type Lot } from './lotRecord';
 import { lotBounds, lotCentre } from './lotRings';
+import { LOT_BUILDING, LOT_SUMMARY_WIDTH, LOT_ZONED, lotSummaryColumns } from './lotSummary';
 import { PointFiling } from './pointFiling';
 import { TableItems } from './buildings/items';
 import { type RecordRef, encodeRecords } from './buildings/recordTable';
@@ -149,6 +150,24 @@ export class LotStore {
     const items = this.itemsOf();
     if (items instanceof TableItems) { items.eachBox(lotBounds, visit); return; }
     for (const lot of items.values()) { const b = lotBounds(lot); visit(b.minX, b.minY, b.maxX, b.maxY); }
+  }
+
+  /**
+   * Each lot in the lots' order as its numbers (`openLots.ts`): its id, its centre, whether it is zoned, the building it names (NaN: none) and
+   * its place in the order - a lot of the table from its columns (`lotSummary.ts`), nothing decoded; a record written since, or a row of a
+   * table written before these columns, from itself.
+   */
+  eachNumbers(visit: (id: number, x: number, y: number, zoned: boolean, building: number, order: number) => void): void {
+    if (this.below) { this.below.eachNumbers(visit); return; }
+    const items = this.items;
+    const ofLot = (lot: Lot): void => { const c = placeOf(lot); visit(lot.id, c.x, c.y, !!lot.use, lot.building ?? Number.NaN, this.orderOf(lot.id)!); };
+    if (!(items instanceof TableItems)) { for (const lot of items.values()) ofLot(lot); return; }
+    items.eachInOrder((rows, at) => {
+      const t = rows.table;
+      if (t.summaryWidth !== LOT_SUMMARY_WIDTH) { ofLot(rows.record(at)); return; }
+      const s = t.summary!;
+      visit(t.ids[at]!, t.xs[at]!, t.ys[at]!, s[LOT_ZONED * t.rows + at] === 1, s[LOT_BUILDING * t.rows + at]!, at);
+    }, ofLot);
   }
 
   /** The lots by id as a read-only map (the save walks their ids, `editor/chunkedSave.ts`): a working copy's the original's while it wrote nothing. */
@@ -356,7 +375,7 @@ export class LotStore {
   /** Every lot as one table in the lots' order, its columns their centres, each record as `RoadDoc.fromJSON` would read it from the file (`lotRecord`: its building only while it stands, `standing`) - a city made off the page (`editor/smallCityMap.ts`); null: none. */
   tableOf(standing: (id: number) => boolean): ArrayBufferLike | null {
     const list = [...this.items.values()].map((lot) => lotRecord(lot, standing));
-    return list.length ? encodeRecords(list, placeOf, lotBounds).buffer : null;
+    return list.length ? encodeRecords(list, placeOf, lotBounds, lotSummaryColumns()).buffer : null;
   }
 
   /** The same records as another store (they are never changed in place): its table shared, the records written copied, never a record of the table decoded. */
