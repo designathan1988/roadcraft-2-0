@@ -24,9 +24,7 @@ import { createFlatAtlas } from '../../render/flatAtlas';
 import { levelsOf } from '../../render/mesh/roadLod';
 import { coarseArrays } from '../../render/mesh/roadLodPure';
 import type { RoadTiler } from '../../render/roadTilePool';
-import { farLayerMaterial, pageSlots } from '../../render/networkFarRoads';
-import { farRoadInput } from '../../render/networkFarInput';
-import { FAR_CARRIAGEWAY, FAR_SECTION, buildFarRoadCells } from '../../render/networkFarRoadsBuild';
+import { farLevelMeshes } from '../../render/networkFarRoads';
 import { CELL } from '../../render/roadSurfaceEntries';
 import { take, type BatchCache } from './capture';
 import { sheetMaterial, type ItemSpec, type PieceSpec } from './items';
@@ -226,24 +224,11 @@ function farLevelsOf(built: Group): Group {
   return out;
 }
 
-/** A network's far level (L2, `networkFarRoads.ts`): each cell's layer a mesh of its vertices' colours, at the heights the roads were solved at. */
-function networkLevelOf(net: Network, ground: (x: number, y: number) => number): Group {
-  const elevation = buildRoadElevation(net, ground);
-  const { input } = farRoadInput(net, { onSegment: (s, x, y) => elevation.onSegment(s, x, y), at: (x, y) => elevation.at(x, y) }, ground, CELL, null, pageSlots(net));
+/** A network's root level (L2, `networkFarRoads.ts`): the detail's own pieces a mesh a cell, drawn by the road material, at the heights the roads were solved at. */
+function networkLevelOf(net: Network, ground: (x: number, y: number) => number, materials: SceneMaterials): Group {
   const out = new Group();
   out.name = 'road-far-network';
-  for (const cell of buildFarRoadCells(input)) {
-    const geometry = new BufferGeometryClass();
-    geometry.setAttribute('position', new BufferAttribute(cell.positions, 3));
-    geometry.setAttribute('color', new BufferAttribute(cell.colors, 3));
-    // The carriageway's section, its paint inked as the game inks it (`networkFarRoads.ts` farLayerMaterial).
-    if (cell.layer === FAR_CARRIAGEWAY) geometry.setAttribute('roadSection', new BufferAttribute(cell.sections, FAR_SECTION));
-    geometry.setIndex(new BufferAttribute(cell.indices, 1));
-    geometry.computeVertexNormals();
-    const mesh = new Mesh(geometry, farLayerMaterial(cell.layer === FAR_CARRIAGEWAY ? 1 : 0));
-    mesh.name = `road-far-network-${cell.layer}`;
-    out.add(mesh);
-  }
+  for (const mesh of farLevelMeshes(net, buildRoadElevation(net, ground), ground, CELL, materials.roadRoot)) out.add(mesh);
   return out;
 }
 
@@ -260,7 +245,7 @@ async function junctionLevelItems(add: Add, materials: SceneMaterials, groundMat
     ...LEVELLED.map(([name, variation]) => ({ layout: LAYOUTS.find((l) => l.name === name && l.variation === variation)!, variation, ground: (): number => 0, detail: false })),
     ...GROUNDS.map((g) => ({ layout: four, variation: g.variation, ground: g.at, detail: true })),
   ];
-  const source = 'src/render/roadSurfaces.ts (roadSurfaceSteps) + src/render/networkFarRoads.ts (farRoadInput)';
+  const source = 'src/render/roadSurfaces.ts (roadSurfaceSteps) + src/render/networkFarPieces.ts (farPieceCells)';
   for (const { layout, variation, ground, detail } of cases) {
     const doc = new RoadDoc();
     layout.lay(doc, t);
@@ -275,9 +260,9 @@ async function junctionLevelItems(add: Add, materials: SceneMaterials, groundMat
     const far = farLevelsOf(built);
     add({ group: 'Roads', name, variation: `${variation} · L1`, origin: 'kit', source, build: 'merged', pieces: piecesOf(far), object: shown(far, cache),
       countKey: `road:${id}:${layout.name}:${variation}:L1`, notes: ['the blocks\' far levels (attachFarLevel), as drawn past the near reach'] });
-    const network = networkLevelOf(net, ground);
+    const network = networkLevelOf(net, ground, materials);
     add({ group: 'Roads', name, variation: `${variation} · L2`, origin: 'kit', source, build: 'merged', pieces: piecesOf(network), object: shown(network, cache),
-      countKey: `road:${id}:${layout.name}:${variation}:L2`, notes: ['the network\'s far level (buildFarRoadCells), as drawn where a cell\'s blocks are let go'] });
+      countKey: `road:${id}:${layout.name}:${variation}:L2`, notes: ['the network\'s root level (farPieceCells), as drawn where a cell\'s blocks are not built'] });
   }
 }
 

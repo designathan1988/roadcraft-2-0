@@ -2,6 +2,23 @@
 
 Entry point and method of work: `docs/agent/README.md`. Rules: `docs/agent/memory/`. Branch: `otimizacao-geometria`.
 
+## THE OWNER'S ORDER OF 2026-10-27 (evening), above every other: ONE FORM PER VIEW, FOR EVERYTHING
+- At the same zoom and view a thing is drawn in ONE form. What a thing looks like depends on the view alone (its size on the screen),
+  never on what has loaded. "PRA QUE MOSTRAR DE TRES FORMAS NO MESMO NIVEL DE ZOOM E VISTA? ... ISSO VALE PARA TUDO."
+- Roads today: three forms at once (the network's root level `networkFarRoads.ts`: own coarse shapes, no kerb nor median, own material;
+  a block's far level `attachFarLevel`; the block's full level), which one by load state. Fix in progress: the root level made of the
+  SAME pieces (`roads/pieceMesh.ts` pieceBundle over `segmentShapes`/`junctionShapes`), the same vertex attributes (uv, colour, section,
+  code) and the SAME material (`materials.road`) as the detail, so loaded or not the road is one.
+- ROADS DONE (2026-10-27): the root level is the tool's L2 of the same pieces (`segmentFarShapes`/`junctionFarShapes` and the median's
+  `medianShapes`) meshed AS THE DETAIL'S SURFACES by `pieceBundle` (`render/networkFarPieces.ts` farPieceCells), every vertex the detail's
+  attributes, drawn by `materials.roadRoot` (the road material's own shader). The old coarse builder, its worker and its own material are gone.
+  Photos: reports/in-game/2026-10-27-one-road/03 (near, 3 s: median, lanes, crossings, texture), 04 (far).
+- Then every other category the same way (inventory first: buildings' LOD ladder, cars, trees, props/furniture, people, poles/wires,
+  terrain, water): find every stand-in shown by load state and make the form a function of the view alone.
+- Done and committed this evening: 3c172ebd (squares' walks paved), e08a35a3 (far roads' crossings), 8e1e9f25 (car level by its own
+  screen size; poles turned by the document's nearest road). Uncommitted: the far level's asphalt grain (roadEdges/materials/
+  networkFarRoads/renderer) - to be replaced by the single-form root.
+
 ## The owner's standing orders (latest first, 2026-10-27)
 - Everything about the project is recorded INSIDE the project (this folder), never only in a user's Claude files.
 - Context must not be lost at compaction: this file is injected by the project's SessionStart hook; update it.

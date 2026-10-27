@@ -8,7 +8,10 @@ import type { Network } from '@world/network';
 import { LANE_LINE, Level, ROAD_TYPES } from '@world/roadTypes';
 import { STYLE_PAINT } from '@world/roads/markingStyle';
 import { CYCLE_LANE_PAINT, PARKING_PAINT, type ParkingLine } from '@world/parkingLayout';
-import { type AlongPaint, type Bar, type PaintedIsland, type StrokeSpec, type ZebraStretch, segmentAlongPaint, segmentMarkings } from '@world/markings';
+import {
+  type AlongPaint, type Bar, type PaintedIsland, type StrokeSpec, type ZebraStretch, approachLegendsAt, junctionDetailAt, midBlockDetailAt, miniRoundaboutIsland,
+  segmentAlongPaint, segmentMarkings, transitionMarkings,
+} from '@world/markings';
 import type { SegmentRibbon } from '@world/network';
 import { STOP_BAR_WIDTH } from '@world/approach';
 import { m } from '@world/units';
@@ -82,7 +85,10 @@ export interface MarkPiece {
   readonly id: number;
 }
 
-const pieceName = (piece: MarkPiece): string => `${piece.kind === 'node' ? 'n' : 's'}${piece.id}`;
+export const pieceName = (piece: MarkPiece): string => `${piece.kind === 'node' ? 'n' : 's'}${piece.id}`;
+/** A source placed by the roads' far level (`networkFarRoads.ts` followMarks): its piece's name after this. Written where the detail's own source of
+ *  the same piece is not (`commit`): the far level's marks stand for a piece until its detail derives them. */
+const FAR_SOURCE = 'f:';
 
 /** A pattern along a shape: q = q0 + g . (p - o), inked under `dash` in `period`. */
 interface Pattern {
@@ -277,10 +283,11 @@ class RoadMarks {
     return marks;
   }
 
-  /** The marks a piece places (`source`), each filed in the pieces it lies on (`fileMarks`): what it placed before replaced, written at the next `commit`. */
-  place(doc: object, source: MarkPiece, into: Iterable<readonly [MarkPiece, readonly Filed[]]>): void {
+  /** The marks a piece places (`source`), each filed in the pieces it lies on (`fileMarks`): what it placed before replaced, written at the next `commit`.
+   *  `far`: placed by the roads' far level, a source of its own that gives way to the detail's of the same piece. */
+  place(doc: object, source: MarkPiece, into: Iterable<readonly [MarkPiece, readonly Filed[]]>, far = false): void {
     const marks = this.docOf(doc);
-    const name = pieceName(source);
+    const name = (far ? FAR_SOURCE : '') + pieceName(source);
     const filed = new Map<string, Filed[]>();
     for (const [piece, list] of into) {
       if (!list.length) continue;
@@ -302,23 +309,34 @@ class RoadMarks {
     for (const key of filed.keys()) { marks.targets.get(key)!.from.add(name); marks.dirty.add(key); }
   }
 
-  /** Every mark of a document let go (a load, a change of its paint's standard), written at the next `commit`. */
+  /** Every mark the detail placed in a document let go (a load, a change of its paint's standard), written at the next `commit`; the far level's
+   *  stay, its own to place (`networkFarRoads.ts`). */
   clear(doc: object): void {
     const marks = this.docOf(doc);
-    for (const [name, source] of marks.sources) for (const key of source.into.keys()) { marks.targets.get(key)?.from.delete(name); marks.dirty.add(key); }
-    marks.sources.clear();
+    for (const [name, source] of [...marks.sources]) {
+      if (name.startsWith(FAR_SOURCE)) continue;
+      for (const key of source.into.keys()) { marks.targets.get(key)?.from.delete(name); marks.dirty.add(key); }
+      marks.sources.delete(name);
+    }
   }
 
   /** The marks of a document placed since the last commit written into the texture and their heads into the slots' table (`roadPaint.ts`): at the
    *  build's swap, so a block drawn until then never shows the marks of the next. */
-  commit(doc: object): void {
+  commit(doc: object, only?: ReadonlySet<string>): void {
     const marks = this.docs.get(doc);
     if (!marks || marks.dirty.size === 0) return;
     for (const key of [...marks.dirty].sort()) {
+      // `only`: the pieces the far level placed in (`networkFarRoads.ts`), the detail's left for its build's swap.
+      if (only && !only.has(key)) continue;
+      marks.dirty.delete(key);
       const target = marks.targets.get(key);
       if (!target) continue;
       const filed: Filed[] = [];
-      for (const name of [...target.from].sort()) filed.push(...(marks.sources.get(name)?.into.get(key) ?? []));
+      for (const name of [...target.from].sort()) {
+        // The far level's marks of a piece the detail placed: the detail's alone (the same marks, from the network the detail holds).
+        if (name.startsWith(FAR_SOURCE) && target.from.has(name.slice(FAR_SOURCE.length))) continue;
+        filed.push(...(marks.sources.get(name)?.into.get(key) ?? []));
+      }
       const old = marks.blocks.get(key);
       if (old) { this.release(old.start, old.size); marks.blocks.delete(key); }
       const slot = target.piece.kind === 'node' ? roadPaint.nodeSlot(doc, target.piece.id as NodeId) : roadPaint.roadSlot(doc, target.piece.id as SegmentId);
@@ -331,7 +349,6 @@ class RoadMarks {
       marks.blocks.set(key, { start: block.start, size: block.size });
       roadPaint.setMarksHead(doc, slot, block.origin, BUCKET, block.buckets, block.start);
     }
-    marks.dirty.clear();
   }
 
   /** A piece's block written (`RoadMarks` layout): its buckets, its entries, its groups. */
@@ -533,6 +550,44 @@ export function roadAlongPaint(net: Network, ribbon: SegmentRibbon): AlongPaint 
   const cutA = strokeCut(net, ribbon, segment?.a, start);
   const cutB = strokeCut(net, ribbon, segment?.b, trims?.b[Level.Asphalt] ?? 0);
   return segmentAlongPaint(ribbon, start, cutA, cutB, net.doc.markingStyle);
+}
+
+/**
+ * A node's marks, each filed on the piece it lies on (`fileMarks`), as the detail (`roadSurfaceInputs.ts`) and the far level (`networkFarTile.ts`)
+ * place them: the taper's lines on its plate (in any pass, as they always were); and for a junction drawn at ground level (`ground`), as its paint
+ * always was: each leg's stop line, crossings and the rule's legends on that leg's own carriageway, in whatever pass that road is drawn (DO NOT file
+ * them in the plate's pass: as polygons there, a leg of another pass, a road raised by hand, had them float over its own deck or sink under it), and
+ * a mini-roundabout's island on its plate.
+ */
+export function nodeMarks(net: Network, node: NodeId, ground: boolean, passes: MarkPasses): [MarkPiece, Filed[]][] {
+  const plate: MarkPiece = { kind: 'node', id: node };
+  const onPlate: MarkGroup[] = [];
+  // The tapers where a road carries on at another width, whose lane lines and edge lines run on through them.
+  if (net.transitions.has(node)) for (const spec of transitionMarkings(net, node)) onPlate.push(...strokeGroups(spec));
+  const onLegs = new Map<SegmentId, MarkGroup[]>();
+  const onLeg = (seg: SegmentId, group: MarkGroup | null): void => {
+    if (!group) return;
+    let list = onLegs.get(seg);
+    if (!list) onLegs.set(seg, list = []);
+    list.push(group);
+  };
+  if (ground) {
+    const stops: Bar[] = [], zebras: Bar[] = [], runs: ZebraStretch[] = [], stopSegs: SegmentId[] = [];
+    junctionDetailAt(net, node, stops, zebras, runs, stopSegs);
+    midBlockDetailAt(net, node, stops, zebras, runs, stopSegs);
+    stops.forEach((bar, k) => onLeg(stopSegs[k]!, barGroup(STOP_PAINT, bar)));
+    // A crosswalk a shape a run of its bars, the bars cut by the shader (`ZebraStretch`), not a quad a bar.
+    for (const run of runs) onLeg(run.seg, zebraGroup(run));
+    // Mini-roundabouts' painted islands (V5), and the junction rule's words and symbols before the stop lines (V6).
+    const island = miniRoundaboutIsland(net, node);
+    if (island) onPlate.push(islandGroup(island));
+    const legends: StrokeSpec[] = [], legendSegs: SegmentId[] = [];
+    approachLegendsAt(net, node, net.doc.markingStyle, legends, legendSegs);
+    legends.forEach((spec, k) => { for (const group of strokeGroups(spec)) onLeg(legendSegs[k]!, group); });
+  }
+  const out: [MarkPiece, Filed[]][] = fileMarks(net, plate, onPlate, passes);
+  for (const [seg, groups] of [...onLegs].sort((p, q) => p[0] - q[0])) out.push(...fileMarks(net, { kind: 'segment', id: seg }, groups, passes));
+  return out;
 }
 
 /** A road's own paint along it that is not a line (`segmentMarkings`: its turn arrows, its bus lanes' legends). */

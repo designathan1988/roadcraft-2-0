@@ -448,57 +448,6 @@ float roadPaintNoise(vec2 p) {
 }
 
 /**
- * The network's far level's carriageway (`networkFarRoads.ts` farLayerMaterial): its vertices' colours (the asphalt's mean at its class's tint) and,
- * over them, the carriageway's lines, marks and dirt by the detail's own code (`CARRIAGEWAY_PAINT`, `roadMarksShader.ts`, `carriagewayDirt`) read
- * from the same tables, its vertices carrying the same section (`networkFarRoadsBuild.ts` FarRoadCell sections): the paint the detail inks at a
- * distance (its mean over the pixel's footprint) inked here alike. Its own grain none (no map: `GRAIN_OWN` reads 0.5). The marks' textures are
- * the three data tables every carriageway reads (`uRoadSegments`, `uRoadLines`, `uRoadMarks`); no other map.
- */
-export function applyRoadFarPaint(material: MeshStandardMaterial): void {
-  marksRoadSection(material);
-  const carriageway = `vRoadCode <= ${ROAD_CODE.raised}`;
-  material.onBeforeCompile = (shader) => {
-    shader.uniforms['uRoadSegments'] = roadPaint.segments;
-    shader.uniforms['uRoadLines'] = roadPaint.lines;
-    shader.uniforms['uRoadMarks'] = roadMarks.texture;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>
-attribute vec4 roadSection;
-varying vec3 vRoadSection;
-flat varying int vRoadCode;
-flat varying float vRoadPaintSlot;
-varying vec3 vRoadWorld;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-vRoadSection = roadSection.xyz;
-vRoadCode = int(roadSection.w + 0.5);
-vRoadPaintSlot = roadSection.w < ${ROAD_CODE.raised}.5 ? roadSection.z : -1.0;`)
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvRoadWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>
-varying vec3 vRoadSection;
-flat varying int vRoadCode;
-flat varying float vRoadPaintSlot;
-varying vec3 vRoadWorld;
-uniform highp sampler2D uRoadSegments;
-uniform highp sampler2D uRoadLines;
-float roadPaintHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float roadPaintNoise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  return mix(mix(roadPaintHash(i), roadPaintHash(i + vec2(1.0, 0.0)), f.x), mix(roadPaintHash(i + vec2(0.0, 1.0)), roadPaintHash(i + vec2(1.0, 1.0)), f.x), f.y);
-}${ROAD_MARKS_PARS}`)
-      .replace('#include <color_fragment>', `#include <color_fragment>
-  float roadPaintCover = 0.0;
-  float roadHalf = 0.0, roadLane = 0.0;${CARRIAGEWAY_PAINT}${ROAD_MARKS_COLOR}
-  ${carriagewayDirt(GRAIN_OWN)}`)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nif (${carriageway}) roughnessFactor = mix(roughnessFactor, 0.72, roadPaintCover);`)
-      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\nif (${carriageway}) {${ROAD_MARKS_METALNESS}\n}`)
-      .replace('#include <clearcoat_normal_fragment_begin>', `if (${carriageway}) {\n${ROAD_MARKS_NORMAL}}\n#include <clearcoat_normal_fragment_begin>`);
-  };
-  material.customProgramCacheKey = () => 'road-far-paint-v1';
-}
-
-/**
  * One surface's look read from the road material's arrays (`bake/catalogue.ts` roadArrays): the structures' concrete (`materials.ts`: the parapets
  * and walls with the close-zoom layer, `detail`, the piers and abutments without), the deck's layers. Three's own reads of a map, a normal map and a
  * roughness map (r186 `map_fragment`, `normal_fragment_maps`, `roughnessmap_fragment`; the close-zoom layer's as the parapets' own material

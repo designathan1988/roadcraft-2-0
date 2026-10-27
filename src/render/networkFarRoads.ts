@@ -1,71 +1,42 @@
-import { BufferAttribute, BufferGeometry, Group, MeshStandardMaterial } from 'three';
+import { BufferAttribute, BufferGeometry, Group, type Material, Mesh } from 'three';
 import type { RoadDoc } from '@world/doc';
 import type { NodeId, SegmentId } from '@world/ids';
 import type { Network } from '@world/network';
-import { jobPort } from '../jobs/jobPool';
+import type { RoadReads } from '@world/roadField';
 import { GpuBatchedMesh } from './buildings/gpuBatchedMesh';
-import { pullTowardEye } from './depthConvention';
-import { type FarLevel, type FarRoadHeights, type PieceSlots, farCellKey, farRoadInput } from './networkFarInput';
-import { FAR_CARRIAGEWAY, FAR_SECTION, type FarRoadCell, type FarRoadInput, buildFarRoadCells } from './networkFarRoadsBuild';
+import { type FarLevel, type FarMarks, farCellKey } from './networkFarInput';
+import { FAR_SECTION, type FarRoadCell, farPieceCells } from './networkFarPieces';
 import { roadPaint } from './roadPaint';
+import { pieceName, roadMarks } from './roadMarks';
 import { lookOf } from './roadSurfacePass';
-import { applyRoadFarPaint } from './mesh/roadEdges';
+import { ROAD_PASS_LOOK } from './roadPassLook';
+import { ROAD_CODE } from './mesh/roadEdges';
 import { nodeOwner, ownerCell, segmentOwner } from './roads/pieceOwner';
 import { farTileCellKeys } from './networkFarTile';
 import { TILE, tileOfKey } from '@world/tiles';
 import { m } from '@world/units';
 
 /**
- * EVERY ROAD OF THE MAP AT ITS FAR LEVEL, THE ROADS' ROOT LEVEL, FROM THE FIRST FRAME OF A MAP'S OPENING AND FOR GOOD (`renderer.ts`
- * buildWorld, `mesh/roadResidency.ts`): the detailed surfaces are built only for the cells the view wants (nearest first, under the
- * tier's budget), never for the whole map; every other cell is drawn by this level. It is made OFF THE PAGE, A 1 KM TILE A JOB
- * (`networkFarTile.ts`: each road's and junction's real outline, the carriageway and the casing its footways and kerbs fill, at its class's
- * colour over the street textures' means, at the roads' solved heights on the map's natural ground), the job threads taking the tiles
- * nearest the view first, each tile put in place as it lands (`requestWhole`); the page's own network holds the tiles near the view alone
- * (`world/networkWindow.ts`). Each road and junction is the same piece as in the detail, coarse: its carriageway and its casing as strips
- * and fans on its own edges and mouths (`networkFarRoadsBuild.ts`), filed by its owner block (`roads/pieceOwner.ts`). A cell is hidden
- * while the detailed blocks of its square stand (`hide`), shown again when the view lets them go (`show`).
- * AN EDIT MAKES ITS CELLS AGAIN, NEVER THE MAP (`changed`, `refresh`): the network tells what it rebuilt (`Network.changesSince`); the
- * owner cells of those roads and junctions are stale until made again, from their pieces alone (the page's network holds them: an edit is
- * in view), in place in the batches. A move of the roads held (`NetworkDelta.scopeOnly`) is no change of the map: nothing stale. DO NOT
- * walk the whole network for an edit: a 10 km city's 35,000 pieces were read and triangulated again at every road the player drew.
+ * EVERY ROAD OF THE MAP AT ITS ROOT LEVEL, FROM THE FIRST FRAME OF A MAP'S OPENING AND FOR GOOD (`renderer.ts` buildWorld,
+ * `mesh/roadResidency.ts`): the detailed blocks are built only for the cells the view wants, never for the whole map; every other cell is drawn
+ * by this level. IT IS THE DETAIL'S OWN ROAD: each road and junction the detail's pieces, surfaces and vertices (`networkFarPieces.ts`), drawn by
+ * the road material (`materials.ts` roadRoot: the detail's shader, `mesh/roadEdges.ts` applyRoadSurface), so a street is one road whether its
+ * block is built or not. It is made OFF THE PAGE, A 1 KM TILE A JOB (`networkFarTile.ts`), the job threads taking the tiles nearest the view
+ * first, each tile put in place as it lands (`requestWhole`); the page's own network holds the tiles near the view alone (`world/networkWindow.ts`).
+ * A cell is hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets them go (`show`).
+ * AN EDIT MAKES ITS CELLS AGAIN, NEVER THE MAP (`changed`, `refresh`): the network tells what it rebuilt (`Network.changesSince`); the owner
+ * cells of those roads and junctions are stale until made again, from their pieces alone (the page's network holds them: an edit is in view), in
+ * place in the batch. A move of the roads held (`NetworkDelta.scopeOnly`) is no change of the map: nothing stale. DO NOT walk the whole network
+ * for an edit: a 10 km city's 35,000 pieces were read and triangulated again at every road the player drew.
  */
 
-export type { FarRoadHeights } from './networkFarInput';
-
-/**
- * One material a layer (0 the casing, 1 the carriageway): the colours the vertices', pulled over the ground it lies on (the casing under the
- * carriageway, as `roadStandIn.ts` draws them); the carriageway's with its lines and marks inked as the detail's (`mesh/roadEdges.ts`
- * applyRoadFarPaint, its vertices' `roadSection`): no zebra, stop line or centre line goes as a block gives way to this level. The lab's sheets
- * draw this level with these materials too (`lab/catalog/layout.ts`).
- */
-export function farLayerMaterial(layer: 0 | 1): MeshStandardMaterial {
-  const material = new MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.9, metalness: 0 });
-  material.name = 'road-far-network';
-  if (layer === FAR_CARRIAGEWAY) applyRoadFarPaint(material);
-  pullTowardEye(material, 1, layer === FAR_CARRIAGEWAY ? 3 : 2);
-  return material;
-}
-
-/** The paint's slots a piece's vertices carry on the page: the table's own (`roadPaint.ts` resolverOf), a road's look written as its detail writes it (`roadSurfacePass.ts` lookOf). */
-export function pageSlots(net: Network): PieceSlots {
-  const table = roadPaint.resolverOf(net.doc);
-  return {
-    road: (id) => { const look = lookOf(net, id); return look?.paint === undefined ? -1 : table(look.paint); },
-    node: (id) => table(roadPaint.nodeSlot(net.doc, id)),
-  };
-}
-
-/** A vertex's colour as stored (`Uint16Array` normalized: 0-65535 read as 0-1, three's `BufferAttribute.normalized`): a third of a float's bytes twice over, a step of 1.5e-5 against the darkest asphalt's 0.04. */
-const COLOUR_STEPS = 65535;
-
-/** A layer's batch and the room it has (`GpuBatchedMesh` is sized when made, grown when a cell's pieces do not fit, `ensure`). */
-interface LayerBatch { readonly mesh: GpuBatchedMesh; vertices: number; indices: number; instances: number }
-/** A cell's instance in a layer's batch: the instance and the geometry it draws, for the cell to be made again in place (`deleteGeometry`). */
-interface CellInstance { readonly batch: LayerBatch; readonly id: number; readonly geometryId: number }
+/** The batch and the room it has (`GpuBatchedMesh` is sized when made, grown when a cell's pieces do not fit, `ensure`). */
+interface CellBatch { readonly mesh: GpuBatchedMesh; vertices: number; indices: number; instances: number }
+/** A cell's instance in the batch: the instance and the geometry it draws, for the cell to be made again in place (`deleteGeometry`). */
+interface CellInstance { readonly id: number; readonly geometryId: number }
 
 /** A batch grown for a cell's pieces (`shellBatch.ts` ensure): its live geometries packed into storage a quarter more than they and the new ones hold where the holes of cells made again are worth it, grown otherwise. */
-function ensure(batch: LayerBatch, vertices: number, indices: number, instances: number): void {
+function ensure(batch: CellBatch, vertices: number, indices: number, instances: number): void {
   const mesh = batch.mesh;
   if (vertices > mesh.unusedVertexCount || indices > mesh.unusedIndexCount) {
     const used = mesh.usedCounts();
@@ -82,70 +53,78 @@ function ensure(batch: LayerBatch, vertices: number, indices: number, instances:
   }
 }
 
-/** A cell's layer as its geometry: the positions, a normal of three bytes straight up, a colour of three shorts, the carriageway's section, the triangles. */
+/** A cell as the road material reads it: the detail's attributes (`mesh/surfaceTiles.ts` tileArrays), its section's slot the table's. */
 function cellGeometry(c: FarRoadCell): BufferGeometry {
   const g = new BufferGeometry();
-  const count = c.positions.length / 3;
-  const normals = new Int8Array(count * 3);
-  for (let i = 1; i < normals.length; i += 3) normals[i] = 127;
-  const colours = new Uint16Array(c.colors.length);
-  for (let i = 0; i < colours.length; i++) colours[i] = Math.round(Math.min(1, Math.max(0, c.colors[i]!)) * COLOUR_STEPS);
   g.setAttribute('position', new BufferAttribute(c.positions, 3));
-  g.setAttribute('normal', new BufferAttribute(normals, 3, true));
-  g.setAttribute('color', new BufferAttribute(colours, 3, true));
-  if (c.layer === FAR_CARRIAGEWAY) g.setAttribute('roadSection', new BufferAttribute(c.sections, FAR_SECTION));
+  g.setAttribute('normal', new BufferAttribute(c.normals, 3));
+  g.setAttribute('uv', new BufferAttribute(c.uvs, 2));
+  g.setAttribute('color', new BufferAttribute(c.colors, 3));
+  g.setAttribute('roadSection', new BufferAttribute(c.sections, FAR_SECTION));
   g.setIndex(new BufferAttribute(c.indices, 1));
   return g;
 }
 
-/** A tile's level made off the page (`networkFarTile.ts` farTileOf, each carriageway vertex carrying its piece's id) made the page's: every road's paint written in the table as its detail writes it (`roadPaint.set`), each vertex's section given its piece's table slot (a road's, a plate's `-2 - slot` of its node). */
-export function resolveFarPieces(level: FarLevel, doc: RoadDoc): void {
-  for (const { id: road, paint, half, lane } of level.paints) roadPaint.set(doc, road, paint, half, lane);
+/** Cells made with the pieces' own ids in their carriageways' sections (`lookOf` ids) given the table's slots, in place: a road's `id` its slot,
+ *  a plate's `-2 - node` its node's `-2 - slot` (`mesh/surfaceTiles.ts` tableSlot). The other surfaces' third number is their own (a footway's kerb). */
+export function resolveFarPieces(cells: readonly FarRoadCell[], doc: RoadDoc): void {
   const table = roadPaint.resolverOf(doc);
   const slotOf = new Map<number, number>();
   const resolve = (piece: number): number => {
     let slot = slotOf.get(piece);
     if (slot === undefined) {
-      slot = piece === -1 ? -1 : piece >= 0 ? table(roadPaint.roadSlot(doc, piece as SegmentId)) : -2 - table(roadPaint.nodeSlot(doc, (-2 - piece) as NodeId));
+      slot = piece >= 0 ? table(roadPaint.roadSlot(doc, piece as SegmentId)) : piece <= -2 ? -2 - table(roadPaint.nodeSlot(doc, (-2 - piece) as NodeId)) : piece;
       slotOf.set(piece, slot);
     }
     return slot;
   };
-  for (const c of level.cells) {
-    if (c.layer !== FAR_CARRIAGEWAY) continue;
-    for (let v = 0; v < c.pieces.length; v++) c.sections[v * FAR_SECTION + 2] = resolve(c.pieces[v]!);
+  for (const c of cells) {
+    const s = c.sections;
+    for (let at = 0; at < s.length; at += FAR_SECTION) if (s[at + 3]! <= ROAD_CODE.raised) s[at + 2] = resolve(s[at + 2]!);
   }
 }
 
-/** Who makes a tile's level off the page (`editor/offPageNetwork.ts` farTileOffPage: `networkFarTile.ts` on a job thread, nearest `at` first); null when it comes with nothing (a failure: said on the console, the tile's cells drawn by the detail where the view takes them). */
+/** The root level of the roads a network holds made here, a mesh a cell (the lab's sheets, `lab/catalog/layout.ts`): as the game draws it. */
+export function farLevelMeshes(net: Network, field: RoadReads, groundAt: (x: number, y: number) => number, cell: number, material: Material): Mesh[] {
+  const cells = farPieceCells(net, field, groundAt, cell, null, ROAD_PASS_LOOK);
+  // @rebuild Walks the whole map: a lab sheet's layout, every road of it.
+  for (const id of net.ribbons.keys()) lookOf(net, id);
+  resolveFarPieces(cells, net.doc);
+  return cells.filter((c) => c.indices.length > 0).map((c) => {
+    const mesh = new Mesh(cellGeometry(c), material);
+    mesh.name = `road-far-network-${c.key}`;
+    return mesh;
+  });
+}
+
+/** Who makes a tile's level off the page (`render/networkFarJobs.ts`: `networkFarTile.ts` on a job thread, nearest `at` first); null when it comes with nothing (a failure: said on the console, the tile's cells drawn by the detail where the view takes them). */
 export type FarTileSource = (doc: RoadDoc, tile: number, cell: number, at: readonly [number, number]) => Promise<FarLevel | null>;
 
 /** How far round the view's centre the tiles are that the opening waits for (`pending`): the view's want reach of road cells (`renderer.ts` ROAD_WANT_REACH). */
 export const FAR_NEAR_REACH = m(2_500);
+/** How far from the view's centre a tile's marks are placed (`followMarks`): past it a crossing is under a pixel at any view that shows it. */
+const MARKS_REACH = m(2_000);
+
+/** A tile's marks as landed (`FarLevel.marks`), its centre, and whether they stand in the marks' texture. */
+interface TileMarks { readonly at: readonly [number, number]; marks: readonly FarMarks[]; placed: boolean }
 
 /**
- * The whole network's far roads (see the file's comment), KEPT FOR GOOD AS THE ROADS' ROOT LEVEL (`mesh/roadResidency.ts`): a cell is
- * shown where no block draws it in detail, hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets
- * them go (`show`). Its vertices are kept small (a position, a normal of three bytes, a colour of three shorts: 21 bytes where floats
- * took 36).
- * ONE BATCH A LAYER (`GpuBatchedMesh`: a cell an instance, shown or hidden by `setVisibleAt`, culled by the frustum one by one, drawn in
- * one multi-draw): DO NOT make a mesh a cell and layer - a city of 70,000 buildings drew 378 of them at its map view (189 cells), 27% of
- * the view's 1,395 draw calls (step-70k, 2026-10-22). An edit's cells are made again in place in the batches (`refresh`).
+ * The whole network's root level (see the file's comment), KEPT FOR GOOD (`mesh/roadResidency.ts`): a cell is shown where no block draws it in
+ * detail, hidden while the detailed blocks of its square stand (`hide`), shown again when the view lets them go (`show`).
+ * ONE BATCH (`GpuBatchedMesh`: a cell an instance, shown or hidden by `setVisibleAt`, culled by the frustum one by one, drawn in one multi-draw):
+ * DO NOT make a mesh a cell - a city of 70,000 buildings drew 378 of them at its map view (189 cells), 27% of the view's 1,395 draw calls
+ * (step-70k, 2026-10-22). An edit's cells are made again in place in the batch (`refresh`).
  */
 export class NetworkFarRoads {
   readonly group = new Group();
-  private readonly materials = [farLayerMaterial(0), farLayerMaterial(1)] as const;
-  private worker: Worker | null = null;
   private asked = 0;
-  /** A request not answered yet: the opening waits for it (`pending`). */
-  private waiting = false;
   private triangleCount = 0;
   /** Each cell's triangles, by its key (`x,y` on the cells' grid): the cells of the map with roads, what the view chooses from (`roadResidency.ts`) and the probes count. */
   readonly cells = new Map<string, number>();
-  /** Each layer's batch; null until the level landed with pieces of that layer. */
-  private readonly batches: (LayerBatch | null)[] = [null, null];
-  /** Each cell's instances in the layers' batches, by its key. */
-  private readonly meshesOf = new Map<string, CellInstance[]>();
+  /** The batch; null until the level landed with pieces. */
+  private batch: CellBatch | null = null;
+  /** Each cell's instance in the batch, by its key. */
+  private readonly meshesOf = new Map<string, CellInstance>();
   /** The cells hidden (`hide`): the detailed blocks of their squares stand. Kept across the levels made: a level landing hides them again. */
   private readonly hidden = new Set<string>();
   /** The level standing: the request it answers (`asked`), its cells' side. Null: none landed. */
@@ -161,14 +140,19 @@ export class NetworkFarRoads {
   /** The tiles of the map's level asked and not landed (`requestWhole`), and of them those near the view when asked: what the opening waits for (`pending`). */
   private readonly tilesWaiting = new Set<number>();
   private readonly nearWaiting = new Set<number>();
+  /** Each tile's marks (`FarLevel.marks`), placed in the marks' texture while the view is near (`followMarks`). */
+  private readonly tileMarks = new Map<number, TileMarks>();
+  /** The document the marks were placed for. */
+  private marksDoc: RoadDoc | null = null;
 
-  constructor() {
+  /** `material`: the road material it is drawn with (`materials.ts` roadRoot, the detail's own shader). */
+  constructor(private readonly material: Material) {
     this.group.name = 'road-far-network';
   }
 
-  /** Whether the level asked is still being made where the view stands: a request made here, or a tile near the view (`FAR_NEAR_REACH`) not landed. The tiles beyond come after, nearest first. */
+  /** Whether the level asked is still being made where the view stands: a tile near the view (`FAR_NEAR_REACH`) not landed. The tiles beyond come after, nearest first. */
   get pending(): boolean {
-    return this.waiting || this.nearWaiting.size > 0;
+    return this.nearWaiting.size > 0;
   }
 
   /** Tiles of the map's level still being made, near the view or not. */
@@ -186,20 +170,21 @@ export class NetworkFarRoads {
    * (`replaceCells`), the level standing for the tiles landed. With no source, made here from the page's network (every road it holds: a
    * test's, a map with no job worker).
    */
-  requestWhole(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number, centre: { readonly x: number; readonly y: number }): void {
+  requestWhole(net: Network, field: RoadReads, groundAt: (x: number, y: number) => number, cell: number, centre: { readonly x: number; readonly y: number }): void {
     const id = ++this.asked;
     const token = net.state;
     const source = this.source;
     this.tilesWaiting.clear();
     this.nearWaiting.clear();
-    if (!source) { this.waiting = true; this.requestHere(id, net, heights, groundAt, cell, token); return; }
-    this.waiting = false;
     this.clearMeshes();
+    this.clearMarks();
     this.made = { id, cell };
     this.token = token;
     this.stale.clear();
     this.staleAll = false;
     const doc = net.doc;
+    this.marksDoc = doc;
+    if (!source) { this.place(this.madeHere(net, field, groundAt, cell, null)); return; }
     for (const tile of doc.roadTileKeys()) {
       const { i, j } = tileOfKey(tile);
       const at: readonly [number, number] = [(i + 0.5) * TILE, (j + 0.5) * TILE];
@@ -210,8 +195,11 @@ export class NetworkFarRoads {
         this.tilesWaiting.delete(tile);
         this.nearWaiting.delete(tile);
         if (!level) return;
-        resolveFarPieces(level, doc);
+        for (const { id: road, paint, half, lane } of level.paints) roadPaint.set(doc, road, paint, half, lane);
+        resolveFarPieces(level.cells, doc);
         this.replaceCells(farTileCellKeys(tile, cell), level.cells);
+        // Its marks, placed when the view is near (`followMarks`).
+        if (level.marks?.length) this.tileMarks.set(tile, { at, marks: level.marks, placed: false });
       };
       source(doc, tile, cell, at).then(landed, (error: unknown) => {
         console.error(`[roads] the far roads of tile ${tile} were not made`, error);
@@ -220,16 +208,22 @@ export class NetworkFarRoads {
     }
   }
 
-  /** The level of the roads the page's network holds, triangulated off the page. */
-  private requestHere(id: number, net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number, token: object): void {
-    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, null, pageSlots(net));
-    this.ask(id, input, transfer, (cells) => {
-      this.made = { id, cell };
-      this.token = token;
-      this.stale.clear();
-      this.staleAll = false;
-      this.place(cells);
-    });
+  /** The cells of `only` (none: every road the network holds) made here from the page's network, its roads' paint written as the detail writes it
+   *  (`lookOf`), their slots the table's. */
+  private madeHere(net: Network, field: RoadReads, groundAt: (x: number, y: number) => number, cell: number, only: ReadonlySet<string> | null): FarRoadCell[] {
+    const cells = farPieceCells(net, field, groundAt, cell, only, ROAD_PASS_LOOK);
+    const roads = new Set<SegmentId>();
+    // @rebuild Walks the whole map: the level made here whole (no job thread), every road the network holds.
+    if (only === null) for (const id of net.ribbons.keys()) roads.add(id);
+    else {
+      for (const key of only) {
+        const [i, j] = key.split(',').map(Number) as [number, number];
+        for (const id of net.segmentCells.idsMeeting([i * cell, j * cell, (i + 1) * cell, (j + 1) * cell])) roads.add(id);
+      }
+    }
+    for (const id of roads) lookOf(net, id);
+    resolveFarPieces(cells, net.doc);
+    return cells;
   }
 
   /** The network rebuilt (a world build landed, `renderer.ts`): the owner cells of the roads and junctions an edit changed are stale, made again by `refresh`; the roads held moving (`scopeOnly`) changes nothing of the map. */
@@ -247,6 +241,12 @@ export class NetworkFarRoads {
     for (const id of roads) { const s = net.doc.segment(id); if (s) { nodes.add(s.a); nodes.add(s.b); } }
     for (const id of roads) { const at = segmentOwner(net, id); if (at) this.stale.add(farCellKey(...ownerCell(at, cell))); }
     for (const id of nodes) { const at = nodeOwner(net, id); if (at) this.stale.add(farCellKey(...ownerCell(at, cell))); }
+    // The marks of the pieces changed let go: the detail places them anew (an edit is in view), and the far level's of before would come back
+    // once its blocks went.
+    const changedPieces = new Set<string>();
+    for (const id of roads) changedPieces.add(pieceName({ kind: 'segment', id }));
+    for (const id of nodes) changedPieces.add(pieceName({ kind: 'node', id }));
+    this.dropMarks(changedPieces);
     // A piece gone (its road removed) is drawn where it was until its cell is made again: the cell it stood in, from the instances standing.
     for (const r of delta.rects) {
       for (let i = Math.floor(r[0] / cell); i <= Math.floor(r[2] / cell); i++) {
@@ -256,101 +256,70 @@ export class NetworkFarRoads {
   }
 
   /** The level brought up to the roads drawn: the stale cells made again in place from the page's network, or the whole level again where the network could not say what changed. */
-  refresh(net: Network, heights: FarRoadHeights, groundAt: (x: number, y: number) => number, cell: number, centre: { readonly x: number; readonly y: number }): void {
-    if (!this.made || this.staleAll || this.made.cell !== cell) { this.requestWhole(net, heights, groundAt, cell, centre); return; }
+  refresh(net: Network, field: RoadReads, groundAt: (x: number, y: number) => number, cell: number, centre: { readonly x: number; readonly y: number }): void {
+    if (!this.made || this.staleAll || this.made.cell !== cell) { this.requestWhole(net, field, groundAt, cell, centre); return; }
     if (this.stale.size === 0) return;
     const keys = new Set(this.stale);
-    const id = ++this.asked;
-    this.waiting = true;
-    const token = net.state;
-    const { input, transfer } = farRoadInput(net, heights, groundAt, cell, keys, pageSlots(net));
-    this.ask(id, input, transfer, (cells) => {
-      this.token = token;
-      for (const key of keys) this.stale.delete(key);
-      this.replaceCells(keys, cells);
-    });
-  }
-
-  /** The worker asked for the cells of `input`; `landed` once they come (and the request is still the last). Where no worker can be made (Node: the specs that open a city), made here. */
-  private ask(id: number, input: FarRoadInput, transfer: ArrayBuffer[], landed: (cells: readonly FarRoadCell[]) => void): void {
-    const land = (cells: readonly FarRoadCell[]): void => { if (id === this.asked) { landed(cells); this.waiting = false; } };
-    const failed = (why: unknown): void => {
-      console.warn('[roads] the far roads could not be made off the page; made here', why);
-      this.worker = null;
-      if (id === this.asked) land(buildFarRoadCells(input));
-    };
-    if (typeof Worker === 'undefined') { land(buildFarRoadCells(input)); return; }
-    try {
-      const worker = this.worker ??= jobPort('roadFar');
-      worker.onmessage = (event: MessageEvent<{ id: number; cells?: FarRoadCell[]; error?: string }>) => {
-        if (event.data.id !== id) return;
-        if (event.data.cells) land(event.data.cells); else failed(event.data.error);
-      };
-      worker.onerror = (event) => failed(event.message);
-      worker.postMessage({ id, input }, transfer);
-    } catch (error) {
-      failed(error);
-    }
+    this.token = net.state;
+    this.stale.clear();
+    this.replaceCells(keys, this.madeHere(net, field, groundAt, cell, keys));
   }
 
   private shown(key: string): boolean {
     return !this.hidden.has(key);
   }
 
-  /** The whole level put in place: a batch a layer, sized for its cells. */
+  /** The whole level put in place: one batch, sized for its cells. */
   private place(cells: readonly FarRoadCell[]): void {
     this.clearMeshes();
-    for (const layer of [0, 1] as const) {
-      const mine = cells.filter((c) => (c.layer === 0 ? 0 : 1) === layer && c.indices.length > 0);
-      if (!mine.length) continue;
-      let vertices = 0, indices = 0;
-      for (const c of mine) { vertices += c.positions.length / 3; indices += c.indices.length; }
-      const batch = this.makeBatch(layer, mine.length, vertices, indices);
-      for (const c of mine) this.addCell(batch, c);
-      batch.mesh.computeBoundingSphere();
-      batch.mesh.computeBoundingBox();
-    }
+    const mine = cells.filter((c) => c.indices.length > 0);
+    if (!mine.length) return;
+    let vertices = 0, indices = 0;
+    for (const c of mine) { vertices += c.positions.length / 3; indices += c.indices.length; }
+    const batch = this.makeBatch(mine.length, vertices, indices);
+    for (const c of mine) this.addCell(batch, c);
+    batch.mesh.computeBoundingSphere();
+    batch.mesh.computeBoundingBox();
   }
 
-  /** The cells `keys` made again in place: their instances taken out of the batches, the cells made put in (a cell made with no pieces, its roads gone, stays out). */
+  /** The cells `keys` made again in place: their instances taken out of the batch, the cells made put in (a cell made with no pieces, its roads gone, stays out). */
   private replaceCells(keys: ReadonlySet<string>, cells: readonly FarRoadCell[]): void {
-    const touched = new Set<LayerBatch>();
+    let touched = false;
     for (const key of keys) {
-      for (const { batch, geometryId } of this.meshesOf.get(key) ?? []) { batch.mesh.deleteGeometry(geometryId); touched.add(batch); }
+      const was = this.meshesOf.get(key);
+      if (was && this.batch) { this.batch.mesh.deleteGeometry(was.geometryId); touched = true; }
       this.meshesOf.delete(key);
       this.triangleCount -= this.cells.get(key) ?? 0;
       this.cells.delete(key);
     }
-    for (const layer of [0, 1] as const) {
-      const mine = cells.filter((c) => (c.layer === 0 ? 0 : 1) === layer && c.indices.length > 0 && keys.has(c.key));
-      if (!mine.length) continue;
+    const mine = cells.filter((c) => c.indices.length > 0 && keys.has(c.key));
+    if (mine.length) {
       let vertices = 0, indices = 0;
       for (const c of mine) { vertices += c.positions.length / 3; indices += c.indices.length; }
-      const batch = this.batches[layer] ?? this.makeBatch(layer, mine.length, vertices, indices);
+      const batch = this.batch ?? this.makeBatch(mine.length, vertices, indices);
       ensure(batch, vertices, indices, mine.length);
       for (const c of mine) this.addCell(batch, c);
-      touched.add(batch);
+      touched = true;
     }
-    for (const batch of touched) { batch.mesh.computeBoundingSphere(); batch.mesh.computeBoundingBox(); }
+    if (touched && this.batch) { this.batch.mesh.computeBoundingSphere(); this.batch.mesh.computeBoundingBox(); }
   }
 
-  /** A layer's batch made for this many cells, vertices and indices, in the group. */
-  private makeBatch(layer: 0 | 1, instances: number, vertices: number, indices: number): LayerBatch {
-    const mesh = new GpuBatchedMesh(instances, vertices, indices, this.materials[layer]);
+  /** The batch made for this many cells, vertices and indices, in the group. */
+  private makeBatch(instances: number, vertices: number, indices: number): CellBatch {
+    const mesh = new GpuBatchedMesh(instances, vertices, indices, this.material);
     mesh.name = 'road-far-network';
-    mesh.renderOrder = layer === 0 ? 1 : 2;
     mesh.receiveShadow = true;
     mesh.matrixAutoUpdate = false;
-    // Opaque, each layer pulled over the one under it (`pullTowardEye`): no order among its cells to keep.
+    // Opaque: no order among its cells to keep.
     mesh.sortObjects = false;
     this.group.add(mesh);
-    const batch: LayerBatch = { mesh, vertices, indices, instances };
-    this.batches[layer] = batch;
+    const batch: CellBatch = { mesh, vertices, indices, instances };
+    this.batch = batch;
     return batch;
   }
 
-  /** A cell's layer into its batch, shown or hidden as the cell is. */
-  private addCell(batch: LayerBatch, c: FarRoadCell): void {
+  /** A cell into the batch, shown or hidden as the cell is. */
+  private addCell(batch: CellBatch, c: FarRoadCell): void {
     const g = cellGeometry(c);
     const geometryId = batch.mesh.addGeometry(g);
     const id = batch.mesh.addInstance(geometryId);
@@ -359,9 +328,56 @@ export class NetworkFarRoads {
     const n = c.indices.length / 3;
     this.triangleCount += n;
     this.cells.set(c.key, (this.cells.get(c.key) ?? 0) + n);
-    const list = this.meshesOf.get(c.key);
-    const instance: CellInstance = { batch, id, geometryId };
-    if (list) list.push(instance); else this.meshesOf.set(c.key, [instance]);
+    this.meshesOf.set(c.key, { id, geometryId });
+  }
+
+  /**
+   * THE FAR LEVEL'S MARKS NEAR THE VIEW (`roadMarks.ts`, a source of their own the detail's of the same piece replaces): each tile's crossings,
+   * stop lines, legends and arrows placed while its centre is within `MARKS_REACH` of (x, y), let go past it; written at once for the pieces they
+   * reach (`RoadMarks.commit` of those). DO NOT place every tile's: the texture would hold the whole map's marks, most of them under a pixel.
+   */
+  followMarks(x: number, y: number): void {
+    const doc = this.marksDoc;
+    if (!doc || this.tileMarks.size === 0) return;
+    const touched = new Set<string>();
+    for (const tile of this.tileMarks.values()) {
+      const want = Math.hypot(tile.at[0] - x, tile.at[1] - y) <= MARKS_REACH + TILE;
+      if (want === tile.placed) continue;
+      this.placeTile(doc, tile, want, touched);
+    }
+    if (touched.size) roadMarks.commit(doc, touched);
+  }
+
+  /** A tile's marks placed in the texture, or let go (`want` false); the pieces they reach added to `touched`. */
+  private placeTile(doc: RoadDoc, tile: TileMarks, want: boolean, touched: Set<string>): void {
+    for (const { source, into } of tile.marks) {
+      roadMarks.place(doc, source, want ? into : [], true);
+      for (const [piece] of into) touched.add(pieceName(piece));
+    }
+    tile.placed = want;
+  }
+
+  /** The marks of `pieces` (by `pieceName`) let go from every tile, and from the texture where placed. */
+  private dropMarks(pieces: ReadonlySet<string>): void {
+    const doc = this.marksDoc;
+    if (!doc || pieces.size === 0) return;
+    const touched = new Set<string>();
+    for (const tile of this.tileMarks.values()) {
+      const gone = tile.marks.filter((mark) => pieces.has(pieceName(mark.source)));
+      if (!gone.length) continue;
+      if (tile.placed) for (const { source, into } of gone) { roadMarks.place(doc, source, [], true); for (const [piece] of into) touched.add(pieceName(piece)); }
+      tile.marks = tile.marks.filter((mark) => !pieces.has(pieceName(mark.source)));
+    }
+    if (touched.size) roadMarks.commit(doc, touched);
+  }
+
+  /** Every tile's marks let go. */
+  private clearMarks(): void {
+    const doc = this.marksDoc;
+    const touched = new Set<string>();
+    if (doc) for (const tile of this.tileMarks.values()) if (tile.placed) this.placeTile(doc, tile, false, touched);
+    if (doc && touched.size) roadMarks.commit(doc, touched);
+    this.tileMarks.clear();
   }
 
   /** The cells drawing roads, by key (`x,y` on the cells' grid). */
@@ -382,13 +398,15 @@ export class NetworkFarRoads {
   /** A cell hidden: the detailed blocks of its square stand (a cell the view took landed, `roadResidency.ts`). */
   hide(key: string): void {
     this.hidden.add(key);
-    for (const { batch, id } of this.meshesOf.get(key) ?? []) batch.mesh.setVisibleAt(id, false);
+    const at = this.meshesOf.get(key);
+    if (at && this.batch) this.batch.mesh.setVisibleAt(at.id, false);
   }
 
   /** A cell shown: the view let its blocks go, or drew it at this level (`roadResidency.ts`). */
   show(key: string): void {
     this.hidden.delete(key);
-    for (const { batch, id } of this.meshesOf.get(key) ?? []) batch.mesh.setVisibleAt(id, true);
+    const at = this.meshesOf.get(key);
+    if (at && this.batch) this.batch.mesh.setVisibleAt(at.id, true);
   }
 
   private clearMeshes(): void {
@@ -396,7 +414,7 @@ export class NetworkFarRoads {
       this.group.remove(child);
       (child as GpuBatchedMesh).dispose();
     }
-    this.batches[0] = this.batches[1] = null;
+    this.batch = null;
     this.cells.clear();
     this.meshesOf.clear();
     this.triangleCount = 0;
@@ -410,16 +428,14 @@ export class NetworkFarRoads {
     this.stale.clear();
     this.staleAll = false;
     this.asked++;
-    this.waiting = false;
     this.tilesWaiting.clear();
     this.nearWaiting.clear();
     this.clearMeshes();
+    this.clearMarks();
+    this.marksDoc = null;
   }
 
   dispose(): void {
     this.clear();
-    this.worker?.terminate();
-    this.worker = null;
-    for (const material of this.materials) material.dispose();
   }
 }

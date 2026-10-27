@@ -992,7 +992,7 @@ export function createSceneRenderer(
   const roadStandIn = new RoadStandIn();
   world.add(roadStandIn.group);
   /** Every road of a large city at its far level from the opening's first frame, made from the network (`networkFarRoads.ts`): the fill's detailed blocks replace it when they land. */
-  const networkFar = new NetworkFarRoads();
+  const networkFar = new NetworkFarRoads(materials.roadRoot);
   world.add(networkFar.group);
   /** The roads the tool just laid (`flashRoads`: the player's road alone, never the street it meets split at the new junction), stood in once their heights are solved. */
   const pendingStandIn: SegmentId[] = [];
@@ -4038,6 +4038,8 @@ export function createSceneRenderer(
           roadLook = updateRoadLevels(blocks, roadFocus.x, roadFocus.y, roadFocus.reach, roadResidency, networkFar.cells.size ? networkFar.cells : null, FAR_ROAD_CELL);
           // The tiles the page's network must hold for these cells (`roadWindowLink.ts`): asked of it, solved off the page, stepped in below.
           roadWindow?.want(tilesWanted(roadLook));
+          // The far level's crossings and stop lines near the view (`NetworkFarRoads.followMarks`): drawn where the detail is not built yet.
+          networkFar.followMarks(roadFocus.x, roadFocus.y);
           // Cells drawn by the network's far level that it does not stand for (none made, or made before the roads changed): made again for the roads drawn, off the page.
           if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && !openingSolvePending && !networkFar.pending && networkFar.outdated()) networkFar.refresh(net, elevation, terrain.renderedHeightAt, FAR_ROAD_CELL, rig.viewport.centre);
         }

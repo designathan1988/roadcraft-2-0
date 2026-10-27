@@ -7,9 +7,7 @@ import { RoadDoc } from '@world/doc';
 import { buildRoadElevation } from '@world/elevation';
 import { Network } from '@world/network';
 import { m } from '@world/units';
-import { farRoadInput } from '@render/networkFarInput';
-import { pageSlots } from '@render/networkFarRoads';
-import { buildFarRoadCells } from '@render/networkFarRoadsBuild';
+import { farPieceCells } from '@render/networkFarPieces';
 import { CELL, pieceOfPart } from '@render/roadSurfaceEntries';
 import { SurfaceInputs } from '@render/roadSurfaceInputs';
 import { type PassLook, passDesc, passRaised, passReads, tileBundle } from '@render/roadSurfacePass';
@@ -20,7 +18,7 @@ import { passSurfaces } from '@render/roadSurfaceReads';
  * of a road is a ladder of stations across it (`mesh/stripShape.ts`), each quad as long as the stations are apart. Nothing a road is drawn with is
  * narrower than its kerb (15 cm) across, and no surface asks for stations closer than its least edge along it (`roadSurfaceReads.ts` LEAST_EDGE,
  * 0.5 m; 0.25 m on a dropped kerb): a triangle with an edge under a centimetre on the plan is a needle, two stations that should have been one.
- * The detailed strips of every road (`roads/segmentPiece.ts`, meshed by `roads/pieceMesh.ts`) and the network's far level (`networkFarRoadsBuild.ts`).
+ * The detailed strips of every road (`roads/segmentPiece.ts`, meshed by `roads/pieceMesh.ts`) and the network's root level, made of the same pieces (`networkFarPieces.ts`).
  */
 
 /** The shortest edge on the plan a road's triangle may have. */
@@ -80,19 +78,21 @@ describe('the triangles of a road\'s strips', () => {
   }
 });
 
-describe('the triangles of the network\'s far level', () => {
+describe('the triangles of the network\'s root level', () => {
   for (const [name, make] of DOCS) {
-    it(`lay no needle in ${name}: every triangle of every block's layers has its edges a centimetre or more on the plan`, () => {
+    it(`lay no needle in ${name}: every top face of every block has its edges a centimetre or more on the plan`, () => {
       const net = new Network(make());
       net.rebuild();
-      const cells = buildFarRoadCells(farRoadInput(net, buildRoadElevation(net, ground), ground, CELL, null, pageSlots(net)).input);
+      const cells = farPieceCells(net, buildRoadElevation(net, ground), ground, CELL, null, look);
       let triangles = 0;
       const needles: string[] = [];
       for (const cell of cells) {
         for (let t = 0; t + 2 < cell.indices.length; t += 3) {
+          // The top faces (a wall's normal lies flat: a kerb's face has no width on the plan).
+          if (Math.abs(cell.normals[cell.indices[t]! * 3 + 1]!) < 0.5) continue;
           triangles++;
           const shortest = shortestEdge(cell.positions, cell.indices[t]! * 3, cell.indices[t + 1]! * 3, cell.indices[t + 2]! * 3);
-          if (shortest < LEAST) needles.push(`block ${cell.key} layer ${cell.layer}: ${shortest.toFixed(4)}`);
+          if (shortest < LEAST) needles.push(`block ${cell.key}: ${shortest.toFixed(4)} at (${cell.positions[cell.indices[t]! * 3]!.toFixed(2)}, ${(-cell.positions[cell.indices[t]! * 3 + 2]!).toFixed(2)})`);
         }
       }
       expect(triangles).toBeGreaterThan(500);

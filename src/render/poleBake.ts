@@ -81,8 +81,11 @@ export const emptyBox = (): number[] => [Infinity, Infinity, Infinity, -Infinity
 export function framePole(net: Network, groundAt: (x: number, y: number) => number, source: PoleSource,
   pole: UtilityPole, kept: { x: number; y: number } | null | undefined): { readonly top: number; readonly kerb: { x: number; y: number } | null; readonly frame: PoleArms } {
   const top = groundAt(pole.x, pole.y) + POLE_HEIGHT;
-  // Towards the carriageway: the nearest kerb, else the nearest road's middle line in the document, or null off the streets.
-  const kerb = kept !== undefined ? kept : kerbward(net, { x: pole.x, y: pole.y }, m(6)) ?? roadward(net.doc, pole.x, pole.y, ROADWARD_REACH);
+  // Towards the carriageway: the nearest kerb the network holds, kept to the side of the nearest road's middle line in the document (every road
+  // of the map); that line where the kerb is not held or lies the other way; null off the streets. DO NOT trust the network's kerb alone: it
+  // holds the roads near the view (`networkWindow.ts`), and a pole framed while the street before it was not held found the kerb of the street
+  // behind it, its arm and lamp turned to the houses (the owner's photos, 2026-10-27). A way kept null (read off the streets) is read again.
+  const kerb = kept ?? towardStreet(net, pole.x, pole.y);
   // A pole with no wire yet stands square to its street.
   const frame = poleArmsAt(pole, source.spansAt(pole.id), source.poles, () => kerb ?? { x: 0, y: 1 });
   return { top, kerb, frame };
@@ -90,6 +93,14 @@ export function framePole(net: Network, groundAt: (x: number, y: number) => numb
 
 /** How far from a road's middle line a pole is taken to stand by that road (`roadward`): a wide road's half and its footway. */
 const ROADWARD_REACH = m(30);
+
+/** A pole's way to its street (`framePole`): the network's nearest kerb where it lies on the side of the document's nearest road, else that road's way. */
+function towardStreet(net: Network, x: number, y: number): { x: number; y: number } | null {
+  const road = roadward(net.doc, x, y, ROADWARD_REACH);
+  const kerb = kerbward(net, { x, y }, m(6));
+  if (!kerb) return road;
+  return !road || kerb.x * road.x + kerb.y * road.y >= 0 ? kerb : road;
+}
 
 /**
  * The way from a point to the nearest road's middle line in the document within `reach` (every road of the map, `RoadDoc.tileRoads`), or null.
