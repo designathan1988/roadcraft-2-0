@@ -29,7 +29,12 @@ export function transferCopy<T>(value: T, transfer: Transferable[], depth = 0): 
     for (const [k, v] of value) out.set(k, transferCopy(v, transfer, depth + 1));
     return out as unknown as T;
   }
-  if (Array.isArray(value)) return value.map((v) => transferCopy(v, transfer, depth + 1)) as unknown as T;
+  if (Array.isArray(value)) {
+    // A list of plain values (numbers, strings, nulls) copied whole: DO NOT walk it a call an element (a cell's lists of numbers, 935 ms of ten seconds).
+    let plain = true;
+    for (let i = 0; i < value.length; i++) { const v: unknown = value[i]; if (v !== null && typeof v === 'object') { plain = false; break; } }
+    return (plain ? value.slice() : value.map((v) => transferCopy(v, transfer, depth + 1))) as unknown as T;
+  }
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(value)) out[key] = transferCopy((value as Record<string, unknown>)[key], transfer, depth + 1);
   return out as T;
@@ -79,6 +84,22 @@ export class DerivedWriterLane {
   post(prefix: string, entries: readonly [string, unknown][], transfer: Transferable[], bytes: number): boolean {
     const release = this.budget.tryTake(bytes);
     if (!release) return false;
+    this.queue(prefix, entries, transfer, release);
+    return true;
+  }
+
+  /**
+   * `entries` kept under `prefix` whatever the writes in flight: posted once the ceiling has room for them (`WriteBudget.take`), their copies
+   * held on the page meanwhile. For what must not be lost to a busy writer (a city's cells, `cellPool.ts`): DO NOT drop them as `post` does - the
+   * 10 km city's cells made again were posted faster than the writer committed them, most went unkept, and every opening made them again
+   * (5,906 kept and climbing at the next one, 2026-10-27).
+   */
+  async keep(prefix: string, entries: readonly [string, unknown][], transfer: Transferable[], bytes: number): Promise<void> {
+    this.queue(prefix, entries, transfer, await this.budget.take(bytes));
+  }
+
+  /** Writes put in this task's batch for `prefix` (`flush`), `release` called on their commit. */
+  private queue(prefix: string, entries: readonly [string, unknown][], transfer: Transferable[], release: () => void): void {
     let batch = this.batches.get(prefix);
     if (!batch) {
       this.batches.set(prefix, batch = { entries: [], transfer: [], releases: [] });
@@ -87,7 +108,6 @@ export class DerivedWriterLane {
     batch.entries.push(...entries);
     batch.transfer.push(...transfer);
     batch.releases.push(release);
-    return true;
   }
 
   /** A prefix's writes of this task sent as one (`post`), answered on their commit. */

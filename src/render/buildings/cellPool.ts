@@ -39,13 +39,13 @@ export interface SliceStore {
 }
 
 /** Where the cells' results and slices are kept: the store's entries of these keys under a prefix, by key; a value kept under its whole key, its
- *  arrays copied now (they are the layer's after), false when it is not kept (made again next time). */
+ *  arrays copied now (they are the layer's after), false when it cannot be kept (the store not open: made again next time). */
 interface KeptStore {
   read<T>(prefix: string, keys: readonly string[]): Promise<Map<string, T>>;
   keep(key: string, value: unknown): boolean;
 }
 
-/** Bytes of writes handed to the cells' writer and not committed: past it a result is not kept (made again next time, `DerivedWriterLane.post`). */
+/** Bytes of writes handed to the cells' writer and not committed: past it a result waits on the page for room (`DerivedWriterLane.keep`), never dropped. */
 const KEPT_WRITES_BYTES = 96 * 2 ** 20;
 
 /**
@@ -63,7 +63,8 @@ function keptStore(workers: boolean): KeptStore {
     keep(key, value) {
       const transfer: Transferable[] = [];
       const copy = transferCopy(value, transfer);
-      return lane.post('', [[key, copy]], transfer, bytesOf(copy));
+      void lane.keep('', [[key, copy]], transfer, bytesOf(copy));
+      return true;
     },
   };
 }
