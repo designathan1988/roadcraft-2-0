@@ -85,9 +85,9 @@ function reach(entry: string): Set<string> {
 describe('the road tiles kept for a later session', () => {
   it('are handed to the writer worker, not copied on the page, once their blocks are merged', () => {
     const renderer = read('src/render/renderer.ts');
-    const keep = renderer.slice(renderer.indexOf('keep: (key, bundle) =>'), renderer.indexOf('keep: (key, bundle) =>') + 900);
-    // Through the writer's lane, its buffers handed over (`DerivedWriterLane`, under its ceiling of bytes in flight).
-    expect(keep).toMatch(/tileWrites\.post\(tilesPrefix, \[\[key, bundle\]\], buffers, /);
+    const keep = renderer.slice(renderer.indexOf('keep: (key, bundle) =>'), renderer.indexOf('keep: (key, bundle) =>') + 1600);
+    // Through the writer's lane, its buffers handed over (`DerivedWriterLane`, waiting for room under its ceiling of bytes in flight: `keep`, never dropped as `post` drops them).
+    expect(keep).toMatch(/tileWrites\.keep\(tilesPrefix, \[\[key, bundle\]\], list, /);
     const surfaces = read('src/render/roadSurfaces.ts');
     expect(surfaces.indexOf('reuse?.keep?.(')).toBeGreaterThan(surfaces.indexOf('mergeMs +='));
   });

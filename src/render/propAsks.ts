@@ -1,7 +1,7 @@
-import type { ChangeJournal, ChangeRect } from '@world/changes';
+import type { ChangeJournal, ChangeKind, ChangeRect } from '@world/changes';
 import { JournalCursor } from '@world/derived';
 import type { CellKey, ViewCells } from '@world/viewCells';
-import type { PropLayerSpec, PropPlacement } from './propCells';
+import type { Pack } from './cellInstances';
 
 /**
  * THE PLACEMENTS A PROP LAYER ASKS OFF THE PAGE (`PropLayerSpec.ask`), by their rectangle (a near cell's; a far block's, which both far classes
@@ -9,6 +9,23 @@ import type { PropLayerSpec, PropPlacement } from './propCells';
  * reached let go (`follow`: its answer, read before or after the change, never taken), asked again. A cell is derived only once its placement came
  * (`ready`). A layer with no `ask` places on the page: every cell ready, its placing made when derived.
  */
+
+/** The things a layer stands about a rectangle (at least every one whose pose stands in it), by kind, poses in `YAW_POSE`. */
+export interface PropPlacement {
+  readonly packs: ReadonlyMap<number, Pack>;
+  /** Whether any of them changes with the city's hour (a plant still growing). */
+  readonly growing: boolean;
+}
+
+/** What of a layer (`propCells.ts` PropLayerSpec) its asks read: its name, the diary's kinds its placing reads and how far past a change, its placing on the page and off it. */
+export interface PropAskSpec {
+  readonly name: string;
+  readonly changes: readonly ChangeKind[];
+  readonly pad: number;
+  place(rect: ChangeRect): PropPlacement;
+  ask?(rect: ChangeRect): Promise<PropPlacement> | null;
+  arrived?(): void;
+}
 
 /** A cache a placement was asked for (a near cell's, or a far block's of one class). */
 type Asker = Pick<ViewCells<unknown>, 'wants' | 'has' | 'rectOf'>;
@@ -30,7 +47,7 @@ export interface PropAsks {
 
 const rectKey = (r: ChangeRect): string => `${r[0]},${r[1]},${r[2]},${r[3]}`;
 
-export function createPropAsks(spec: Pick<PropLayerSpec, 'name' | 'changes' | 'pad' | 'place' | 'ask' | 'arrived'>): PropAsks {
+export function createPropAsks(spec: PropAskSpec): PropAsks {
   const asked = new Map<string, Asked>();
   const cursor = spec.ask ? new JournalCursor(spec.changes) : null;
   return {

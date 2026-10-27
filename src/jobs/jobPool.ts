@@ -20,6 +20,13 @@ const KEPT_CLEAR: readonly JobService[] = ['save', 'derivedWriter'];
 /** Lanes whose messages hold all they read (no shared buffer the job keeps reading: `roadTilePool.ts` hands each share its roads, the ground asked back by `need`), served on the desktop by the long workers of the job processes, outside the page's cage. DO NOT keep the road tiles to the page's short workers there: the lanes were `laneWorkers` of them, ONE on the desktop, and a large city's opening waited 5.6 s on that one worker for its road surfaces while six job processes stood idle (2026-10-21). */
 /** And every lane whose messages hold what they read (no buffer of the page's memory read live, no store of the page's origin): the roads' blocks, their far levels and the network's far roads, the simulation's lots' bays and conflict pairs (`main.ts` simLanes), the plates' land (`flatGround`: its relief and its square), the plates' ecology, the terrain's light, the fractures, the people's levels. The page keeps the citizens' bake (`citizenBake`: it fetches the bodies from the page's assets by their path), the save and the derived cache's writer (its IndexedDB), the ground's shapes and pads (`groundShape`: the buildings' table rows by reference, a whole table copied to cross) and the lanes that read the shared ground (`roadStations`, `landStroke`). DO NOT leave them to the page's short side: a 10 km city's opening queued 155 of their messages on its one lane worker while 22 cores stood idle (2026-10-26). */
 const PROCESS_LANES: readonly JobService[] = ['roadTiles', 'roadCoarse', 'roadFar', 'bays', 'conflicts', 'flatGround', 'ecology', 'terrainLight', 'fracture', 'peopleLod'];
+/**
+ * Lanes of the job processes that keep their workers to themselves (no other kind's lane there, `Host.alone`): the road tiles, what a large
+ * city's opening waits for, a share of tiles a message. DO NOT put them beside the other kinds' lanes: a worker runs its messages in turn, and a
+ * share waited behind a batch of the traffic's bays or conflicts, of the plates' land or of the people's levels - the 10 km city's 29 tiles
+ * took 21.9 s, their workers silent 10 s, while 8 workers of the job processes hosted no lane (2026-10-27).
+ */
+const ALONE: readonly JobService[] = ['roadTiles'];
 /** Whether `service`'s lanes go to the job processes' workers (`PROCESS_LANES`): on the desktop, with a long side of more than one. */
 const inProcesses = (service: JobService): boolean => PROCESS_LANES.includes(service) && system.makeWorker !== null && longWorkers() > 1;
 const keptClear = (host: Host): boolean => KEPT_CLEAR.some((service) => host.services.has(service));
@@ -255,6 +262,8 @@ interface Host {
   firstWork: number;
   /** Told when it fails: the lanes it serves for another thread (`jobChannel`), whose ports say nothing of it. */
   readonly channelLost: (() => void)[];
+  /** It hosts the lanes of a kind that keeps its workers to itself (`ALONE`): no other kind's lane is put there. */
+  alone: boolean;
 }
 
 /** The pool of this thread: its workers (made as work waits, `grow`), its lanes by port, its queue and the point the view looks at. */
@@ -337,7 +346,7 @@ function grow(long: boolean): Host | null {
   if (made === null && pageWorkers() >= pageRoomWorkers()) return null;
   const worker = made ?? new Worker(new URL('../job.worker.ts', import.meta.url), { type: 'module' });
   system.setup?.(worker);
-  const host: Host = { worker, long, inPage: made === null, freeSince: NaN, ports: 0, services: new Map(), queuePorts: new Map(), job: null, failed: false, laneWork: 0, firstWork: 0, channelLost: [] };
+  const host: Host = { worker, long, inPage: made === null, freeSince: NaN, ports: 0, services: new Map(), queuePorts: new Map(), job: null, failed: false, laneWork: 0, firstWork: 0, channelLost: [], alone: false };
   worker.onmessage = (event: MessageEvent<FromJob>) => {
     const port = system.ports.get(event.data.port);
     if (port) {
@@ -658,12 +667,15 @@ function place(service: JobService): Host {
   const long = LONG_RUNNING.includes(service) || inProcesses(service);
   // A lane of the job processes' goes to the workers that host them once they are as many as they may be (`processLaneHosts`).
   const processLane = inProcesses(service);
-  const laneHosts = processLane ? system.workers.filter((w) => w.long && hostsProcessLane(w)).length : 0;
-  const hostsFull = processLane && laneHosts >= processLaneHosts();
+  // A kind that keeps its workers to itself (`ALONE`): a worker with no other kind's lane, and none of its workers counted among the others' hosts.
+  const alone = processLane && ALONE.includes(service);
+  const laneHosts = processLane ? system.workers.filter((w) => w.long && !w.alone && hostsProcessLane(w)).length : 0;
+  const hostsFull = processLane && !alone && laneHosts >= processLaneHosts();
   let best: Host | null = null;
   let bestScore = Infinity;
   for (const w of system.workers) {
     if (w.long !== long) continue;
+    if (alone ? [...w.services.keys()].some((kind) => kind !== service) : w.alone) continue;
     if (hostsFull && !hostsProcessLane(w)) continue;
     // Lanes of a kind on different workers, then the least loaded; the kept-clear services' worker kept to them, on a worker of their own where there is one.
     // The kept-clear lanes together on their worker (never a worker each: the pool's workers are the jobs').
@@ -680,6 +692,8 @@ function place(service: JobService): Host {
   // A pool of one worker: the two sides share it.
   if (!best) best = system.workers.reduce<Host | null>((a, w) => (a === null || w.ports < a.ports ? w : a), null);
   if (!best) throw new Error('no job worker could be made');
+  // Kept to its kind where it had a worker of its own (none left: it shares one, as before).
+  if (alone && [...best.services.keys()].every((kind) => kind === service)) best.alone = true;
   return best;
 }
 
@@ -757,6 +771,8 @@ class JobPort {
     this.host.ports--;
     const left = (this.host.services.get(this.service) ?? 1) - 1;
     if (left > 0) this.host.services.set(this.service, left); else this.host.services.delete(this.service);
+    // Its last lane gone: free for any kind's again.
+    if (this.host.services.size === 0) this.host.alone = false;
     // Its worker counted free now, as an answer that empties it does (`answered`): the waiting jobs given out (JOB-16: they waited for another job's answer or a new one).
     if (freed) dispatch();
     retireIdle();

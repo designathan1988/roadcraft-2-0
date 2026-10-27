@@ -213,6 +213,19 @@ describe('the job system', () => {
     setJobWorkerMaker(null);
   });
 
+  it('keeps the road tiles lanes on workers of their own in the job processes, no lane of another kind beside them', async () => {
+    const { jobPort, setJobWorkerMaker } = await import('@/jobs/jobPool');
+    setJobWorkerMaker((long) => (long ? new FakeWorker() as unknown as Worker : null), 12);
+    // The other kinds' lanes first, on the workers they take.
+    const others = ['bays', 'conflicts', 'flatGround', 'peopleLod', 'roadCoarse', 'terrainLight'].map((kind) => hostOf(jobPort(kind as never)));
+    const tiles = [0, 1, 2].map(() => hostOf(jobPort('roadTiles')));
+    for (const host of tiles) expect(others).not.toContain(host);
+    expect(new Set(tiles).size).toBe(3);
+    // And a lane of another kind made after them goes elsewhere.
+    expect(tiles).not.toContain(hostOf(jobPort('ecology')));
+    setJobWorkerMaker(null);
+  });
+
   it('gives no queued job to the worker of a lane that goes first, even idle between its messages, while another can take it', async () => {
     const { jobPort, laneFirst, submitJob } = await import('@/jobs/jobPool');
     const tiles = hostOf(jobPort('roadTiles'));

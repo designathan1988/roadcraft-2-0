@@ -27,7 +27,7 @@ import { createFarBands, showLadder, type Banded, type FarLadder, type FarRung }
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
 import { PICTURE_PX, type PlantImpostors } from './plantImpostors';
 import { castBySize } from './shadowCasters';
-import { createPropAsks } from './propAsks';
+import { type PropPlacement, createPropAsks } from './propAsks';
 
 /**
  * THE PROPS HELD ROUND THE VIEW, NOT FOR THE MAP: the gardens' plants, the street furniture and its plants (`gardens.ts`,
@@ -136,12 +136,8 @@ function nearSquareOf(v: PropView, largest: number): PropSquare {
   return { cx, cy, k: reach < 0 ? -1 : Math.min(MOST_NEAR, Math.ceil(reach / PROP_CELL)) };
 }
 
-/** The things a layer stands about a rectangle (at least every one whose pose stands in it), by kind, poses in `YAW_POSE`. */
-export interface PropPlacement {
-  readonly packs: ReadonlyMap<number, Pack>;
-  /** Whether any of them changes with the city's hour (a plant still growing). */
-  readonly growing: boolean;
-}
+// What a layer stands about a rectangle (`propAsks.ts`, where its asks off the page are kept).
+export type { PropPlacement } from './propAsks';
 
 export interface PropLayerSpec {
   readonly name: string;

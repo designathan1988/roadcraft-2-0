@@ -21,7 +21,8 @@ describe("the simulation's work on the page's job pool", () => {
 
   it('has as many lanes as the pool has workers for other kinds: one on a machine of four threads', () => {
     const main = readFileSync(join(root, 'src/main.ts'), 'utf8');
-    expect(main).toMatch(/Array\.from\(\{ length: jobLanes\(4\) \}, \(\) => jobChannel\(service, \(\) => sim\.laneLost\(service\)\)\)/);
+    // By its service (`jobLanes(4, service)`): the bays and the pairs are lanes of the job processes on the desktop (`PROCESS_LANES`, 2026-10-26).
+    expect(main).toMatch(/Array\.from\(\{ length: jobLanes\(4, service\) \}, \(\) => jobChannel\(service, \(\) => sim\.laneLost\(service\)\)\)/);
   });
 
   it.each([[4, 1], [6, 2], [24, 2]])('a machine of %i threads gives the simulation %i lanes each for bays and pairs', async (cores, lanes) => {
