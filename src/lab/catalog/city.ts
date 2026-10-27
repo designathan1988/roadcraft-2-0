@@ -276,6 +276,7 @@ export function cityCounts(counts: Map<string, CountEntry>, seen: SceneSeen): vo
   const { doc, sim, net } = probe();
   const records = new Map<string, number>(), drawn = new Map<string, number>(), plants = new Map<string, number>();
   const bump = (map: Map<string, number>, key: string): void => { map.set(key, (map.get(key) ?? 0) + 1); };
+  // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
   for (const item of doc.landscape.values()) {
     bump(records, item.kind);
     const furniture = furnitureOf(net, item);

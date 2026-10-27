@@ -150,6 +150,7 @@ export async function catalogueExtent(zoom: number, elevation: number): Promise<
   const { doc } = probe();
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const take = (x: number, y: number): void => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); };
+  // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
   for (const node of doc.nodes.values()) take(node.x, node.y);
   for (const id of doc.buildings.idList()) { const b = doc.buildings.get(id); if (b) { const r = buildingBounds(b); take(r.minX, r.minY); take(r.maxX, r.maxY); } }
   catalogueView((minX + maxX) / 2, (minY + maxY) / 2, zoom, 0, elevation);

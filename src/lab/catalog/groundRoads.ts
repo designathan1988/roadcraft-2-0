@@ -115,6 +115,7 @@ export async function groundRoadItems(add: Add): Promise<void> {
     const roads = await surfacesOf(net, materials, terrain.vergeMaterial, footprints);
     const elevation = buildRoadElevation(net, () => 0);
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
     for (const n of doc.nodes.values()) { x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y); }
     const plate = shapedPlate(elevation);
     // The terrain cut along the roads' footprints, as the plate is (`terrain.ts` setSeams): the plate centred on the origin, so its frame is the world's.

@@ -206,6 +206,7 @@ function* zoneGridSteps(doc: RoadDoc, net: Network): Generator<void, ZoneGrid> {
     readonly cellOver: (side: 1 | -1, column: number, row: number, sa: number, sb: number) => ZoneCell | null;
   }
   const streets: { id: SegmentId; street: Street }[] = [];
+  // @rebuild Walks the whole map: the whole grid at once (the specs', a new map).
   const ids = [...doc.segments.keys()].sort((a, b) => a - b);
   for (const segId of ids) {
     const seg = doc.requireSegment(segId);

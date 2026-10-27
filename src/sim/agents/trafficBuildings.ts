@@ -191,6 +191,7 @@ export function docBuildings(doc: RoadDoc): TrafficBuildings {
       return b ? trafficBuilding(b) : undefined;
     },
     *all() {
+      // @rebuild Walks the whole map: the map handed to the simulation whole when it opens.
       for (const b of doc.buildings.all()) yield trafficBuilding(b);
     },
     ids: () => doc.buildings.idList(),
@@ -706,7 +707,9 @@ export function trafficMapOf(doc: RoadDoc): TrafficMap {
   return {
     doc: {
       version: 1, unit: METERS_PER_UNIT,
+      // @rebuild Walks the whole map: the map handed to the simulation whole when it opens.
       nodes: [...doc.nodes.values()].map(savedNode),
+      // @rebuild Walks the whole map: the map handed to the simulation whole when it opens.
       segments: [...doc.segments.values()].map(savedSegment),
       ...(hasTransit(doc.transit) ? { transit: doc.transit } : {}),
     },

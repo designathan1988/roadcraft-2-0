@@ -65,6 +65,7 @@ const MAIN_CELL = m(50);
 function mainRoadsNear(doc: RoadDoc): (p: Vec2, reach: number) => boolean {
   const main = new Set(['avenue', 'urban', 'boulevard'].map((id) => ROAD_TYPES.findIndex((t) => t.id === id)));
   const cells = new Map<string, [Vec2, Vec2][]>();
+  // @rebuild Walks the whole map: the generator lays the whole city, once.
   for (const s of doc.segments.values()) {
     if (!main.has(s.type)) continue;
     const a = doc.node(s.a), b = doc.node(s.b);

@@ -32,6 +32,7 @@ const CITY_FOOTWAY = m(3);
 /** The generated avenues' median, planted (a canteiro of 2 m: a tree pit with a kerb each side). */
 const CITY_MEDIAN = m(2);
 export function widenCityFootways(doc: RoadDoc): void {
+  // @rebuild Walks the whole map: the generator lays the whole city, once.
   for (const s of [...doc.segments.values()]) {
     const rt = roadProfile(s.type, s.lanes, s.direction, s.section, s.parking);
     if (rt.id === 'highway' || rt.id === 'ramp') continue;
@@ -52,11 +53,14 @@ export function greenCity(doc: RoadDoc, net: Network, seed: number): { squares: 
   }
   if (net.revision !== doc.revision) net.rebuild();
   // The power lines first (their poles lit), the furniture round them.
+  // @rebuild Walks the whole map: the generator lays the whole city, once.
   const power = layPowerLines(doc, net, doc.segments.keys()) > 0;
+  // @rebuild Walks the whole map: the generator lays the whole city, once.
   const pieces = furnitureFor(net, doc.segments.keys(), 'complete', doc.landscape.values(), power, false);
   // DO NOT add them one by one: 11,000 entries told every reader of the landscaping that everything changed.
   doc.addLandscapeMany(pieces.map((piece) => ({ kind: piece.kind, at: piece.at })));
   // Every street named (V8).
+  // @rebuild Walks the whole map: the generator lays the whole city, once.
   doc.addLandscapeMany(nameFor(net, doc.segments.keys()).map((name) => ({ kind: 'streetname' as const, at: name.at, extra: { text: name.text } })));
   return { squares: squares.length, pieces: pieces.length };
 }

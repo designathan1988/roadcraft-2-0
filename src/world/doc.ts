@@ -2982,6 +2982,7 @@ export class RoadDoc {
       doc.requireNode(b).incident.push(id);
       doc.segIds.reserve(s.id);
     }
+    // @rebuild Walks the whole map: a map read whole.
     for (const [id, node] of doc.nodes) if (node.incident.length === 0) doc.loose.add(id);
     // Crossings and the rest last: they name segments (`finishNode`).
     for (const n of data.nodes) {

@@ -115,6 +115,7 @@ export function streetFurniture(net: Network): FurnitureItem[] {
   // The landings filed once for every item (`crossingAccessTester`).
   const onAccess = crossingAccessTester(net, crossingAccesses(net));
   const items: FurnitureItem[] = [];
+  // @rebuild Walks the whole map: every item of the map at once (the specs'); the layers place a cell at a time.
   for (const placed of net.doc.landscape.values()) {
     const item = furnitureOf(net, placed, onAccess);
     if (item) items.push(item);

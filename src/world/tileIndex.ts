@@ -145,7 +145,9 @@ export class TileIndex {
   private fileAll(): void {
     this.nodeFiling.clear();
     this.segmentFiling.clear();
+    // @rebuild Walks the whole map: the index filed whole again (a map put in place).
     for (const id of this.doc.nodes.keys()) this.fileNode(id);
+    // @rebuild Walks the whole map: the index filed whole again (a map put in place).
     for (const id of this.doc.segments.keys()) this.fileSegment(id);
   }
 }

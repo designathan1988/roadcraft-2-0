@@ -90,6 +90,7 @@ export async function propLadderFrames(kinds: readonly LandscapeKind[], referenc
     for (const distance of DISTANCES) {
       list.forEach((k, i) => {
         const along = EYE.x + distance + i * m(2.5);
+        // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
         const snap = snapLandscape(net, doc.landscape.values(), k, { x: along, y: EYE.y }, m(30));
         if (!snap.ok) return;
         doc.addLandscape(k, snap.at);

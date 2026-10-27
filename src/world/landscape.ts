@@ -245,6 +245,7 @@ export function crossingAccesses(net: Network): CrossingAccess[] {
 }
 function crossingAccessesNow(net: Network): CrossingAccess[] {
   // The nodes the network holds whole (`Network.scope`: the page's holds the tiles near the view): a node not held has no crossing here.
+  // @rebuild Walks the whole map: a network of the whole map (no window): every node of it.
   if (net.scope === null) return crossingAccessesAt(net, net.doc.nodes.keys());
   const nodes = new Set<NodeId>();
   for (const id of net.scope) { const seg = net.doc.segment(id); if (seg) { nodes.add(seg.a); nodes.add(seg.b); } }

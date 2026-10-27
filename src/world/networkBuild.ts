@@ -429,7 +429,9 @@ export class NetworkBuild {
       // The whole map may be another's (a map opened): the roads held found again over it (`Network.scopeOf`).
       if (this.net.scope && this.net.scopeOf) (this.net as { scope: ReadonlySet<SegmentId> | null }).scope = this.net.scopeOf();
       // In increasing id order: a build from nothing files in one order whatever order the document holds them in (no reader depends on it).
+      // @rebuild Walks the whole map: the network built whole (a map put in place, a change the diary cannot place).
       for (const id of [...new Set([...this.net.scope ?? doc.segments.keys(), ...this.segmentSource.keys()])].sort((p, q) => p - q)) candSegs.add(id);
+      // @rebuild Walks the whole map: the network built whole (a map put in place, a change the diary cannot place).
       for (const id of [...new Set([...this.net.scope ? [] : doc.nodes.keys(), ...this.nodeSource.keys()])].sort((p, q) => p - q)) candNodes.add(id);
     } else {
       // A node moved moves its roads.

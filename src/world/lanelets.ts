@@ -542,6 +542,7 @@ export class LaneletGraph {
   }
 
   private *buildLinks(doc: RoadDoc, net: Network, previous: Map<string, Lanelet[]>, next: Map<string, Lanelet[]>): Generator<void, void, void> {
+    // @rebuild Walks the whole map: the lane graph built whole (no window).
     const ids = [...this.scope ?? doc.segments.keys()].filter((id) => doc.segment(id)).sort((a, b) => a - b);
 
     for (const segId of ids) {

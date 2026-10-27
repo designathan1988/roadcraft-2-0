@@ -213,6 +213,7 @@ const LEGEND_GAP = m(1.5);
 /** What a junction's rule paints on each leg before its stop line (MBST vol. IV): "PARE" */
 export function approachLegends(net: Network, styleId: MarkingStyleId): StrokeSpec[] {
   const out: StrokeSpec[] = [];
+  // @rebuild Walks the whole map: the whole map's paint at once (the specs'); the surfaces paint a junction at a time.
   for (const node of net.doc.nodes.keys()) approachLegendsAt(net, node, styleId, out);
   return out;
 }
@@ -405,6 +406,7 @@ export function junctionDetail(net: Network): { stops: Bar[]; zebras: Bar[] } {
   const zebras: Bar[] = [];
   // In id order: the network's junctions are in the order its rebuilds filed them.
   for (const node of [...net.junctions.keys()].sort((p, q) => p - q)) junctionDetailAt(net, node, stops, zebras);
+  // @rebuild Walks the whole map: the whole map's paint at once (the specs'); the surfaces paint a junction at a time.
   for (const node of net.doc.nodes.keys()) midBlockDetailAt(net, node, stops, zebras);
   return { stops, zebras };
 }

@@ -4,8 +4,6 @@ import { carriesPedestrians } from '@world/pedestrianAccess';
 import { m } from '@world/units';
 import type { NodeId, PoleId, SegmentId } from '@world/ids';
 import type { Vec2 } from '@core/vec2';
-import { joinLineEnds } from '@world/lineEnds';
-import { MAX_POLE_SPACING } from '@world/utilities';
 import { type PoleRunPlan, commitPoleRunPoles, planPoleRun, poleRunPlanner } from '../poles';
 
 /** THE POWER LINE OF A NEW STREET */
@@ -38,8 +36,6 @@ function* layPowerLinesSteps(doc: RoadDoc, net: Network, segments: Iterable<Segm
     // One coming in and one going out: the same side of the street.
     if (other.leaving !== leaving && other.pole !== pole && doc.node(node)?.incident.length === 2) doc.addPoleSpan(other.pole, pole);
   };
-  /** Where the runs were laid: their ends carried across the junctions there (`joinLineEnds`). */
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const id of ids) {
     if (++seen % STREETS_A_STEP === 0) yield;
     const segment = doc.segment(id), ribbon = net.ribbons.get(id);
@@ -64,13 +60,10 @@ function* layPowerLinesSteps(doc: RoadDoc, net: Network, segments: Iterable<Segm
     const poles = commitPoleRunPoles(doc, planRun(doc, from, at(s1)));
     if (!poles) continue;
     built++;
-    for (const p of [from, at(s1)]) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); }
     // A run cut short by a buried stretch does not reach its node: no span across the bore.
     if (open[0] === 0) join(segment.a, poles[0]!, true);
     if (open[1] === 1) join(segment.b, poles[poles.length - 1]!, false);
   }
-  // The lines carried on across the junctions they stop at, to the lines beyond (theirs or the streets' already there).
-  if (built) joinLineEnds(doc, doc.poleIdsIn([x0 - MAX_POLE_SPACING, y0 - MAX_POLE_SPACING, x1 + MAX_POLE_SPACING, y1 + MAX_POLE_SPACING]) as PoleId[]);
   return built;
 }
 

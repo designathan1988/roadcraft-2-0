@@ -38,6 +38,14 @@ const MAKE_PER_LOOK = 8;
 const OPEN_CARS = 2;
 const OPEN_PEOPLE = 2;
 const OPEN_TICKS = 600;
+/**
+ * How far round the view people on foot are made (`focus`): their number by its streets, their doors, ends and spots in it. DO NOT spread
+ * them over the micro window (750 m): the 10 km city's thousand walkers stood a metre or two each 100 m of footway, five in a street's
+ * view (the player, 2026-10-27: "as pessoas não aparecem na rua"); the window's traffic stays the window's.
+ */
+const PEOPLE_FOCUS = m(300);
+/** The grid the focus stands on (`focus`): a road piece. */
+const FOCUS_STEP = m(100);
 
 /** Share of the bays with a car in them. */
 const PARKED = 0.62;
@@ -389,17 +397,31 @@ export class AmbientWorld {
     return this.ends;
   }
 
-  /** The micro window's square, where the window's people live (`SimWorld.useMeso`); null: the whole map's. */
-  private windowBox(w: SimWorld): { readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number } | null {
+  /** Where the window's people on foot are made (`SimWorld.useMeso`): round the view, out to `PEOPLE_FOCUS`; null: the whole map. */
+  private focus(w: SimWorld): { readonly x: number; readonly y: number; readonly r: number } | null {
     const win = w.microScoped ? w.meso?.microWindow() ?? null : null;
-    return win ? { x0: win.x - win.r, y0: win.y - win.r, x1: win.x + win.r, y1: win.y + win.r } : null;
+    // On the 100 m grid (`FOCUS_STEP`): the footways it spreads people on taken in again as the view crosses a line of it, never at each
+    // tick of a camera moving (each time every footway of the window walked).
+    return win ? { x: Math.round(win.x / FOCUS_STEP) * FOCUS_STEP, y: Math.round(win.y / FOCUS_STEP) * FOCUS_STEP, r: Math.min(win.r, PEOPLE_FOCUS) } : null;
+  }
+
+  /** The focus's square (`focus`); null: the whole map's. */
+  private windowBox(w: SimWorld): { readonly x0: number; readonly y0: number; readonly x1: number; readonly y1: number } | null {
+    const f = this.focus(w);
+    return f ? { x0: f.x - f.r, y0: f.y - f.r, x1: f.x + f.r, y1: f.y + f.r } : null;
+  }
+
+  /** Whether a point is one the window's people are made at (`focus`). */
+  private inFocus(w: SimWorld, x: number, y: number): boolean {
+    const f = this.focus(w);
+    return !f || (Math.abs(x - f.x) <= f.r && Math.abs(y - f.y) <= f.r);
   }
 
   /** How many people on foot the panel asks for: its count, or, following the city; in the micro window (`SimWorld.useMeso`), the window's share of it, by its street of the map's. */
   private peopleTarget(w: SimWorld): number {
     // Nobody until the window stands somewhere: its people are made where it is.
     if (w.microScoped && !w.meso?.microWindow()) return 0;
-    const win = w.microScoped ? w.meso!.microWindow()! : null;
+    const win = this.focus(w);
     const street = win ? this.roadAround(w, win.x, win.y, win.r) : this.roadAround(w, 0, 0, Infinity);
     const most = Math.floor(stepsIn(street, 8));
     if (w.pedestrianCount !== null || !w.followCity) {
@@ -427,7 +449,7 @@ export class AmbientWorld {
     // Everybody on foot counts (riders getting off a bus, the player too), not only those made here.
     const onFoot = Math.max(this.walkers.size, w.pedViews.length);
     if (onFoot >= want) return;
-    const ends = this.roadEnds(w);
+    const ends = this.roadEnds(w).filter((e) => this.inFocus(w, e.x, e.y));
     const hour = (w.city.minutes(w) % 1440) / 60;
     // The lots' own people: how many the land use puts on its street at this hour
     let outW = 0, inW = 0;
@@ -553,6 +575,8 @@ export class AmbientWorld {
   private readonly openSpots: { x: number; y: number }[] = [];
   /** The walkways' state the footways below were read at (`WalkGraph.state`). */
   private footFor: object | null = null;
+  /** The focus the footways were taken in at (`openPeople`). */
+  private footAt = '';
   private foot: { way: Walkway; at: number }[] = [];
   private footLength = 0;
 
@@ -621,12 +645,18 @@ export class AmbientWorld {
     this.refreshPlaces(w);
     const graph = w.walkwaysNow();
     // @rebuild Read only while a map is opening (`OPEN_TICKS`), when the walkways change.
-    if (graph.state !== this.footFor) {
+    const box = this.windowBox(w);
+    const at = box ? `${box.x0},${box.y0}` : '';
+    if (graph.state !== this.footFor || at !== this.footAt) {
       this.footFor = graph.state;
+      this.footAt = at;
       this.foot = [];
       this.footLength = 0;
       for (const way of graph.ways) {
         if (!way || way.kind !== 'footway' || way.path.length < m(4)) continue;
+        // Its middle round the view (`focus`): the footways the people are spread on.
+        const mid = way.path.sampleAt(way.path.length / 2).p;
+        if (!this.inFocus(w, mid.x, mid.y)) continue;
         this.foot.push({ way, at: this.footLength });
         this.footLength += way.path.length;
       }

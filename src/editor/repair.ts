@@ -73,6 +73,7 @@ export function replayRepairs(doc: RoadDoc, net: Network, steps: readonly Repair
 
 function nearestCandidate(doc: RoadDoc, net: Network, rejected: ReadonlySet<string>): Candidate | null {
   let best: Candidate | null = null;
+  // @rebuild Walks the whole map: a legacy map's repair, worked out once off the page.
   for (const node of doc.nodes.values()) {
     if (node.incident.length !== 1) continue;
     const sourceId = node.incident[0];

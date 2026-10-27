@@ -70,6 +70,7 @@ function oneRoad(extra: (doc: RoadDoc, net: Network) => void, junction = false):
 
 /** Where the footway of the road across runs (the document's first road): its middle, metres from the road's centre line. */
 function footwayOut(net: Network): number {
+  // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
   const first = net.doc.segments.keys().next().value!;
   const ribbon = net.ribbons.get(first)!;
   return ribbon.road.width / 2 + ribbon.road.sidewalk / 2;
@@ -124,6 +125,7 @@ export function flagItems(add: Add, cache: BatchCache): void {
  *  each way across), one stage, every head green. */
 export function signalItems(add: Add, cache: BatchCache): void {
   const { net } = oneRoad(() => {}, true);
+  // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
   const centre = [...net.doc.nodes.values()].find((n) => n.incident.length === 4)!;
   const incident = centre.incident;
   const feed: SignalFeed = {
@@ -264,6 +266,7 @@ export function transitItems(add: Add, cache: BatchCache): void {
     doc.setTransit(addLine(stop.data, 'metro', [stop.id]).data);
   });
   lay('bus stop', 'on the footway\'s edge', (doc, net) => {
+    // @rebuild Walks the whole map: the lab's sheet, never the game's frame.
     const segment = net.doc.segments.keys().next().value!;
     const stop = addStop(emptyTransit(), { mode: 'bus', x: 0, y: footwayOut(net), segment });
     doc.setTransit(addLine(stop.data, 'bus', [stop.id]).data);

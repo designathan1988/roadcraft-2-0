@@ -1,10 +1,12 @@
 import { Box3, type BufferAttribute, type Camera, type Frustum, type InterleavedBuffer } from 'three';
 
 import type { ChangeJournal, ChangeRect } from '@world/changes';
-import type { PoleId } from '@world/ids';
+import type { PoleId, SegmentId, SpanId } from '@world/ids';
+import { tilesMeeting } from '@world/networkWindow';
+import { acrossJunction, lineEnd } from '@world/lineEnds';
 import type { Network } from '@world/network';
 import { m } from '@world/units';
-import type { PoleArms, UtilityPole } from '@world/utilities';
+import type { PoleArms, UtilityPole, UtilitySpan } from '@world/utilities';
 import { ViewCells, type CellKey } from '@world/viewCells';
 import type { KeptFrustum } from './cellInstances';
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
@@ -12,7 +14,7 @@ import { framePole, wireEnd } from './poleBake';
 import { BLOCK, type Block, POLE_REACH, ViewedRoot, docPoles } from './poleLayer';
 import { PartStore, ScreenScale, WireStore, screen } from './poleStores';
 import type { SceneryKit } from './scenery';
-import { POLE_PART_COUNT, type Placement, type PolePartSpec, type Utilities, placePole, polePartSpecs, wireScreen } from './utilities';
+import { POLE_PART_COUNT, type Placement, type PolePartSpec, type SpanEnd, type Utilities, placePole, polePartSpecs, wireScreen } from './utilities';
 
 /** What moves a pole or its parts: the poles and wires, the roads (its kerb), the roads' heights and the ground under it. */
 const POLE_CHANGES = ['utilities', 'roads', 'elevation', 'ground', 'terrain'] as const;
@@ -29,7 +31,12 @@ const BLOCK_OVERHEAD = 4096;
 interface HeldBlock {
   readonly block: Block;
   waiting: number;
+  /** Framed while a tile round it was not held by the network (`networkWindow.ts`): its poles' kerbs not all known. */
+  readonly partial: boolean;
 }
+
+/** How far from a pole its kerb is looked for (`framePole`, `kerbward`): the tiles round a block it may reach into. */
+const KERB_REACH = m(6);
 
 /** What a view reaches on the ground (`propCells.ts` PropView): where from, how far, the ground's height there, its frustum. */
 export interface PoleView {
@@ -91,6 +98,16 @@ export class PoleCells implements Utilities {
   /** The network's state the blocks were last brought up to (`Network.changesSince`). */
   private netState: object | null = null;
 
+  /** Whether a tile a block's kerbs may lie in is not held by the network now (a tile's roads come and go whole, its first one asked). */
+  private partial(rect: ChangeRect): boolean {
+    const net = this.from?.net;
+    if (!net || net.scope === null) return false;
+    for (const tile of tilesMeeting([rect[0] - KERB_REACH, rect[1] - KERB_REACH, rect[2] + KERB_REACH, rect[3] + KERB_REACH])) {
+      for (const id of net.doc.tileRoads(tile).segments) { if (!net.holds(id as SegmentId)) return true; break; }
+    }
+    return false;
+  }
+
   /** The diary's changes since the last look, and the roads the network came to hold or let go: the blocks they reached dropped, made again as
    *  the view asks. A pole's way to the street is its kerb in the network (`framePole`, `kerbward`), which holds the roads near the view alone
    *  (`networkWindow.ts`). DO NOT keep a block framed before its streets were held: its poles had found the kerb of the street behind the
@@ -100,11 +117,17 @@ export class PoleCells implements Utilities {
     const net = this.from?.net;
     if (!net) return;
     const delta = this.netState === null ? null : net.changesSince(this.netState);
-    if (this.netState !== null) {
-      if (delta === null) this.cells.clear();
-      else if (delta.rects.length) this.cells.invalidate(delta.rects);
-    }
     this.netState = net.state;
+    // The roads held moved: the blocks framed without some of them, where they came or went, framed again. DO NOT drop every block the
+    // window's move reached: each is a kilometre of poles, every one's kerb read again, at each tile the camera brings in. An edit's
+    // rebuild is the diary's (`follow` above).
+    if (!delta?.scopeOnly || !delta.rects.length) return;
+    const stale = new Set<CellKey>();
+    const pad = POLE_REACH;
+    for (const r of delta.rects) {
+      this.cells.forCellsOver([r[0] - pad, r[1] - pad, r[2] + pad, r[3] + pad], (key) => { if (this.cells.peek(key)?.partial) stale.add(key); });
+    }
+    if (stale.size) this.cells.forget(stale);
   }
 
   /** The blocks a view wants (in its reach, in its frustum or the margin round it), nearest first, made while the frame has time (one at least). */
@@ -151,7 +174,7 @@ export class PoleCells implements Utilities {
   /** A block made from the document, its buffers let go once on the GPU (and given back after a lost context: the block made again). */
   private derive(key: CellKey, rect: ChangeRect): { value: HeldBlock; cpuBytes: number } {
     const block = this.build(rect);
-    const held: HeldBlock = { block, waiting: 0 };
+    const held: HeldBlock = { block, waiting: 0, partial: this.partial(rect) };
     const buffers: (BufferAttribute | InterleavedBuffer)[] = [];
     // The parts' matrices stay on the page (tens of KB a block): the sun's shadow stores are drawn again under each pole that came, went or moved (`renderer.ts` casterChanges reads the matrices), not thrown away for a block of a kilometre coming into view. The wires' instances go to the GPU alone.
     for (const part of block.parts) {
@@ -220,6 +243,18 @@ export class PoleCells implements Utilities {
         const other = doc.poles.get(span.b);
         if (!other) continue;
         block.wires.add(span, wireEnd(span, frameOf(pole), pole.kind), wireEnd(span, frameOf(other), other.kind));
+      }
+      // Its line carried across the junction it stops at (`lineEnds.ts`): drawn by the block of the lower pole, each end's arm its line's.
+      const across = acrossJunction(doc, pole.id);
+      const other = across && across.id > pole.id ? doc.poles.get(across.id) : undefined;
+      const mine = other ? lineEnd(doc, pole.id) : null;
+      if (other && mine) {
+        const strung: UtilitySpan = { id: -1 as SpanId, a: pole.id, b: other.id };
+        const end = (at: UtilityPole, line: SpanId): SpanEnd => {
+          const framed = frameOf(at);
+          return wireEnd({ ...strung, id: line }, framed, at.kind);
+        };
+        block.wires.add(strung, end(pole, mine.span), end(other, across!.span));
       }
     }
     for (const part of block.parts) part.flush();
