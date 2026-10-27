@@ -263,7 +263,7 @@ class JobSystem {
   readonly ports = new Map<number, JobPort>();
   nextPort = 1;
   readonly queue = new JobQueue();
-  /** The services whose lanes go first (`laneFirst`): their workers are given no queued job while a message of theirs is in flight (`hostFor`). */
+  /** The services whose lanes go first (`laneFirst`): their workers are given no queued job while they do, where another worker can take it (`keptForFirst`). */
   readonly firstLanes = new Set<JobService>();
   focusX = 0;
   focusY = 0;
@@ -451,6 +451,21 @@ function queuePort(host: Host, service: JobService): number {
   return port;
 }
 
+/** Whether a worker hosts a lane that goes first (`laneFirst`: the road tiles behind the opening's curtain). */
+const hostsFirstLane = (host: Host): boolean => {
+  if (!system.firstLanes.size) return false;
+  for (const service of host.services.keys()) if (system.firstLanes.has(service)) return true;
+  return false;
+};
+/**
+ * Whether a worker is kept from queued jobs for the lanes that go first on it: while they go first, and another worker can take the jobs. DO NOT
+ * give it a job while its lane is idle between shares: the lane's next share waited behind the whole job (a cell's, a plate's of seconds), its
+ * worker silent 10 s with tiles waiting, and the 10 km city's road surfaces took 14-70 s of wall time for 114-1,050 tiles (2026-10-27).
+ */
+function keptForFirst(host: Host): boolean {
+  return hostsFirstLane(host) && system.workers.some((h) => h !== host && !h.failed && !hostsFirstLane(h) && !keptClear(h));
+}
+
 /** The worker a queued job of `service` goes to: a free one already running the kind, else a new one while the pool has room, else any free one
  *  - a long-running service's worker only while its lanes have nothing in flight: a tile asked after it waits one job, never a job behind a tile (only a pool of one worker shares it otherwise).
  *  - a long worker in a desktop job process (`inPage` false) only for a job fit to cross (`JobSpec.crosses`), and one made for it while the long side keeps room for one more: DO NOT send another there - its message went copied whole, every ground plate of the page's shared memory with it (`processWorker.ts` unshared, ~33 MB a cell job, JOB-03). With the cells kept to the page's two short workers, the large city's first opening waited ~6 s for the buildings in view while six job processes stood idle (2026-10-21).
@@ -460,6 +475,7 @@ function hostFor(service: JobService, crosses: boolean): Host | null {
   for (const host of system.workers) {
     if (host.job || host.failed) continue;
     if (keptClear(host) && system.workers.length > 1) continue;
+    if (keptForFirst(host)) continue;
     if (host.long && system.workers.length > 1) {
       // Of the idle long workers, one already running the kind first.
       if (host.laneWork === 0 && (host.inPage || crosses) && (idleLong === null || (!idleLong.queuePorts.has(service) && host.queuePorts.has(service)))) idleLong = host;
@@ -500,6 +516,7 @@ function growSpareLong(): Host | null {
 function freeFor(host: Host, crosses: boolean): boolean {
   if (host.job || host.failed || host.laneWork > 0 || host.firstWork > 0) return false;
   if (keptClear(host) && system.workers.length > 1) return false;
+  if (keptForFirst(host)) return false;
   if (host.long && system.workers.length > 1) return host.inPage || crosses;
   return true;
 }
@@ -673,6 +690,8 @@ function place(service: JobService): Host {
  */
 export function laneFirst(service: JobService, on: boolean): void {
   if (on) system.firstLanes.add(service); else system.firstLanes.delete(service);
+  // Its workers free for the queue again (`keptForFirst`): the jobs waiting given out now, not at the next answer.
+  if (!on) dispatch();
 }
 
 /** A kind of work's lane in the pool: answers as a `Worker` does (`onmessage`, `onerror`, `postMessage`, `terminate`). */

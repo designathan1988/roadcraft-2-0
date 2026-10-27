@@ -185,7 +185,8 @@ describe('the job system', () => {
     setJobWorkerMaker((long) => { made.push(long); return long ? new FakeWorker() as unknown as Worker : null; });
     const before = FakeWorker.made.length;
     jobPort('growth');
-    jobPort('roadCoarse');
+    // A lane the page keeps (its IndexedDB): `roadCoarse` went to the job processes (`PROCESS_LANES`, 2026-10-26).
+    jobPort('derivedWriter');
     expect(made).toEqual([true, false]);
     expect(FakeWorker.made.length).toBe(before + 2);
     setJobWorkerMaker(null);
@@ -201,6 +202,22 @@ describe('the job system', () => {
     expect([...remote].map(queued)).toEqual(new Array(remote.size).fill(0));
     expect(FakeWorker.made.filter((w) => !remote.has(w)).map(queued)).toEqual([1, 1]);
     setJobWorkerMaker(null);
+  });
+
+  it('gives no queued job to the worker of a lane that goes first, even idle between its messages, while another can take it', async () => {
+    const { jobPort, laneFirst, submitJob } = await import('@/jobs/jobPool');
+    const tiles = hostOf(jobPort('roadTiles'));
+    laneFirst('roadTiles', true);
+    const sent: string[] = [];
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'f']) submitJob({ service: 'cells', key: null, priority: 1, write: () => { sent.push(name); return { data: name, transfer: [] }; }, done: () => {}, failed: () => {} });
+    const queued = (w: FakeWorker): number => w.asked.filter((m) => typeof m.data === 'string').length;
+    // The tiles' worker, its lane idle, took none: its next share never waits behind a job.
+    expect(sent.length).toBeGreaterThan(0);
+    expect(queued(FakeWorker.made[tiles]!)).toBe(0);
+    // The lane no longer first: a job waiting given to its worker at once.
+    const waiting = 6 - sent.length;
+    laneFirst('roadTiles', false);
+    if (waiting > 0) expect(queued(FakeWorker.made[tiles]!)).toBe(1);
   });
 
   it('gives a waiting job out when a lane let go frees its worker (JOB-16)', async () => {

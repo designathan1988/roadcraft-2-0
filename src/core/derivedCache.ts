@@ -1,6 +1,27 @@
 /** DERIVED DATA kept in the player's browser: what the game makes from its own code the same way every time */
 const DB = 'roadcraft-derived';
+/** Version 2: the kinds of `OWN_STORES` moved out of `STORE` into stores of their own. */
+const DB_VERSION = 2;
 const STORE = 'entries';
+/**
+ * THE KINDS KEPT IN A STORE OF THEIR OWN, the store named as the kind (a key's text up to its first ':'): what one kind writes never holds up what
+ * another reads. DO NOT keep them in one store: IndexedDB starts a transaction only once every read/write one created before it over the same
+ * store has finished (W3C IndexedDB 3.0, "transaction scheduling", https://w3c.github.io/IndexedDB/#transaction-scheduling), and the 10 km city's
+ * kept road tiles were read 16 s behind the buildings' cells being written (1,175 tiles, 2026-10-27). Every other kind in `STORE`.
+ */
+const OWN_STORES: readonly string[] = ['cellWork', 'roadtiles', 'ecology', 'farWoods'];
+/** The store a key (or a prefix holding its kind) is kept in. */
+const storeOf = (key: string): string => {
+  const end = key.indexOf(':');
+  const kind = end < 0 ? key : key.slice(0, end);
+  return OWN_STORES.includes(kind) ? kind : STORE;
+};
+/** The stores some keys are kept in, each once. */
+function storesOf(keys: Iterable<string>): string[] {
+  const stores = new Set<string>();
+  for (const key of keys) stores.add(storeOf(key));
+  return [...stores];
+}
 /** DO NOT wait for the disk on a derived write (MDN IDBDatabase.transaction, `durability: 'relaxed'`): what is kept here is made again if lost, and each commit held a tile's maker lane while the store caught up (the opening's workers at half load, 2026-10-17). The player's saves and the tiles (`editor/saveStore.ts`) keep the default. */
 const RELAXED: IDBTransactionOptions = Object.freeze({ durability: 'relaxed' });
 
@@ -16,14 +37,21 @@ function database(): Promise<IDBDatabase | null> {
     }
     let request: IDBOpenDBRequest;
     try {
-      request = indexedDB.open(DB, 1);
+      request = indexedDB.open(DB, DB_VERSION);
     } catch {
       resolve(null);
       return;
     }
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE);
+      for (const kind of OWN_STORES) if (!db.objectStoreNames.contains(kind)) db.createObjectStore(kind);
+      // A store of version 1: its entries of the kinds moved let go (made again, in their own stores, as they are next wanted). DO NOT copy them
+      // across: the upgrade runs where the store is first opened (the page), and a large city's cells and tiles are hundreds of megabytes.
+      if (event.oldVersion >= 1 && request.transaction) {
+        const old = request.transaction.objectStore(STORE);
+        for (const kind of OWN_STORES) old.delete(prefixRange(`${kind}:`)).onerror = (e) => e.preventDefault();
+      }
     };
     // DO NOT keep it: closed for another tab's upgrade, every transaction on it threw
     const forget = (): void => { opening = null; };
@@ -55,7 +83,8 @@ export async function readDerived<T>(key: string): Promise<T | undefined> {
   if (!db) return undefined;
   return new Promise((resolve) => {
     try {
-      const request = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+      const store = storeOf(key);
+      const request = db.transaction(store, 'readonly').objectStore(store).get(key);
       request.onsuccess = () => resolve(request.result as T | undefined);
       request.onerror = () => resolve(undefined);
     } catch {
@@ -71,7 +100,8 @@ export async function readDerivedKeys(prefix: string): Promise<Set<string>> {
   if (!db) return out;
   return new Promise((resolve) => {
     try {
-      const keys = db.transaction(STORE, 'readonly').objectStore(STORE).getAllKeys(prefixRange(prefix));
+      const store = storeOf(prefix);
+      const keys = db.transaction(store, 'readonly').objectStore(store).getAllKeys(prefixRange(prefix));
       keys.onsuccess = () => { for (const key of keys.result ?? []) out.add(String(key).slice(prefix.length)); resolve(out); };
       keys.onerror = () => resolve(out);
     } catch {
@@ -87,8 +117,9 @@ export async function readDerivedSome<T>(prefix: string, keys: readonly string[]
   if (!db || !keys.length) return out;
   return new Promise((resolve) => {
     try {
-      const tx = db.transaction(STORE, 'readonly');
-      const store = tx.objectStore(STORE);
+      const name = storeOf(prefix);
+      const tx = db.transaction(name, 'readonly');
+      const store = tx.objectStore(name);
       // Each key once (a list may name one twice), its value read once: `result` is where the value is rebuilt on the page.
       for (const key of new Set(keys)) {
         const request = store.get(prefix + key);
@@ -110,7 +141,8 @@ export async function readDerivedAll<T>(prefix: string): Promise<Map<string, T>>
   if (!db) return out;
   return new Promise((resolve) => {
     try {
-      const store = db.transaction(STORE, 'readonly').objectStore(STORE);
+      const name = storeOf(prefix);
+      const store = db.transaction(name, 'readonly').objectStore(name);
       const keys = store.getAllKeys(prefixRange(prefix));
       const values = store.getAll(prefixRange(prefix));
       values.onsuccess = () => {
@@ -130,8 +162,9 @@ async function keepDerived(key: string, value: unknown): Promise<void> {
   const db = await database();
   if (!db) return;
   try {
-    const tx = db.transaction(STORE, 'readwrite', RELAXED);
-    const request = tx.objectStore(STORE).put(value, key);
+    const store = storeOf(key);
+    const tx = db.transaction(store, 'readwrite', RELAXED);
+    const request = tx.objectStore(store).put(value, key);
     request.onerror = (event) => event.preventDefault();
   } catch {
     // Not kept (no space, private window): made again next time.
@@ -143,13 +176,14 @@ export async function keepDerivedDurably(key: string, value: unknown): Promise<{
   const db = await database();
   if (!db) return { committed: Promise.resolve() };
   try {
-    const tx = db.transaction(STORE, 'readwrite', RELAXED);
+    const store = storeOf(key);
+    const tx = db.transaction(store, 'readwrite', RELAXED);
     const committed = new Promise<void>((resolve) => {
       tx.oncomplete = () => resolve();
       tx.onabort = () => resolve();
       tx.onerror = () => resolve();
     });
-    const request = tx.objectStore(STORE).put(value, key);
+    const request = tx.objectStore(store).put(value, key);
     request.onerror = (event) => event.preventDefault();
     return { committed };
   } catch {
@@ -163,8 +197,9 @@ export function keepDerivedNow(key: string, value: unknown): boolean {
   const db = opened;
   if (!db) { void database(); return false; }
   try {
-    const tx = db.transaction(STORE, 'readwrite', RELAXED);
-    tx.objectStore(STORE).put(value, key).onerror = (event) => event.preventDefault();
+    const store = storeOf(key);
+    const tx = db.transaction(store, 'readwrite', RELAXED);
+    tx.objectStore(store).put(value, key).onerror = (event) => event.preventDefault();
     return true;
   } catch (error) {
     console.error('[derived] not kept', error);
@@ -180,13 +215,12 @@ export async function keepDerivedQueuedMany(entries: readonly (readonly [string,
   const db = await database();
   if (!db) { release(); return; }
   try {
-    const tx = db.transaction(STORE, 'readwrite', RELAXED);
+    const tx = db.transaction(storesOf(entries.map(([key]) => key)), 'readwrite', RELAXED);
     tx.oncomplete = release;
     tx.onabort = release;
     tx.onerror = release;
-    const store = tx.objectStore(STORE);
     for (const [key, value] of entries) {
-      const request = store.put(value, key);
+      const request = tx.objectStore(storeOf(key)).put(value, key);
       request.onerror = (event) => event.preventDefault();
     }
   } catch (error) {
@@ -262,11 +296,13 @@ export async function keepDerivedManyCommitted(prefix: string, values: ReadonlyM
   const db = await database();
   if (!db) return;
   // A transaction that cannot be made (no space, the store closed) throws to the writer, which says so (`derivedWriter.worker.ts`).
-  const tx = db.transaction(STORE, 'readwrite', RELAXED);
+  // Each entry in its kind's store: a prefix may be empty, each key whole (`cellPool.ts` keptStore).
+  const keys = [...values.keys()].map((key) => `${prefix}${key}`);
+  const tx = db.transaction(storesOf(keys), 'readwrite', RELAXED);
   const committed = new Promise<void>((resolve) => { tx.oncomplete = () => resolve(); tx.onabort = () => resolve(); tx.onerror = () => resolve(); });
-  const store = tx.objectStore(STORE);
   for (const [key, value] of values) {
-    const request = store.put(value, `${prefix}${key}`);
+    const whole = `${prefix}${key}`;
+    const request = tx.objectStore(storeOf(whole)).put(value, whole);
     request.onerror = (event) => event.preventDefault();
   }
   await committed;
@@ -278,9 +314,11 @@ export async function keepDerivedMany(prefix: string, values: ReadonlyMap<string
   const db = await database();
   if (!db) return;
   try {
-    const store = db.transaction(STORE, 'readwrite', RELAXED).objectStore(STORE);
+    const keys = [...values.keys()].map((key) => `${prefix}${key}`);
+    const tx = db.transaction(storesOf(keys), 'readwrite', RELAXED);
     for (const [key, value] of values) {
-      const request = store.put(value, `${prefix}${key}`);
+      const whole = `${prefix}${key}`;
+      const request = tx.objectStore(storeOf(whole)).put(value, whole);
       request.onerror = (event) => event.preventDefault();
     }
   } catch {
@@ -293,9 +331,9 @@ export function forgetDerivedKinds(kinds: readonly string[]): void {
   void database().then((db) => {
     if (!db) return;
     try {
-      const store = db.transaction(STORE, 'readwrite', RELAXED).objectStore(STORE);
+      const tx = db.transaction(storesOf(kinds.map((kind) => `${kind}:`)), 'readwrite', RELAXED);
       for (const kind of kinds) {
-        const request = store.delete(prefixRange(`${kind}:`));
+        const request = tx.objectStore(storeOf(`${kind}:`)).delete(prefixRange(`${kind}:`));
         request.onerror = (event) => event.preventDefault();
       }
     } catch (error) {
@@ -312,9 +350,10 @@ export function forgetDerivedKeys(prefix: string, keys: Iterable<string>): void 
   void database().then((db) => {
     if (!db) return;
     try {
-      const store = db.transaction(STORE, 'readwrite', RELAXED).objectStore(STORE);
-      for (const key of list) {
-        const request = store.delete(`${prefix}${key}`);
+      const keys = list.map((key) => `${prefix}${key}`);
+      const tx = db.transaction(storesOf(keys), 'readwrite', RELAXED);
+      for (const key of keys) {
+        const request = tx.objectStore(storeOf(key)).delete(key);
         request.onerror = (event) => event.preventDefault();
       }
     } catch {
@@ -328,7 +367,8 @@ export function forgetOtherDerived(kind: string, fingerprint: string): void {
   void database().then((db) => {
     if (!db) return;
     try {
-      const store = db.transaction(STORE, 'readwrite', RELAXED).objectStore(STORE);
+      const name = storeOf(`${kind}:`);
+      const store = db.transaction(name, 'readwrite', RELAXED).objectStore(name);
       const keep = `${kind}:${fingerprint}:`;
       const request = store.getAllKeys(prefixRange(`${kind}:`));
       request.onsuccess = () => {
