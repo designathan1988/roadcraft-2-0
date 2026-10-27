@@ -17,6 +17,8 @@ import type { CameraSolids } from '@world/buildings/cameraSolids';
 const WIDTH = 256;
 /** How far round the eye the walls are laid, world units: past it a wall spans a few texels and hides little. */
 const OCCLUDER_REACH = 1500;
+/** How far round the eye the occluders are read (`build`). */
+export const OCCLUDERS_REACH = OCCLUDER_REACH;
 /** A wall lower than this many texels on the buffer is not laid: it hides next to nothing and costs its corners. */
 const LEAST_TEXELS = 1.5;
 /** A box over more texels than this is never read texel by texel: it spans most of the screen and is all but never hidden. */

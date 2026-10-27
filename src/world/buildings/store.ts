@@ -218,6 +218,15 @@ export class BuildingStore {
     return row && items.holdsRow(row.row, b) ? { table: items.table, row: row.row } : null;
   }
 
+  /** The table's row a building stands as (its record the table's own, not written on the page), nothing decoded; null otherwise. */
+  standingRow(id: BuildingId): { readonly table: TableRows; readonly row: number } | null {
+    if (this.below) return this.below.standingRow(id);
+    const items = this.items;
+    if (!(items instanceof BuildingItems) || !items.table) return null;
+    const row = items.standing(id);
+    return row ? { table: items.table, row: row.row } : null;
+  }
+
   /** The buildings `meets` keeps for one of `rects`, asked of those within `pad` of it, each once, in the store's order */
   nearAny(rects: readonly (readonly [number, number, number, number])[], pad: number,
     meets: (b: Building, rect: readonly [number, number, number, number]) => boolean): Building[] {

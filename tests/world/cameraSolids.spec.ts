@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { BLUEPRINTS, instantiate } from '../../src/world/buildings/blueprints';
-import { cameraSolidsKeeper } from '../../src/world/buildings/cameraSolids';
+import { type SolidRows, cameraSolidsKeeper, solidRowsOf } from '../../src/world/buildings/cameraSolids';
 import { BuildingStore } from '../../src/world/buildings/store';
 import { buildingHeight, footprintCentre } from '../../src/world/buildings/geometry';
 import type { Building } from '../../src/world/buildings/types';
@@ -116,5 +116,49 @@ describe('camera solids filed as the questions reach them', () => {
     store.remove(b.id);
     lazy.follow(store, ground);
     expect(lazy.solids().roofAt(b.x, b.y) < before || lazy.solids().roofAt(b.x, b.y) === -Infinity).toBe(true);
+  });
+
+  it('filed off the page ahead of the questions, answer as the town filed here, a building changed since it was asked from its record', async () => {
+    const store = spreadTown();
+    const pending: (() => void)[] = [];
+    let read = 0;
+    // The floors known without a record (the renderer's: kept by row, or measured by the cells' jobs).
+    const feet = new Map([...store.all()].map((b) => [b.id, floorOf(b)] as const));
+    const off = cameraSolidsKeeper(floorOf, box, 0, {
+      // A job's answer: each building's rows on no floor, read when asked and given later.
+      ask: (ids, buildings) => {
+        const answers: SolidRows[] = ids.map((id) => ({ id, ...solidRowsOf(buildings.get(id)!) }));
+        return new Promise<readonly SolidRows[]>((done) => pending.push(() => done(answers)));
+      },
+      footOf: (id) => feet.get(id),
+    });
+    const whole = cameraSolidsKeeper(floorOf, box, 0);
+    off.follow(store, ground);
+    whole.follow(store, ground);
+    off.solids();
+    off.prefetch([[m(-100), m(-100), m(700), m(700)]]);
+    expect(pending.length).toBeGreaterThan(10);
+    // One building moved while its cell was asked: filed as it stands now.
+    const moved = [...store.all()][5]!;
+    store.put({ ...moved, x: moved.x + m(6) });
+    off.follow(store, ground);
+    whole.follow(store, ground);
+    off.solids();
+    const get = store.get.bind(store);
+    store.get = ((id) => { read++; return get(id); }) as typeof store.get;
+    for (const land of pending.splice(0)) land();
+    await Promise.resolve();
+    await Promise.resolve();
+    store.get = get;
+    // Only the changed building's record read to file it: the others came from the answers.
+    expect(read).toBeLessThan(5);
+    whole.solids().forEachIn(m(-100), m(-100), m(700), m(700), () => {});
+    let seedPoint = 5;
+    const rand = (): number => ((seedPoint = (seedPoint * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    for (let i = 0; i < 2000; i++) {
+      const x = rand() * m(640) - m(20), y = rand() * m(640) - m(20);
+      expect(off.solids().floorAt(x, y)).toBe(whole.solids().floorAt(x, y));
+      expect(off.solids().roofAt(x, y)).toBe(whole.solids().roofAt(x, y));
+    }
   });
 });

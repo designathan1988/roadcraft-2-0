@@ -8,6 +8,8 @@ import type { Building } from './types';
 export interface BuildingFloors {
   /** The building's ground floor on the ground and the paving as they stand. */
   floorOf(b: Building): number;
+  /** The floor kept of a table's row, its record not read; undefined when none is kept. */
+  floorKept(table: TableRows, row: number): number | undefined;
   /** Forgets one building's floor (its site worked out again). */
   forget(b: Building): void;
   /** Forgets every floor (the roads or the land moved everywhere). */
@@ -60,6 +62,10 @@ export function buildingFloors(groundAt: GroundAt, pavedAt: PavedAt | undefined,
       let floor = known.get(b);
       if (floor === undefined) known.set(b, floor = work(b));
       return floor;
+    },
+    floorKept(table, row) {
+      const floor = rows.get(table)?.[row];
+      return floor === undefined || Number.isNaN(floor) ? undefined : floor;
     },
     forget(b) {
       known.delete(b);

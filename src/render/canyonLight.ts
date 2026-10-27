@@ -22,6 +22,8 @@ import { DEPTH_GLSL } from './depthConvention';
 
 /** The field's side, world units (a multiple of the universal grid's cell, `world/grid.ts`), and its cell (whole steps of its subgrid). */
 const WINDOW = m(2_000);
+/** The side of the window the canyon light reads the solids over, round the view's target (`followTown`). */
+export const CANYON_WINDOW = WINDOW;
 const CELL = m(4);
 const SIDE = Math.round(WINDOW / CELL);
 /** Heights stored in 16 bits: (h + OFFSET) / STEP. */

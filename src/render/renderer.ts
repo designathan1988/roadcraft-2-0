@@ -68,6 +68,9 @@ import { deviceGpuCap, gpuLedger, readGpuDevice } from './gpuLedger';
 import { screenSizer } from './screenSize';
 import { WEAK_MACHINE } from '@core/weakMachine';
 import { DEFAULT_ATMOSPHERE, createPostChain, type Atmosphere, type PostChain } from './postprocess';
+import { solidsJobAsk } from './buildings/solidJobs';
+import { CANYON_WINDOW } from './canyonLight';
+import { OCCLUDERS_REACH } from './occlusion';
 import { createDepthFirst } from './depthFirst';
 import { ALL_EFFECTS_ON, DEFAULT_BUILDING_CHOICES, createFrameHider, type BuildingChoices, type EffectSwitches } from './effectSwitches';
 import { createBuildingSwitcher } from './buildingSwitches';
@@ -406,6 +409,9 @@ const SURFACE_SETS: readonly ReadonlySet<RoadStructure>[] = [GROUND_ONLY, new Se
 
 /** How far past a scoped opening's view its roads are solved (`buildWorld`, `SolveScope`): a road block meeting the view (500 m), what a tile reads round it (`SURFACE_READ_REACH`) and a junction or two whose heights reach in. `tests/world/elevationScope.spec.ts` proves every tile of the view reads the whole solve's heights with it, and that half of it does not (the small city, 2026-10-21). */
 const OPENING_SOLVE_MARGIN = m(320);
+/** How far past the canyon light's window and the occluders' reach the camera's solids are asked ahead (`cameraSolids.ts` prefetch): the canyon
+ *  light moves its window a 128 m step at a time (`canyonLight.ts` SNAP). */
+const SOLIDS_LEAD = m(256);
 /** Kept road tiles a place (`noteStored`): the scoped opening's and the whole solve's. */
 const KEYS_A_PLACE = 2;
 /** The far roads' cells made from the network at a scoped opening (`networkFarRoads.ts`): a road block's side (`roadSurfaces.ts` CHUNK tiles). */
@@ -1807,7 +1813,18 @@ export function createSceneRenderer(
     (b) => (worldNet?.doc.buildings.recordRow(b) ? buildings.knownFloor(b.id) : undefined));
   /** `shaped`: the regions the caller is shaping, where the diary cannot say what moved (`floors.ts` `follow`). */
   const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => floors.follow(net.doc.buildings, floorGroundSince, shaped);
-  const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH);
+  /** The camera's solids' cells filled off the page ahead of the questions (`cameraSolids.ts` prefetch): each building's volumes worked out by a job,
+   *  stood on the floor kept of its row or measured by the cells' jobs where its blocks are its volumes, as `floors.floorOf` gives it. */
+  const solidsAsk = solidsJobAsk();
+  const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH, solidsAsk ? {
+    ask: solidsAsk,
+    footOf: (id, blocksAreVolumes) => {
+      const at = worldNet?.doc.buildings.standingRow(id);
+      if (!at) return undefined;
+      return floors.floorKept(at.table, at.row) ?? (blocksAreVolumes ? buildings.knownFloor(id) : undefined);
+    },
+    arrived: () => onAssetsReady(),
+  } : null);
   /** The roads watched for vanishing from the picture */
   let roadsWatchedAt = 0;
   let roadsReported = false;
@@ -3653,6 +3670,12 @@ export function createSceneRenderer(
           rig.setSolids((x, y) => cameraSolidsKept.solids().floorAt(x, y), (x, y) => cameraSolidsKept.solids().roofAt(x, y));
           townSolids = () => cameraSolidsKept.solids();
         }
+        // What the questions reach next asked of the jobs: the canyon light's window round the target and the occluders round the eye, a lead past
+        // both (`SOLIDS_LEAD`) so the cells a move brings in are filed before they are asked.
+        cameraSolidsKept.solids();
+        const tx = rig.target.x, ty = -rig.target.z, window = CANYON_WINDOW / 2 + SOLIDS_LEAD;
+        const ex = rig.camera.position.x, ey = -rig.camera.position.z, reach = OCCLUDERS_REACH + SOLIDS_LEAD;
+        cameraSolidsKept.prefetch([[tx - window, ty - window, tx + window, ty + window], [ex - reach, ey - reach, ex + reach, ey + reach]]);
       } else if (townSolids !== null) {
         rig.setSolids(null);
         townSolids = null;

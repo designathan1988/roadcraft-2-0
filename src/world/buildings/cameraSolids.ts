@@ -109,6 +109,21 @@ export interface GroundSince {
   rectsSince(since: number): readonly Rect[] | null;
 }
 
+/** A building's solid volumes as a job worked them out (`solidRowsOf`): its rows on no floor, and whether its blocks are its volumes. */
+export interface SolidRows { readonly id: number; readonly rows: Float64Array; readonly blocksAreVolumes: boolean }
+/** The solids of `ids` worked out off the page (`render/buildings/solidJobs.ts`), asked nearest `at` first. */
+export type SolidsAsk = (ids: readonly BuildingId[], buildings: BuildingStore, at: readonly [number, number]) => Promise<readonly SolidRows[]>;
+
+/** What the cells are filled with off the page (`CameraSolidsKeeper.prefetch`). */
+export interface SolidsOffPage {
+  readonly ask: SolidsAsk;
+  /** A building's floor known without its record (the floor kept of its row, or the one the cells' jobs measured where its blocks are its
+   *  volumes: `floors.ts`); undefined: worked out from its record (`floorAt`). */
+  footOf(id: BuildingId, blocksAreVolumes: boolean): number | undefined;
+  /** A cell filed from off the page: what the camera and the canyon light read there may have changed (a frame asked). */
+  arrived?(): void;
+}
+
 /** The town's solids as filed for the camera */
 export interface CameraSolidsKeeper {
   /** Moves whenever the filing changed: what the canyon light's picture stands for. */
@@ -117,6 +132,9 @@ export interface CameraSolidsKeeper {
   follow(buildings: BuildingStore, ground: GroundSince): boolean;
   /** The filing, brought up to the last `follow` on the first ask after it. */
   solids(): CameraSolids;
+  /** The cells over the rectangles not filled yet asked of the jobs (`SolidsOffPage`), filed as their answers come: what the questions will
+   *  reach next (the canyon light's window, the occluders round the eye). Nothing without a job queue. */
+  prefetch(rects: readonly Rect[]): void;
 }
 
 /**
@@ -125,10 +143,25 @@ export interface CameraSolidsKeeper {
  * near it by their box columns (`BuildingStore.nearIds`), each building filed once with all its volumes. The 10 km city's 249,122 buildings
  * were decoded and floored on the page in the first frame of a tilted view, 55 s of its opening (2026-10-26).
  */
-export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: Building) => Rect, reach: number): CameraSolidsKeeper {
+/**
+ * `offPage`: the cells asked ahead of the questions are filed from a job's answer (`prefetch`): each building's volumes worked out there from its
+ * table row, stood here on the floor known of it (`SolidsOffPage.footOf`), a building changed since it was asked filed from its record as it
+ * stands. DO NOT decode a moving view's cells' buildings on the page to file them: their records and their solids were 1.0 s of 16 s of frames
+ * of a camera move over the 10 km city (2026-10-27). A question reaching a cell not filed yet fills it here, as without the jobs.
+ */
+export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: Building) => Rect, reach: number,
+  offPage: SolidsOffPage | null = null): CameraSolidsKeeper {
   const filing = new SolidFiling();
   /** The cells whose every building is filed. */
   const filled = new Set<number>();
+  /** The cells asked of the jobs and not come, each with the change serial it was asked at (`changedAt`). */
+  const asking = new Map<number, number>();
+  /** Each building named changed, by the serial of the `follow` that named it, while some cell is being asked; `wholeAt`, the serial the
+   *  filing was last let go whole at (every answer asked before it dropped). */
+  const changedAt = new Map<BuildingId, number>();
+  let serial = 0, wholeAt = 0;
+  /** The cells of the last `prefetch` (DO NOT look again at every cell of a view that stands: thousands a frame). */
+  let prefetched = '';
   let buildings: BuildingStore | null = null;
   /** The cells over a rectangle filled: each building a volume of which may be filed in one of them (its box grown by `REACH`, `forEachCellOf`) filed, once. */
   const fill = (x0: number, y0: number, x1: number, y1: number): void => {
@@ -177,14 +210,15 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
       const wholeWas = whole;
       // Another store is another diary: the cursor reads it as everything changed.
       const ids = town.changedFor(read);
-      if (ids) for (const id of ids) pending.add(id);
+      serial++;
+      if (ids) for (const id of ids) { pending.add(id); if (asking.size) changedAt.set(id, serial); }
       else whole = true;
       if (groundSeen !== ground.version) {
         const rects = groundSeen < 0 ? null : ground.rectsSince(groundSeen);
         if (rects === null) whole = true;
         else if (!whole) {
           // Every change in one look (`nearAny`): a change at a time read the cells they share again for each.
-          for (const b of town.nearAny(rects, reach, (b, r) => overlaps(boxOf(b), r))) pending.add(b.id);
+          for (const b of town.nearAny(rects, reach, (b, r) => overlaps(boxOf(b), r))) { pending.add(b.id); if (asking.size) changedAt.set(b.id, serial); }
         }
         groundSeen = ground.version;
       }
@@ -199,6 +233,8 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         filing.clear();
         filled.clear();
         whole = false;
+        wholeAt = serial;
+        prefetched = '';
       } else {
         for (const id of pending) {
           filing.remove(id);
@@ -209,12 +245,86 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
       pending.clear();
       return asked;
     },
+    prefetch(rects) {
+      const town = buildings;
+      if (!offPage || !town || whole) return;
+      const range = rects.map((r) => `${Math.floor(r[0] / CELL)},${Math.floor(r[1] / CELL)},${Math.floor(r[2] / CELL)},${Math.floor(r[3] / CELL)}`).join('|');
+      if (range === prefetched) return;
+      prefetched = range;
+      for (const [x0, y0, x1, y1] of rects) for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
+        for (let cy = Math.floor(y0 / CELL); cy <= Math.floor(y1 / CELL); cy++) {
+          const key = cellKey(cx, cy);
+          if (filled.has(key) || asking.has(key)) continue;
+          const ids = town.nearIds(cx * CELL - REACH, cy * CELL - REACH, (cx + 1) * CELL + REACH, (cy + 1) * CELL + REACH).filter((id) => !filing.has(id));
+          if (!ids.length) { filled.add(key); continue; }
+          const askedAt = serial;
+          asking.set(key, askedAt);
+          const landed = (answers: readonly SolidRows[]): void => {
+            asking.delete(key);
+            if (town === buildings && askedAt >= wholeAt && !filled.has(key)) {
+              const rows = new Map(answers.map((a) => [a.id as BuildingId, a]));
+              for (const id of ids) {
+                if (filing.has(id)) continue;
+                const answer = rows.get(id);
+                const changed = (changedAt.get(id) ?? -1) > askedAt;
+                const foot = answer && !changed ? offPage.footOf(id, answer.blocksAreVolumes) : undefined;
+                if (answer && !changed && foot !== undefined) { filing.addRows(id, answer.rows, foot); continue; }
+                // Changed since it was asked, or no floor known of it: as the page files it, from its record as it stands.
+                const b = town.get(id);
+                if (b) filing.add(b, floorAt(b));
+              }
+              filled.add(key);
+              offPage.arrived?.();
+            }
+            if (!asking.size) changedAt.clear();
+          };
+          offPage.ask(ids, town, [(cx + 0.5) * CELL, (cy + 0.5) * CELL]).then(landed, (error: unknown) => {
+            console.error('[buildings] a cell of the camera\'s solids could not be worked out off the page; filled when asked', error);
+            asking.delete(key);
+            if (!asking.size) changedAt.clear();
+          });
+        }
+      }
+    },
   };
 }
 
 const overlaps = (a: Rect, b: Rect): boolean => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 
 const cellKey = (cx: number, cy: number): number => (cx + 4096) * 8192 + (cy + 4096);
+
+/** Numbers of a building's solid volume as it stands on no floor (`solidRowsOf`): the building's centre and turn, the volume's box in its frame,
+ *  its top over the floor (with `CLEARANCE`), the bottom and top of its walls over the floor (NaN: it hides nothing for sure), their inset. */
+export const SOLID_ROW = 12;
+const R_BX = 0, R_BY = 1, R_COS = 2, R_SIN = 3, R_X0 = 4, R_Y0 = 5, R_X1 = 6, R_Y1 = 7, R_TOP = 8, R_WALL0 = 9, R_WALL1 = 10, R_INSET = 11;
+
+/**
+ * A building's solid volumes as numbers on no floor (`SOLID_ROW` each), and whether every volume of it is its own block (none a void, an
+ * intersection or an exclusive one: the floor the cells' jobs measure is its floor, `floors.ts` measured). The same on the page and in a job
+ * (`cameraSolid.worker.ts`): the floor added where they are filed (`SolidFiling.addRows`).
+ */
+export function solidRowsOf(b: Building): { readonly rows: Float64Array; readonly blocksAreVolumes: boolean } {
+  const cos = Math.cos(b.rotation);
+  const sin = Math.sin(b.rotation);
+  // A building carved by a void or an intersection hides nothing for sure: its masses' union is not its solid.
+  const carved = b.volumes.some((v) => !v.open && !isMass(v));
+  const solid = b.volumes.filter((v) => !v.open && isMass(v));
+  const rows = new Float64Array(solid.length * SOLID_ROW);
+  solid.forEach((v, k) => {
+    const o = k * SOLID_ROW;
+    rows[o + R_BX] = b.x; rows[o + R_BY] = b.y; rows[o + R_COS] = cos; rows[o + R_SIN] = sin;
+    rows[o + R_X0] = v.x; rows[o + R_Y0] = v.y; rows[o + R_X1] = v.x + v.w; rows[o + R_Y1] = v.y + v.d;
+    rows[o + R_TOP] = volumeHeight(b, v) + roofRise(b, v) + CLEARANCE;
+    // Its walls, drawn in by the deepest relief pushed into them: what surely stands (its roof left out, a ridge hides less than its box).
+    let inset = OCCLUDER_MARGIN;
+    for (const r of v.reliefs ?? []) if (r.depth < 0) inset = Math.max(inset, -r.depth + OCCLUDER_MARGIN);
+    const solidWalls = !carved && !v.outline && v.w > 2 * inset && v.d > 2 * inset && v.storeys.length > 0;
+    rows[o + R_WALL0] = solidWalls ? Math.max(0, volumeElevation(b, v, v.base)) : NaN;
+    rows[o + R_WALL1] = solidWalls ? volumeElevation(b, v, volumeTop(v)) : NaN;
+    rows[o + R_INSET] = inset;
+  });
+  return { rows, blocksAreVolumes: !b.volumes.some((v) => v.mode) };
+}
 
 /** The cells a volume's world box grown by the reach touches (its numbers at `o` in `page`), each told once. */
 function forEachCellOf(page: Float64Array, o: number, visit: (key: number) => void): void {
@@ -259,26 +369,21 @@ class SolidFiling implements CameraSolids {
 
   /** `b`'s solid volumes filed, standing on `foot`. */
   add(b: Building, foot: number): void {
-    const cos = Math.cos(b.rotation);
-    const sin = Math.sin(b.rotation);
+    this.addRows(b.id, solidRowsOf(b).rows, foot);
+  }
+
+  /** A building's solid volumes filed from their numbers on no floor (`solidRowsOf`, made here or by a job), standing on `foot`. */
+  addRows(id: BuildingId, rows: Float64Array, foot: number): void {
     let head = -1, last = -1;
-    // A building carved by a void or an intersection hides nothing for sure: its masses' union is not its solid.
-    const carved = b.volumes.some((v) => !v.open && !isMass(v));
-    for (const v of b.volumes) {
-      if (v.open || !isMass(v)) continue;
+    for (let r = 0; r < rows.length; r += SOLID_ROW) {
       const solid = this.pages.take();
       const page = this.pages.page(solid), o = at(solid);
-      const x0 = v.x, y0 = v.y, x1 = v.x + v.w, y1 = v.y + v.d;
-      page[o + S_BX] = b.x; page[o + S_BY] = b.y; page[o + S_COS] = cos; page[o + S_SIN] = sin;
-      page[o + S_X0] = x0; page[o + S_Y0] = y0; page[o + S_X1] = x1; page[o + S_Y1] = y1;
-      page[o + S_FOOT] = foot; page[o + S_TOP] = foot + volumeHeight(b, v) + roofRise(b, v) + CLEARANCE;
-      // Its walls, drawn in by the deepest relief pushed into them: what surely stands (its roof left out, a ridge hides less than its box).
-      let inset = OCCLUDER_MARGIN;
-      for (const r of v.reliefs ?? []) if (r.depth < 0) inset = Math.max(inset, -r.depth + OCCLUDER_MARGIN);
-      const solidWalls = !carved && !v.outline && v.w > 2 * inset && v.d > 2 * inset && v.storeys.length > 0;
-      page[o + S_WALL0] = solidWalls ? foot + Math.max(0, volumeElevation(b, v, v.base)) : NaN;
-      page[o + S_WALL1] = solidWalls ? foot + volumeElevation(b, v, volumeTop(v)) : NaN;
-      page[o + S_INSET] = inset;
+      page[o + S_BX] = rows[r + R_BX]!; page[o + S_BY] = rows[r + R_BY]!; page[o + S_COS] = rows[r + R_COS]!; page[o + S_SIN] = rows[r + R_SIN]!;
+      page[o + S_X0] = rows[r + R_X0]!; page[o + S_Y0] = rows[r + R_Y0]!; page[o + S_X1] = rows[r + R_X1]!; page[o + S_Y1] = rows[r + R_Y1]!;
+      page[o + S_FOOT] = foot; page[o + S_TOP] = foot + rows[r + R_TOP]!;
+      page[o + S_WALL0] = foot + rows[r + R_WALL0]!;
+      page[o + S_WALL1] = foot + rows[r + R_WALL1]!;
+      page[o + S_INSET] = rows[r + R_INSET]!;
       page[o + S_NEXT] = -1;
       if (last >= 0) this.pages.page(last)[at(last) + S_NEXT] = solid; else head = solid;
       last = solid;
@@ -290,7 +395,7 @@ class SolidFiling implements CameraSolids {
       });
     }
     // Its slot taken first: taking it may grow the column (`onGrow`); one with no solid volume filed too (-1), never read again for a cell.
-    const filed = this.filedIds.take(b.id);
+    const filed = this.filedIds.take(id);
     this.first[filed] = head;
   }
 
