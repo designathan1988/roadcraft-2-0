@@ -408,7 +408,7 @@ const OPENING_SOLVE_MARGIN = m(320);
 const FAR_ROAD_CELL = ROAD_BLOCK;
 /** Frames between two reads of the scene's geometry against the tier's budget (`governGeometry`): a walk of the scene's objects, ~1-3 ms. */
 const GOVERN_FRAMES = 60;
-/** The road cells the view wants taken at a step past those under the eye (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
+/** The road cells the view wants taken at a step past those within the detail's reach (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
 const STEP_CELLS = 2;
 /** How far round the eye the road cells in the view are wanted in detail (`mesh/roadResidency.ts` wantReach): past it, and past the tier's far budget within it, the network's far level draws them. */
 const ROAD_WANT_REACH = m(2_500);
@@ -2331,10 +2331,14 @@ export function createSceneRenderer(
       const r = farCellRect(key);
       return Math.hypot(Math.max(r[0] - x, 0, x - r[2]), Math.max(r[1] - y, 0, y - r[3]));
     };
-    // The cells whose tile the page's network holds (`cellHeld`: the others wait for their tile, solved off the page, `RoadWindowLink.step`), the ones the view stands over in one step, however many; past them a few, the step's fixed cost shared.
+    // The cells whose tile the page's network holds (`cellHeld`: the others wait for their tile, solved off the page, `RoadWindowLink.step`):
+    // every one within the detail's reach round the eye (`roadFocus.reach`) in one step, however many; past them a few, the step's fixed cost shared.
+    // DO NOT take only the cell under the eye and two more a step: each step walks every pass of the world's build (the ground, the tiles in the
+    // workers, the details, the programs), and a 10 km city's view in flight stood on the network's far level, its roads without their
+    // surfaces' textures, for the many steps its near cells took (the player, 2026-10-26).
     const ready = look.build.filter(cellHeld);
-    const under = ready.filter((key) => gap(key) === 0).length;
-    const build = ready.slice(0, Math.max(under, STEP_CELLS));
+    const near = ready.filter((key) => gap(key) < roadFocus.reach);
+    const build = [...near, ...ready.filter((key) => gap(key) >= roadFocus.reach).slice(0, STEP_CELLS)];
     const release = look.release.filter((key) => taken.has(key));
     if (!build.length && !release.length) return;
     for (const key of build) { taken.add(key); awaiting.add(key); }
