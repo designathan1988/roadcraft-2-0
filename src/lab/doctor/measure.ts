@@ -1,10 +1,12 @@
+import { hiddenWork, type SiteReading } from '../hiddenWork';
 import type { LabContext, LabSample } from '../labTypes';
+import { scanWaste, type Waste } from './waste';
 
 /** THE DIAGNOSIS'S MEASURES: one snapshot of where the frame goes (the GPU's passes, one frame's every draw, the CPU's systems and functions), and the quick A/B of one change (off, measured, back on, measured), from the other areas' probes. */
 
 interface PassTime { readonly pass: string; readonly label: string; readonly avg: number; readonly p95: number; readonly share: number }
 export interface Draw {
-  readonly object: unknown; readonly name: string; readonly layer: string; readonly material: string; readonly program: string;
+  readonly object: unknown; readonly name: string; readonly layer: string; readonly kind: string; readonly material: string; readonly program: string;
   readonly triangles: number; readonly calls: number; readonly instances: number; readonly pass: string; readonly target: string;
 }
 interface ProfileFn { readonly name: string; readonly where: string; readonly category: string; readonly selfMs: number; readonly totalMs: number; readonly samples: number }
@@ -24,7 +26,21 @@ export interface Snapshot {
   readonly drawCalls: number;
   readonly triangles: number;
   readonly hitches: number;
+  /** What the scene spends for nothing on the screen (`waste.ts`); null when no frame was captured. */
+  readonly waste: Waste | null;
+  /** The page's callbacks and what three was asked again during the measure, by line (`hiddenWork.ts`); null without the watch. */
+  readonly hidden: readonly SiteReading[] | null;
+  readonly hiddenSeconds: number;
+  /** The resources' checks (`resources/diagnostics.ts`). */
+  readonly checks: readonly Check[];
+  /** The CPU profile's suspects over the session (`code/analysis.ts`). */
+  readonly suspects: readonly Suspect[];
+  /** WebGL contexts alive, by the line that made each. */
+  readonly contexts: readonly string[];
 }
+
+interface Check { readonly id: string; readonly title: string; readonly verdict: string; readonly value: string; readonly why: string }
+interface Suspect { readonly kind: string; readonly name: string; readonly where: string; readonly value: number; readonly detail: string }
 
 interface GpuProbe {
   passTiming(on: boolean): void;
@@ -32,7 +48,7 @@ interface GpuProbe {
   capture(): Promise<{ records: readonly Draw[] }>;
   lab?: { passTiming: boolean };
 }
-interface CodeProbe { start(live?: boolean): void; functions(view?: string): ProfileFn[]; status(): { running: boolean } }
+interface CodeProbe { start(live?: boolean): void; functions(view?: string): ProfileFn[]; suspects(view?: string): Suspect[]; status(): { running: boolean } }
 
 const gpuProbe = (): GpuProbe | null => (window as unknown as { __labGpu?: GpuProbe }).__labGpu ?? null;
 const codeProbe = (): CodeProbe | null => (window as unknown as { __labCode?: CodeProbe }).__labCode ?? null;
@@ -64,6 +80,12 @@ async function framesFor(ctx: LabContext, ms: number): Promise<{ samples: LabSam
 export async function snapshot(ctx: LabContext, progress: (text: string) => void): Promise<Snapshot> {
   const gpu = gpuProbe();
   const code = codeProbe();
+  // The page's own work timed and three's requests read by their lines while the measure runs (`hiddenWork.ts`), then put back.
+  const watch = hiddenWork();
+  const wasDeep = watch?.deepOn ?? false;
+  watch?.reset();
+  watch?.deep(true);
+  const watchedFrom = performance.now();
   // Sampling only while asked (its tab open, or here): started for the measure if it was not running, stopped after.
   const wasRunning = code?.status().running ?? false;
   // The frame measured first, with nothing of the lab's measuring running (the CPU profile and the per-pass queries cost time themselves).
@@ -92,6 +114,19 @@ export async function snapshot(ctx: LabContext, progress: (text: string) => void
     }
   }
   if (code && !wasRunning) code.start(false);
+  // What the scene spends for nothing on the screen, against the frame just captured.
+  let waste: Waste | null = null;
+  if (draws.length) {
+    try { waste = await scanWaste(ctx, draws, progress); } catch (error) { console.error('lab doctor: the waste scan failed', error); }
+  }
+  const hidden = watch ? watch.session() : null;
+  const hiddenSeconds = (performance.now() - watchedFrom) / 1000;
+  watch?.deep(wasDeep);
+  const resources = (window as unknown as { __labResources?: { diagnostics(): Check[] } }).__labResources;
+  let checks: Check[] = [];
+  try { checks = resources?.diagnostics() ?? []; } catch (error) { console.error('lab doctor: the checks failed', error); }
+  let suspects: Suspect[] = [];
+  try { suspects = code?.suspects('session') ?? []; } catch (error) { console.error('lab doctor: the profile suspects failed', error); }
   const systems = new Map<string, number[]>();
   for (const s of plain.samples) for (const [k, v] of s.systems) (systems.get(k) ?? systems.set(k, []).get(k)!).push(v);
   const passSum = passes.reduce((a, p) => a + p.avg, 0);
@@ -108,6 +143,8 @@ export async function snapshot(ctx: LabContext, progress: (text: string) => void
     drawCalls: median(plain.samples.map((s) => s.drawCalls)),
     triangles: median(plain.samples.map((s) => s.triangles)),
     hitches: plain.samples.filter((s) => s.intervalMs > 50).length,
+    waste, hidden, hiddenSeconds, checks, suspects,
+    contexts: watch?.contexts() ?? [],
   };
 }
 

@@ -42,27 +42,16 @@ export function createUsageMeter(ctx: LabContext): UsageMeter {
   /** The video memory as found on the GPU (`lab/gpu` objects: textures and geometries, buffers shared counted once) plus the frame's targets and shadow maps: DO NOT add `gpuLedger.bytes()` to `targetBytes()`, the ledger holds those targets too, and it holds neither the textures nor the detail's geometry. */
   let vramFound: number | null = null;
   let active = false;
-  let idle: number | null = null;
+  /** The GPU's objects as last scanned by the GPU objects tab (`lab/gpu`): DO NOT scan the scene for the meter - the walk of every texture
+   *  and geometry was one task of 452 ms each time the lab opened (the lab's own diagnosis, 2026-10-27); the game's ledger stands in until then. */
   const readVram = (): void => {
-    const gpu = (window as unknown as { __labGpu?: { objects(): { textures: { bytes: number }[]; geometries: { bytes: number }[] } } }).__labGpu;
-    if (!gpu) return;
-    try {
-      const o = gpu.objects();
-      vramFound = o.textures.reduce((a, x) => a + x.bytes, 0) + o.geometries.reduce((a, x) => a + x.bytes, 0) + ctx.scene.targetBytes();
-    } catch (error) {
-      console.warn('lab: video memory not scanned', error);
-    }
-  };
-  /** The scan walks the whole scene (textures and geometries), 170 ms in the audit: only when the lab is open, in an idle period, and never in the middle of a frame. */
-  const scanWhenIdle = (): void => {
-    if (!active || idle !== null) return;
-    idle = window.requestIdleCallback(() => {
-      idle = null;
-      if (active) readVram();
-    }, { timeout: 2_000 });
+    const gpu = (window as unknown as { __labGpu?: { scanned(): { textures: { bytes: number }[]; geometries: { bytes: number }[] } | null } }).__labGpu;
+    const o = gpu?.scanned() ?? null;
+    vramFound = o ? o.textures.reduce((a, x) => a + x.bytes, 0) + o.geometries.reduce((a, x) => a + x.bytes, 0) + ctx.scene.targetBytes() : null;
   };
 
   const compute = (now: number): UsageReading[] => {
+    readVram();
     while (frames.length && frames[0]!.t < now - WINDOW_MS) frames.shift();
     const span = frames.length > 1 ? Math.max(1, frames[frames.length - 1]!.t - frames[0]!.t + frames[0]!.intervalMs) : WINDOW_MS;
     let cpu = 0, gpu = 0, gpuN = 0, draws = 0;
@@ -122,14 +111,11 @@ export function createUsageMeter(ctx: LabContext): UsageMeter {
     setActive(next) {
       if (next === active) return;
       active = next;
-      if (idle !== null) { window.cancelIdleCallback(idle); idle = null; }
       if (!next) return;
       readStorage();
-      scanWhenIdle();
     },
     dispose() {
       stop();
-      if (idle !== null) window.cancelIdleCallback(idle);
     },
   };
 }

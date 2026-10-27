@@ -36,6 +36,9 @@ const blockOf = (key: number): number => {
  * tested against the roads and the buildings' covers (every building's footprint decoded from its table), held the page for minutes while
  * the saved map reopened (2026-10-26).
  */
+/** The cells not ready (`settle`) asked again at most this many times a call: the next call asks the next ones. */
+const UNREADY_PROBES = 64;
+
 export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   private readonly keeps = new Map<number, CandidateKeep<C>>();
   /** The cells filled and not tested yet, with their places; one also in `keeps` stands as it was until its turn. */
@@ -149,6 +152,10 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   /** The waiting and stale cells tested, those of the blocks nearest (`x`, `y`) first, until `deadline` (`performance.now()`), one cell at least: each cell tested whole, then drawn. Whether cells still wait. */
   settle(x: number, y: number, deadline: number): boolean {
     if (!this.queued.size) return false;
+    // The cells whose test reads what is not in yet probed at most `UNREADY_PROBES` a call. DO NOT probe them to the deadline: thousands wait on
+    // the same few cover cells in flight, and each frame of a street's view spent its whole budget asking them again (1.3 s of the city tour's
+    // 3.8 min in `settle`, the lab's tour, 2026-10-27).
+    let probes = 0;
     const span = RANK_CELLS * KEEP_CELL;
     const blocks = [...this.queued.keys()].map((block) => {
       const [i, j] = keepCellOf(block);
@@ -164,7 +171,7 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
         // The skip held to the deadline too: thousands of cells may wait on the same few in flight.
         if (this.ready && !this.ready(keepCellRect(key))) {
           unready = true;
-          if (performance.now() >= deadline) return true;
+          if (++probes >= UNREADY_PROBES || performance.now() >= deadline) return true;
           continue;
         }
         first = false;

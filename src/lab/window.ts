@@ -133,7 +133,16 @@ export function createLabWindow(ctx: LabContext, tabs: readonly LabTab[], usage:
     void navigator.clipboard.writeText(JSON.stringify(state, null, 1)).then(() => { statusText.textContent = 'State copied.'; },
       (error: unknown) => console.warn('lab: state not copied', error));
   });
-  status.append(statusText, copyState);
+  // The whole lab written as a report (`doctor/report.ts`: the diagnosis measured first when none was, every section of the lab with it).
+  const saveReport = button('download', 'Save report', 'Write the diagnosis and every section of the lab to lab-reports/ (dev server) or the app\'s data folder (desktop), measuring first when nothing was measured', () => {
+    const doctor = (window as unknown as { __labDoctor?: { save(): Promise<{ stamp: string; server: string | null; desktop: string | null } | null> } }).__labDoctor;
+    if (!doctor) return;
+    statusText.textContent = 'Writing the report…';
+    void doctor.save().then((r) => {
+      statusText.textContent = r ? `Report ${r.stamp} written: ${[r.server, r.desktop].filter(Boolean).join(' · ') || 'nowhere to write it (no dev server, not the desktop app): download it from the Diagnosis tab'}` : 'No report written.';
+    }, (error: unknown) => { console.error('lab: report not written', error); statusText.textContent = `Report not written: ${String(error)}`; });
+  });
+  status.append(statusText, saveReport, copyState);
   panel.append(head, main, status);
 
   // ---- edges to resize from
@@ -144,7 +153,7 @@ export function createLabWindow(ctx: LabContext, tabs: readonly LabTab[], usage:
   }
   document.body.appendChild(panel);
 
-  const meterEls = new Map<UsageReading['id'], { root: HTMLButtonElement; value: HTMLElement; fill: HTMLElement; spark: HTMLCanvasElement }>();
+  const meterEls = new Map<UsageReading['id'], { root: HTMLButtonElement; value: HTMLElement; fill: HTMLElement; spark: HTMLCanvasElement; g: CanvasRenderingContext2D | null }>();
   const drawMeters = (): void => {
     for (const r of usage.readings()) {
       let m = meterEls.get(r.id);
@@ -163,7 +172,8 @@ export function createLabWindow(ctx: LabContext, tabs: readonly LabTab[], usage:
         const [tab, params] = METER_TARGET[r.id];
         root.onclick = () => ctx.navigate(tab, params);
         meters.appendChild(root);
-        m = { root, value, fill, spark };
+        // Its drawing context asked once (each tick asked it again: 22 a second, the lab's own diagnosis).
+        m = { root, value, fill, spark, g: spark.getContext('2d') };
         meterEls.set(r.id, m);
       }
       const p = r.percent;
@@ -171,7 +181,7 @@ export function createLabWindow(ctx: LabContext, tabs: readonly LabTab[], usage:
       m.fill.style.width = `${p ?? 0}%`;
       m.root.dataset['level'] = p === null ? 'none' : p >= 85 ? 'bad' : p >= 60 ? 'warn' : 'ok';
       m.root.title = `${r.label}: ${r.detail}\n${r.title}`;
-      const g = m.spark.getContext('2d');
+      const g = m.g;
       const h = usage.history(r.id);
       if (g) {
         g.clearRect(0, 0, 60, 16);

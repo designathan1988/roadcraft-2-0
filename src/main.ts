@@ -4184,6 +4184,13 @@ if (PROBES) (window as unknown as { __roadcraft: unknown }).__roadcraft = {
     view.moveTo({ x: at.x, y: at.y });
     requestDraw();
   },
+  /** The map's bounds (its roads' nodes) and the zoom that fits it all on the screen: the lab's city tour (`lab/doctor/tour.ts`) walks them. */
+  bounds: () => {
+    const b = worldBounds();
+    const probe = new Camera();
+    probe.fit(b, surface.cssW, surface.cssH);
+    return { ...b, fitZoom: probe.zoom };
+  },
   /** Forces one frame. Used by the browser verification harness. */
   redraw: () => requestDraw(),
   /** What the scene holds in memory, in MB (`render/memoryCounters.ts`) */

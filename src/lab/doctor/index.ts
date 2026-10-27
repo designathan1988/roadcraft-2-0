@@ -2,6 +2,10 @@ import { icon } from '../icons';
 import type { LabContext, LabTab } from '../labTypes';
 import { findingsOf, layerSwitch, layersOf, verdictOf, type Finding } from './findings';
 import { quickAb, snapshot, type AbResult, type Snapshot } from './measure';
+import { diagnosisReport, keep, lastKept, tourReport, type DiagnosisReport, type KeptFinding } from './report';
+import { runTour } from './tour';
+import type { Cancel } from '../tests/measure';
+import { download, openText } from '../recorder/deliver';
 import './doctor.css';
 
 /** THE DIAGNOSIS (the lab's first tab): it measures by itself - the frame, every GPU pass, one frame's every draw, the CPU's systems and functions - and lists the CAUSES by weight, each with its figures, why it matters, a one-click A/B test of the change that would remove it, and where to look (its draws, the object in the inspector, its code). Chrome's Insights sidebar for the game. */
@@ -19,6 +23,54 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
   let busy = false;
   let status = '';
   const results = new Map<string, AbResult | 'measuring' | string>();
+  /** The report of the last measure, as written; the one before it, compared with. */
+  let report: DiagnosisReport | null = null;
+  let previous: { stamp: string; findings: readonly KeptFinding[] } | null = null;
+  let saving: Promise<DiagnosisReport | null> = Promise.resolve(null);
+  /** The area shown ('' every one). */
+  let area = '';
+  /** The city tour running (its stop asked for), and its last report. */
+  let touring: Cancel | null = null;
+  let tour: DiagnosisReport | null = null;
+
+  /** The diagnosis at every kind of view over the whole city (`tour.ts`), written as one report; the last stop's measure shown. */
+  async function cityTour(): Promise<DiagnosisReport | null> {
+    if (busy || touring) return null;
+    busy = true;
+    touring = { stopped: false };
+    draw();
+    try {
+      const result = await runTour(ctx, touring, (text) => { status = `City tour · ${text}`; draw(); });
+      const last = result.stops[result.stops.length - 1];
+      if (last) { snap = last.snap; findings = [...last.findings]; }
+      tour = await keep(tourReport(ctx, result));
+      status = `City tour: ${result.stops.length} stops in ${(result.ms / 60000).toFixed(1)} min${result.cancelled ? ' (stopped)' : ''}`;
+      ctx.emit('doctor.tour.report', `city tour report ${tour.stamp}: ${tour.summary}`, { stamp: tour.stamp, server: tour.server, desktop: tour.desktop });
+      return tour;
+    } catch (error) {
+      console.error('lab doctor: the city tour failed', error);
+      status = `the city tour failed: ${String(error)}`;
+      return null;
+    } finally {
+      busy = false;
+      touring = null;
+      draw();
+    }
+  }
+
+  /** The measure written as a report (again under its own name after a test), the one before kept to compare with. */
+  function save(again: boolean): Promise<DiagnosisReport | null> {
+    if (!snap) return Promise.resolve(null);
+    const made = diagnosisReport(ctx, snap, findings, results as ReadonlyMap<string, AbResult | string>, previous, again && report ? report.stamp : undefined);
+    report = made;
+    saving = keep(made).then((kept) => {
+      ctx.emit('doctor.report', `diagnosis report ${kept.stamp}: ${kept.summary}`, { stamp: kept.stamp, server: kept.server, desktop: kept.desktop });
+      draw();
+      return kept;
+    }, (error: unknown) => { console.error('lab doctor: the report was not written', error); draw(); return null; });
+    draw();
+    return saving;
+  }
 
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag);
@@ -42,10 +94,13 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
     results.clear();
     draw();
     try {
+      // The report before this one: this session's, or the newest the dev server keeps.
+      previous = report ? { stamp: report.stamp, findings: report.json['findings'] as KeptFinding[] } : await lastKept();
       snap = await snapshot(ctx, (text) => { status = text; draw(); });
       findings = findingsOf(snap);
       status = `measured at ${new Date().toLocaleTimeString('en-US')} over ${snap.frames} frames`;
       ctx.emit('doctor.measure', `diagnosis: ${verdictOf(snap).bound}, ${findings.length} causes`, { verdict: verdictOf(snap), findings: findings.map((f) => f.title) });
+      void save(false);
     } catch (error) {
       console.error('lab doctor: measure failed', error);
       status = `the measure failed: ${String(error)}`;
@@ -67,6 +122,7 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
       results.set(f.id, r);
       ctx.emit('doctor.result', `${test.label}: GPU ${r.gpuA === null || r.gpuB === null ? '—' : `${fmt(r.gpuA)} → ${fmt(r.gpuB)} ms`}, CPU ${fmt(r.cpuA)} → ${fmt(r.cpuB)} ms`, { finding: f.id, ...r });
       status = `${test.label}: measured`;
+      void save(true);
     } catch (error) {
       console.error('lab doctor: test failed', error);
       results.set(f.id, `failed: ${String(error)}`);
@@ -157,8 +213,35 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
 
   function draw(): void {
     const top = el('div', 'lab-row lab-doc-top');
-    top.append(button('refresh', busy ? 'Measuring…' : 'Measure now', 'Measures the frame and every GPU pass, captures a frame and samples the CPU (≈ 5 s)', () => { void measure(); }, 'lab-doc-primary'), el('span', 'lab-muted', status));
+    top.append(button('refresh', busy ? 'Measuring…' : 'Measure now', 'Measures the frame, every GPU pass, one frame\'s every draw, the CPU, the page\'s hidden work and what buys nothing on the screen (about 10 s); the report is written at once', () => { void measure(); }, 'lab-doc-primary'), el('span', 'lab-muted', status));
+    top.append(touring
+      ? button('stop', 'Stop the tour', 'Stops after the stop being measured; the stops measured are written', () => { if (touring) touring.stopped = true; })
+      : button('map', 'City tour', 'Measures the whole city: the whole map from above and turned, nine districts, five streets seen low, the edge (about 8 min); one report of every stop and every cause, with where it was seen', () => { void cityTour(); }));
     const parts: HTMLElement[] = [top];
+    if (tour) {
+      const t = tour;
+      const row = el('div', 'lab-row lab-doc-report');
+      row.append(el('span', t.server || t.desktop ? 'lab-good' : 'lab-muted', `City tour ${t.stamp}: ${t.summary}${t.server ? ` · ${t.server}` : ''}`),
+        button('eye', 'Open', 'Read the tour report', () => openText(t.md, 'text/plain')),
+        button('download', 'MD', 'Download the tour report', () => download(`${t.stamp}.md`, t.md, 'text/markdown')));
+      parts.push(row);
+    }
+    if (report) {
+      const r = report;
+      const kept = el('div', 'lab-row lab-doc-report');
+      const where = [r.server, r.desktop].filter(Boolean).join(' · ');
+      kept.append(el('span', where ? 'lab-good' : 'lab-muted', where ? `Report written: ${where}` : `Report ${r.stamp}: being written…`),
+        button('eye', 'Open', 'Read the report (Markdown) in a tab', () => openText(r.md, 'text/plain')),
+        button('download', 'MD', 'Download the Markdown', () => download(`${r.stamp}.md`, r.md, 'text/markdown')),
+        button('download', 'JSON', 'Download the JSON (every section of the lab)', () => download(`${r.stamp}.json`, JSON.stringify(r.json), 'application/json')),
+        button('copy', 'Copy', 'Copy the Markdown', () => { void navigator.clipboard.writeText(r.md).catch((error: unknown) => console.warn('lab doctor: not copied', error)); }),
+        button('tree', 'All reports', 'Every report the dev server keeps (Reports tab)', () => ctx.navigate('recorder-reports')));
+      parts.push(kept);
+      if (r.against) {
+        const a = r.against;
+        parts.push(el('p', 'lab-muted', `Against ${a.stamp}: ${a.added.length} new (${a.added.map((f) => f.title).slice(0, 3).join('; ') || '—'}), ${a.gone.length} gone (${a.gone.map((f) => f.title).slice(0, 3).join('; ') || '—'}), ${a.grown.length} grown.`));
+      }
+    }
     if (!snap) {
       parts.push(el('p', 'lab-muted', busy ? 'Measuring…' : 'Click "Measure now": the lab measures by itself and lists what weighs most, with a test for each cause.'));
       root.replaceChildren(...parts);
@@ -206,8 +289,18 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
     }
     const causes = el('section', 'lab-doc-section');
     causes.appendChild(el('h3', '', `Causes, by weight (${findings.length})`));
+    // The areas, each with its count: one shown at a time, or all.
+    const areas = el('div', 'lab-row');
+    const counts = new Map<string, number>();
+    for (const f of findings) counts.set(f.area, (counts.get(f.area) ?? 0) + 1);
+    for (const [id, count] of [['', findings.length] as const, ...counts]) {
+      const b = button('', `${id || 'All'} (${count})`, id ? `Only the ${id} causes` : 'Every cause', () => { area = id; draw(); });
+      b.classList.toggle('on', area === id);
+      areas.appendChild(b);
+    }
+    causes.appendChild(areas);
     if (!findings.length) causes.appendChild(el('p', 'lab-muted', 'Nothing above the thresholds in this measure.'));
-    for (const f of findings) causes.appendChild(card(f));
+    for (const f of findings) if (!area || f.area === area) causes.appendChild(card(f));
     parts.push(causes);
     root.replaceChildren(...parts);
   }
@@ -219,8 +312,19 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
     passes: snap.passes, layers: layersOf(snap.draws).slice(0, 15).map(({ heaviest: _h, ...l }) => l),
     systems: snap.systems, functions: snap.functions,
     findings: findings.map((f) => ({ ...f, object: undefined, result: results.get(f.id) })),
+    report: report ? { stamp: report.stamp, server: report.server, desktop: report.desktop, summary: report.summary } : null,
   } : null));
-  (window as unknown as { __labDoctor: unknown }).__labDoctor = { measure, findings: () => findings, snapshot: () => snap, test: (id: string) => { const f = findings.find((x) => x.id === id); return f ? test(f) : Promise.resolve(); } };
+  /** The report written now: measured first when nothing was. */
+  const saveNow = async (): Promise<DiagnosisReport | null> => {
+    if (!snap) await measure();
+    else await save(true);
+    return saving;
+  };
+  (window as unknown as { __labDoctor: unknown }).__labDoctor = {
+    measure, findings: () => findings, snapshot: () => snap, report: () => report, save: saveNow, tour: cityTour, tourReport: () => tour,
+    stopTour: () => { if (touring) touring.stopped = true; },
+    test: (id: string) => { const f = findings.find((x) => x.id === id); return f ? test(f) : Promise.resolve(); },
+  };
 
   return [{
     id: 'doctor',

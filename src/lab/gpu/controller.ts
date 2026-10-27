@@ -68,6 +68,8 @@ export interface GpuLab {
   capture(): Promise<Capture>;
   /** Scanned again when asked (`refreshObjects`). */
   objects(): GpuObjects;
+  /** The last scan, none made for it (null before the first). */
+  scanned(): GpuObjects | null;
   refreshObjects(): GpuObjects;
   readonly contextEvents: readonly { t: number; kind: string }[];
   /** The report's section. */
@@ -241,6 +243,7 @@ export function createGpuLab(ctx: LabContext): GpuLab {
       });
     },
     objects: () => objects ?? scan(),
+    scanned: () => objects,
     refreshObjects: scan,
     contextEvents,
     report() {

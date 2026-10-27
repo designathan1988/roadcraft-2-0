@@ -27,6 +27,7 @@ export function createGpuTabs(ctx: LabContext): LabTab[] {
       view: (view: Parameters<typeof lab.views.set>[0]) => lab.views.set(view),
       programs: () => lab.programs.rows,
       objects: () => lab.refreshObjects(),
+      scanned: () => lab.scanned(),
       capabilities: () => readCapabilities(ctx.scene.gl),
       report: () => lab.report(),
     },

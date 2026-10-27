@@ -49,6 +49,10 @@ const copyOf = (geometry: BufferGeometry, name: string): ArrayOf | null => {
  *  what they were made from (`keyOf`), so the same part made again (another body style) takes the levels already made. */
 export class PartLevelMaker {
   private readonly made = new Map<string, Promise<PartLevels>>();
+  /** The coarser levels' geometries, by what they were made from (`keyOf`): one geometry a level however many parts are made of the same
+   *  numbers. DO NOT make them again for each: the hatch's, the sedan's, the wagon's, the SUV's and the pickup's identical wheels were five
+   *  copies of every level on the GPU (the lab's waste scan, 2026-10-27). */
+  private readonly built = new Map<string, Promise<(BufferGeometry | null)[]>>();
 
   /** The levels of `source` (0 is `source` itself): welded, simplified and measured in the levels' worker (`partLevelsWork.ts`), the page
    *  only putting the geometries together. `copies`: how many a vehicle draws (a car's four tyres), for what a level sheds a vehicle (`SHED`).
@@ -75,18 +79,28 @@ export class PartLevelMaker {
       making = pool ? pool.part(part, weld) : Promise.resolve(partLevelArrays(part, weld));
       this.made.set(key, making);
     }
-    const levelsMade: PartLevels = await making;
-    const levels: BufferGeometry[] = [source];
-    for (const l of levelsMade.levels) {
-      if (l === 'same') { levels.push(levels[levels.length - 1]!); continue; }
-      const level = new BufferGeometry();
-      level.setAttribute('position', attributeOf(l.position));
-      level.setAttribute('color', attributeOf(l.color));
-      level.setAttribute('normal', attributeOf(l.normal));
-      level.setIndex(new BufferAttribute(l.index, 1));
-      level.boundingSphere = new Sphere(new Vector3(l.sphere[0], l.sphere[1], l.sphere[2]), l.sphere[3]);
-      levels.push(level);
+    // The coarser levels as geometries, made once for every part of the same numbers (`built`); a level the same as the one before is that one.
+    let geometries = this.built.get(key);
+    if (!geometries) {
+      geometries = making.then((made) => {
+        const out: (BufferGeometry | null)[] = [];
+        for (const l of made.levels) {
+          if (l === 'same') { out.push(out[out.length - 1] ?? null); continue; }
+          const level = new BufferGeometry();
+          level.setAttribute('position', attributeOf(l.position));
+          level.setAttribute('color', attributeOf(l.color));
+          level.setAttribute('normal', attributeOf(l.normal));
+          level.setIndex(new BufferAttribute(l.index, 1));
+          level.boundingSphere = new Sphere(new Vector3(l.sphere[0], l.sphere[1], l.sphere[2]), l.sphere[3]);
+          out.push(level);
+        }
+        return out;
+      });
+      this.built.set(key, geometries);
     }
+    // A level null is its source again (level 0 the same as the one before it): each part's own source stands there.
+    const levels: BufferGeometry[] = [source];
+    for (const g of await geometries) levels.push(g ?? levels[levels.length - 1]!);
     // A level that sheds too little a vehicle is the finer one again: one draw fewer for every body style.
     let finer = trianglesOf(source);
     for (let k = 1; k < levels.length; k++) {

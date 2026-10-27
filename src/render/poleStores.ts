@@ -353,6 +353,11 @@ export class PartStore {
     return this.bounds.box;
   }
 
+  /** How bright its pieces are now (a light's: dusk lights them), what `view` reads with the camera. */
+  get brightness(): number {
+    return this.spec.brightness();
+  }
+
   /**
    * As the camera sees each piece: under a pixel (its cover times its brightness) not drawn; drawn at the coarsest shape off by under a pixel
    * at its own distance; a light (`glows`) at any size, but not where its material fades it out whole (`fadesAt`) nor behind the eye.

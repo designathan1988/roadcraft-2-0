@@ -59,6 +59,10 @@ export class PoleCells implements Utilities {
   readonly cells: ViewCells<HeldBlock>;
   private readonly specs: readonly PolePartSpec[];
   private readonly live = new Set<Block>();
+  /** The camera (its matrices, the screen's height) and the lights' brightness the held blocks were last viewed from (`view`). */
+  private seenFrom: number[] = [];
+  /** The blocks viewed from it. */
+  private viewed = new WeakSet<Block>();
   private readonly scale = new ScreenScale();
   private readonly scratch: Placement[][] = Array.from({ length: POLE_PART_COUNT }, () => []);
   private from: { net: Network; groundAt: (x: number, y: number) => number } | null = null;
@@ -268,11 +272,23 @@ export class PoleCells implements Utilities {
     this.live.delete(block);
   }
 
-  /** Each held block's nearest corner as this camera sees it, each time three draws the layer: what its parts fade and coarsen by. */
+  /** Each held block's nearest corner as this camera sees it, each time three draws the layer: what its parts fade and coarsen by. A camera that
+   *  has not moved since the last view sees every piece as it did: only the blocks made since are viewed. DO NOT view every piece of every
+   *  held block at every draw of a still view: it was the most of a street's frame (1.35 s of the city tour's 3.8 min in `PoleStore.view`, the
+   *  lab's tour, 2026-10-27). */
   private view(camera: Camera): void {
+    const seen = this.seenFrom;
+    // A light's pieces are shown by its brightness too (dusk lights them): a change of it is a new view.
+    const brightness = new Set<number>();
+    for (const block of this.live) for (const part of block.parts) brightness.add(part.brightness);
+    const now = [...camera.matrixWorld.elements, ...camera.projectionMatrix.elements, screen.halfHeight, ...[...brightness].sort((a, b) => a - b)];
+    const still = seen.length === now.length && now.every((v, i) => v === seen[i]);
+    if (!still) { this.seenFrom = now; this.viewed = new WeakSet(); }
     this.scale.set(camera);
     wireScreen.uWirePixels.value = screen.halfHeight;
     for (const block of this.live) {
+      if (still && this.viewed.has(block)) continue;
+      this.viewed.add(block);
       let nearest = -Infinity;
       for (const part of block.parts) if (part.count > 0) nearest = Math.max(nearest, this.scale.atBox(part.box));
       if (block.wires.count > 0) nearest = Math.max(nearest, this.scale.atBox(block.wires.box));

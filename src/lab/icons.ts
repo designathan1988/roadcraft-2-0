@@ -31,6 +31,7 @@ const PATHS: Readonly<Record<string, string>> = {
   copy: 'M8 8h12v12H8z M4 16V4h12',
   play: 'M7 4l13 8-13 8z',
   stop: 'M6 6h12v12H6z',
+  map: 'M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z M9 3v15 M15 6v15',
   pause: 'M7 5v14 M17 5v14',
   search: 'M11 11m-7 0a7 7 0 1 0 14 0a7 7 0 1 0-14 0 M16 16l5 5',
   pointer: 'M5 3l14 7-6 2-2 6z',
