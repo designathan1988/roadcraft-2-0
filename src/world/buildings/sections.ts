@@ -1,11 +1,12 @@
 import { type FieldWrites, TableItems } from './items';
 import { type RecordRef, RecordTable, type RowPlace, type TableRow, encodeRecords, tableRecords } from './recordTable';
-import { TableRows } from './tableRows';
+import { type TableBase, TableRows, baseBuffers, baseOrder } from './tableRows';
 import type { Building, BuildingId } from './types';
 
 /** A STORE'S RECORDS AS BUFFERS, NEVER AS OBJECTS (the save's sections, the simulation's map, the undo of a whole map): the table they were opened from, as it is (shared, never copied), and what was written over it - the ids deleted, the records replaced and the records added, each as a table of their own. The buildings', the lots' and the landscaping's alike. */
 export interface TableSections {
-  readonly base: ArrayBufferLike | null;
+  /** The tables they were opened from (a map's squares', in their order, `TableBase`), shared. */
+  readonly base: TableBase | null;
   /** The ids of the table deleted (set again: in `added`). */
   readonly gone: Float64Array;
   readonly replaced: ArrayBufferLike | null;
@@ -29,7 +30,7 @@ export function sectionsOf<K extends number, V extends TableRow>(items: Readonly
   if (items instanceof TableItems) {
     const { gone, replaced, added } = (items as TableItems<K, V>).writes();
     const field = (items as TableItems<K, V>).fieldWrites();
-    return { base: items.table?.buffer ?? null, gone: Float64Array.from(gone), replaced: tableOf(replaced.values(), place), added: tableOf(added.values(), place), ...(field ? { field } : {}) };
+    return { base: items.table?.base ?? null, gone: Float64Array.from(gone), replaced: tableOf(replaced.values(), place), added: tableOf(added.values(), place), ...(field ? { field } : {}) };
   }
   return { base: null, gone: new Float64Array(0), replaced: null, added: tableOf(items.values(), place) };
 }
@@ -49,12 +50,17 @@ export function itemsOfSections<K extends number = BuildingId, V extends TableRo
 /** How many records the sections hold. */
 export function sectionsSize(s: TableSections): number {
   const rows = (buffer: ArrayBufferLike | null): number => (buffer ? new RecordTable(buffer).rows : 0);
-  return rows(s.base) - s.gone.length + rows(s.added);
+  let base = 0;
+  if (s.base) for (const buffer of baseBuffers(s.base)) base += rows(buffer);
+  return base - s.gone.length + rows(s.added);
 }
 
 /** The bytes the sections hold. */
 export function sectionsBytes(s: TableSections): number {
-  return (s.base?.byteLength ?? 0) + s.gone.byteLength + (s.replaced?.byteLength ?? 0) + (s.added?.byteLength ?? 0) + (s.field?.pairs.byteLength ?? 0);
+  let base = 0;
+  if (s.base) for (const buffer of baseBuffers(s.base)) base += buffer.byteLength;
+  const order = s.base ? baseOrder(s.base) : null;
+  return base + (order?.byteLength ?? 0) + s.gone.byteLength + (s.replaced?.byteLength ?? 0) + (s.added?.byteLength ?? 0) + (s.field?.pairs.byteLength ?? 0);
 }
 
 /** Where each record of the sections is read, in the store's order (`eachSectionRecord`'s order): a row of the table, of the records replaced or of those added - nothing decoded (the worker's columns, `sim/agents/trafficBuildings.ts`). */
@@ -68,14 +74,25 @@ export function* eachSectionRef(s: TableSections): Generator<RecordRef, void, vo
   const fields = new Map<number, number>();
   if (s.field) for (let k = 0; k + 1 < s.field.pairs.length; k += 2) fields.set(s.field.pairs[k]!, s.field.pairs[k + 1]!);
   if (s.base) {
-    const table = new RecordTable(s.base);
-    for (let row = 0; row < table.rows; row++) {
+    // The tables' rows in the store's order (`TableBase`): a row of the store its table's and its row there.
+    const tables = baseBuffers(s.base).map((buffer) => new RecordTable(buffer));
+    const starts: number[] = [0];
+    for (const t of tables) starts.push(starts[starts.length - 1]! + t.rows);
+    const order = baseOrder(s.base);
+    const total = starts[tables.length]!;
+    // Each row's table, once (DO NOT look it up a row: a 10 km city's squares are ~1,600 tables).
+    const tableOfRow = new Uint32Array(total);
+    tables.forEach((_, k) => tableOfRow.fill(k, starts[k]!, starts[k + 1]!));
+    for (let rank = 0; rank < total; rank++) {
+      const at = order ? order[rank]! : rank;
+      const t = tableOfRow[at]!;
+      const table = tables[t]!, row = at - starts[t]!;
       const id = table.ids[row]!;
       if (gone.has(id)) continue;
       const over = replaced.get(id);
       if (over !== undefined) { yield { buffer: s.replaced!, row: over }; continue; }
       const value = fields.get(id);
-      yield value === undefined ? { buffer: s.base, row } : { buffer: s.base, row, field: { name: s.field!.name, value } };
+      yield value === undefined ? { buffer: table.buffer, row } : { buffer: table.buffer, row, field: { name: s.field!.name, value } };
     }
   }
   if (s.added) {

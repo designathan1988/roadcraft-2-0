@@ -162,11 +162,12 @@ export class LotStore {
     const items = this.items;
     const ofLot = (lot: Lot): void => { const c = placeOf(lot); visit(lot.id, c.x, c.y, !!lot.use, lot.building ?? Number.NaN, this.orderOf(lot.id)!); };
     if (!(items instanceof TableItems)) { for (const lot of items.values()) ofLot(lot); return; }
-    items.eachInOrder((rows, at) => {
-      const t = rows.table;
-      if (t.summaryWidth !== LOT_SUMMARY_WIDTH) { ofLot(rows.record(at)); return; }
+    items.eachInOrder((rows, row, _field, rank) => {
+      // Its columns in its own table (a square's, `TableRows.tableOf`), at its row there.
+      const t = rows.tableOf(row), at = rows.localRow(row);
+      if (t.summaryWidth !== LOT_SUMMARY_WIDTH) { ofLot(rows.record(row)); return; }
       const s = t.summary!;
-      visit(t.ids[at]!, t.xs[at]!, t.ys[at]!, s[LOT_ZONED * t.rows + at] === 1, s[LOT_BUILDING * t.rows + at]!, at);
+      visit(t.ids[at]!, t.xs[at]!, t.ys[at]!, s[LOT_ZONED * t.rows + at] === 1, s[LOT_BUILDING * t.rows + at]!, rank);
     }, ofLot);
   }
 

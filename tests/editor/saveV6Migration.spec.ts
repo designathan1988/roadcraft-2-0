@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { baseBuffers } from '@world/buildings/tableRows';
 import { gunzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { SAVE_TILE, type SavedTables, TiledSaves } from '@editor/chunkedSave';
@@ -52,7 +53,7 @@ const square = (x: number, y: number, side: number): string => `${Math.floor(x /
 const idsOf = (json: SerializedDoc, tables: SavedTables = {}): number[] =>
   [json.nodes, json.segments, json.poles, json.poleSpans, json.landscape, json.barriers, json.buildings, json.lots]
     .flatMap((list) => (list ?? []).map((r) => (r as { id: number }).id))
-    .concat(Object.values(tables).flatMap((buffer) => [...new RecordTable(buffer).ids]))
+    .concat(Object.values(tables).flatMap((base) => baseBuffers(base).flatMap((buffer) => [...new RecordTable(buffer).ids])))
     .sort((a, b) => a - b);
 
 describe('a map saved on the tiles of 1,024 m (manifest 6, HEAD db9da0c7)', () => {

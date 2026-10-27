@@ -1,4 +1,5 @@
-import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow, tableRecords } from '@world/buildings/recordTable';
+import { RecordTable, type TableReader, TableWriter, type RowBox, type RowPlace, type RowSummary, type TableRow, tableIn, tableRecords } from '@world/buildings/recordTable';
+import type { TableBase } from '@world/buildings/tableRows';
 import type { FieldWrites } from '@world/buildings/items';
 import type { DocTable } from '@world/docBinary';
 import type { GlobalPart, SavedGlobals, SerializedDoc } from '@world/doc';
@@ -44,8 +45,8 @@ export interface UpgradedSquare {
   readonly frame: ArrayBuffer;
 }
 
-/** The tables a map read back from its squares holds its records in (the kinds kept in tables), each joined from its squares without decoding; a kind absent has its records in the document (a save before manifest 8). */
-export type SavedTables = Partial<Record<DocTable, ArrayBufferLike>>;
+/** The tables a map read back from its squares holds its records in (the kinds kept in tables): each kind's squares' tables and their rows' order (`TableBase`), nothing joined; a kind absent has its records in the document (a save before manifest 8). */
+export type SavedTables = Partial<Record<DocTable, TableBase>>;
 
 /** The numeric field written over a kind's joined rows (`TableSections.field`): the buildings' stored wears, their rows copied as they are. */
 export type SavedFields = Partial<Record<DocTable, FieldWrites>>;
@@ -91,35 +92,46 @@ function squareRecords(value: SquareBlob | SquareSections): SquareBlob | null {
 }
 
 /**
- * A kind's squares joined into one table of the map, row by row without decoding (`TableWriter.copyRows`), in id order (the lots in their
- * stored order, then by id) as the map read as records always held them; a building whose stored wear differs from its row's copied as it is,
- * its wear the field written over it (`field`, `TableItems.writeField`). Decoded and written again, a row of a square written before its kind
- * had box columns (the lots' before 2026-10-26: their box written now, `KEYED.box`, so the map reads their places from the columns,
- * `TableItems.eachBox`). DO NOT decode and write again a building for its wear: a city that ran for hours had nearly every wear moved since its
- * square was written, and the 10 km city's opening decoded and encoded its 249,122 buildings for them (2026-10-27).
+ * A kind's squares as the map's tables (`TableBase`): each square's table as it was read, in shared memory (`tableIn`: the page's workers read
+ * its rows where they stand), and the order of the store's rows over them - by id (the lots in their stored order, then by id), as the map
+ * read as records always held them. A building whose stored wear differs from its row's stands as its row, its wear the field written over
+ * it (`field`, `TableItems.writeField`). DO NOT join them into one table: the 10 km city's buildings were 687 MB copied row by row at every
+ * opening (~7 s), the squares' tables and the copy held at once (2026-10-27); nor decode and write again a building for its wear (its
+ * 249,122 buildings were, the day before).
  */
-function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null; square: string }[], wears: ReadonlyMap<number, number>): { buffer: ArrayBufferLike; field: FieldWrites | null } {
-  const rows: { t: number; row: number; id: number; order: number }[] = [];
-  squares.forEach(({ table, orders }, t) => { for (let row = 0; row < table.rows; row++) rows.push({ t, row, id: table.ids[row]!, order: orders?.[row] ?? 0 }); });
-  rows.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
-  const box = KEYED[name].box as RowBox<TableRow> | undefined;
-  const summary = (KEYED[name].summary?.() ?? null) as RowSummary<TableRow> | null;
-  const writer = new TableWriter<TableRow>(false, KEYED[name].columns as RowPlace<TableRow> | undefined ?? null, box ?? null, summary);
-  const readers = new Map<number, TableReader>();
-  const readerOf = (t: number): TableReader => { let reader = readers.get(t); if (!reader) readers.set(t, reader = squares[t]!.table.reader()); return reader; };
-  /** The wears that differ from their rows', as (id, decay) pairs: the field over the joined table. */
+function joined(name: KeyedName, squares: readonly { table: RecordTable; orders: Float64Array | null; square: string }[], wears: ReadonlyMap<number, number>): { base: TableBase; field: FieldWrites | null } {
+  const starts = new Uint32Array(squares.length + 1);
+  squares.forEach(({ table }, t) => { starts[t + 1] = starts[t]! + table.rows; });
+  const n = starts[squares.length]!;
+  // Each row's id and stored order, by its number over the squares' tables.
+  const ids = new Float64Array(n), orders = new Float64Array(n);
+  squares.forEach(({ table, orders: own }, t) => {
+    ids.set(table.ids, starts[t]!);
+    if (own) orders.set(own, starts[t]!);
+  });
+  const order = new Uint32Array(n);
+  for (let i = 0; i < n; i++) order[i] = i;
+  order.sort(name === 'lots' ? (a, b) => orders[a]! - orders[b]! || ids[a]! - ids[b]! : (a, b) => ids[a]! - ids[b]!);
+  /** The wears that differ from their rows', as (id, decay) pairs: the field over the tables. */
   const worn: number[] = [];
-  for (const { t, row, id } of rows) {
-    const table = squares[t]!.table;
-    if (box && !table.boxes) { writer.add([name === 'buildings' ? withWear(readerOf(t).record(row), wears) as TableRow : readerOf(t).record(row)]); continue; }
-    if (name === 'buildings' && wears.has(id)) {
-      const decay = readerOf(t).field(row, 'decay');
-      const wear = wears.get(id)!;
-      if ((typeof decay === 'number' ? decay : 0) !== wear) worn.push(id, wear);
+  if (name === 'buildings' && wears.size) {
+    for (const { table } of squares) {
+      let reader: TableReader | null = null;
+      for (let row = 0; row < table.rows; row++) {
+        const id = table.ids[row]!;
+        const wear = wears.get(id);
+        if (wear === undefined) continue;
+        const decay = (reader ??= table.reader()).field(row, 'decay');
+        if ((typeof decay === 'number' ? decay : 0) !== wear) worn.push(id, wear);
+      }
     }
-    writer.copyRows(table, [row]);
   }
-  return { buffer: writer.finish().buffer, field: worn.length ? { name: 'decay', pairs: Float64Array.from(worn) } : null };
+  // One square: its table alone, the order its own where its rows stand in it.
+  let ordered = true;
+  for (let i = 0; i < n && ordered; i++) ordered = order[i] === i;
+  const tables = squares.map(({ table }) => tableIn(table.buffer));
+  const base: TableBase = tables.length === 1 && ordered ? tables[0]! : { tables, order: ordered ? null : order };
+  return { base, field: worn.length ? { name: 'decay', pairs: Float64Array.from(worn) } : null };
 }
 
 /** The map of `read`'s blobs (see the file's comment), or null when a blob is missing or unreadable. */
@@ -226,7 +238,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
       upgraded.push({ layer: name, square: entry.square, frame: squareFrame(buffer, entry.orders ? Array.from(entry.orders) : null) });
     }
     const made = joined(name, squares, wears);
-    tables[spec.table!] = made.buffer;
+    tables[spec.table!] = made.base;
     if (made.field) fields[spec.table!] = made.field;
   }
   const timing = { squares: squaresMs, join: performance.now() - started - squaresMs, read: phase.read, inflate: phase.inflate, parse: phase.parse, mb: phase.bytes / 1048576 };

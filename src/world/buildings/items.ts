@@ -161,7 +161,7 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     const held = this.fieldHeld.get(row)?.deref();
     if (held) return held;
     const field = { name: this.field!, value };
-    const own = readFrom(withField(base.record(row), field), { buffer: base.buffer, row, field });
+    const own = readFrom(withField(base.record(row), field), { buffer: base.tableOf(row).buffer, row: base.localRow(row), field });
     base.onRead?.(own);
     this.fieldHeld.set(row, new WeakRef(own as V & object));
     this.fieldCollected.register(own as V & object, row);
@@ -190,19 +190,21 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     return row >= 0 && other.ownRow(key) === row && (this.field === null || other.field === null || this.field === other.field);
   }
 
-  /** Where a worker reads the record of `key` when it is the table's own (not written here): the table's buffer and its row, with the field written over it, nothing decoded; null otherwise. */
+  /** Where a worker reads the record of `key` when it is the table's own (not written here): its table's buffer and its row there, with the field written over it, nothing decoded; null otherwise. */
   tableRef(key: K): RecordRef | null {
     const row = this.ownRow(key);
     if (row < 0) return null;
     const value = this.fieldOfRow(row);
-    return Number.isNaN(value) ? { buffer: this.base!.buffer, row } : { buffer: this.base!.buffer, row, field: { name: this.field!, value } };
+    const base = this.base!, buffer = base.tableOf(row).buffer, at = base.localRow(row);
+    return Number.isNaN(value) ? { buffer, row: at } : { buffer, row: at, field: { name: this.field!, value } };
   }
 
-  /** The row of a record of the table standing as the table's own or replaced in place (its place in the order): -1 for one added, gone or not here. */
+  /** The place in the table's order of a record standing as the table's own or replaced in place (`TableRows.rankOf`): -1 for one added, gone or not here. */
   rowOrder(key: K): number {
     const base = this.base;
     if (!base || this.added.has(key) || this.gone.has(key)) return -1;
-    return base.rowOf(key);
+    const row = base.rowOf(key);
+    return row < 0 ? -1 : base.rankOf(row);
   }
 
   /** Where the record of `key` stands: the table's columns for one of the table (nothing decoded), the record's own x and y else; undefined when it is not here or has no place. */
@@ -276,7 +278,8 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
   *entries(): MapIterator<[K, V]> {
     const base = this.base;
     if (base) {
-      for (let row = 0; row < base.size; row++) {
+      for (let rank = 0; rank < base.size; rank++) {
+        const row = base.rowAt(rank);
         const key = base.idAt(row);
         if (this.gone.has(key)) continue;
         yield [key, this.replaced.get(key) ?? this.rowRecord(row)];
@@ -293,8 +296,9 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
   eachPlace(visit: (x: number, y: number) => void): void {
     const base = this.base;
     if (base) {
-      const { ids, xs, ys } = base.table;
-      for (let row = 0; row < ids.length; row++) {
+      const { ids, xs, ys } = base;
+      for (let rank = 0; rank < ids.length; rank++) {
+        const row = base.rowAt(rank);
         const key = ids[row]! as K;
         if (this.gone.has(key) || this.replaced.has(key)) continue;
         const x = xs[row]!, y = ys[row]!;
@@ -309,8 +313,9 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
   eachRow(row: (table: TableRows<K, V>, row: number, field: number) => void, written: (value: V) => void): void {
     const base = this.base;
     if (base) {
-      const ids = base.table.ids;
-      for (let r = 0; r < ids.length; r++) {
+      const ids = base.ids;
+      for (let rank = 0; rank < ids.length; rank++) {
+        const r = base.rowAt(rank);
         const key = ids[r]! as K;
         if (this.gone.has(key) || this.replaced.has(key)) continue;
         row(base, r, this.fieldOfRow(r));
@@ -320,16 +325,17 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     for (const value of this.added.values()) written(value);
   }
 
-  /** Each record in the order of `entries` (the table's rows, one replaced in its place, then those added), nothing decoded: a row of the table standing as its own as its row (`row`, with the field written over it, NaN: none), a record written here as itself (`written`). */
-  eachInOrder(row: (table: TableRows<K, V>, row: number, field: number) => void, written: (value: V) => void): void {
+  /** Each record in the order of `entries` (the table's rows, one replaced in its place, then those added), nothing decoded: a row of the table standing as its own as its row (`row`, with the field written over it, NaN: none, and its place in the table's order), a record written here as itself (`written`). */
+  eachInOrder(row: (table: TableRows<K, V>, row: number, field: number, rank: number) => void, written: (value: V) => void): void {
     const base = this.base;
     if (base) {
-      const ids = base.table.ids;
-      for (let r = 0; r < ids.length; r++) {
+      const ids = base.ids;
+      for (let rank = 0; rank < ids.length; rank++) {
+        const r = base.rowAt(rank);
         const key = ids[r]! as K;
         if (this.gone.has(key)) continue;
         const over = this.replaced.get(key);
-        if (over !== undefined) written(over); else row(base, r, this.fieldOfRow(r));
+        if (over !== undefined) written(over); else row(base, r, this.fieldOfRow(r), rank);
       }
     }
     for (const value of this.added.values()) written(value);
@@ -341,8 +347,9 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
     const base = this.base;
     const take = (value: V): void => { const b = boxOf(value); if (b) visit(b.minX, b.minY, b.maxX, b.maxY); };
     if (base) {
-      const { ids, boxes } = base.table;
-      for (let row = 0; row < ids.length; row++) {
+      const { ids, boxes } = base;
+      for (let rank = 0; rank < ids.length; rank++) {
+        const row = base.rowAt(rank);
         const key = ids[row]! as K;
         if (this.gone.has(key) || this.replaced.has(key)) continue;
         const minX = boxes ? boxes.minX[row]! : Number.NaN;

@@ -64,10 +64,10 @@ interface Held { readonly buildings: number; readonly walkBytes: number; readonl
 async function heldRound(name: string): Promise<Held> {
   const doc = cooked(name);
   // The middle of the buildings, read off the table's columns (no record decoded for it).
-  const table = doc.buildings.table!.table;
+  const table = doc.buildings.table!;
   let sx = 0, sy = 0;
-  for (let row = 0; row < table.rows; row++) { sx += table.xs[row]!; sy += table.ys[row]!; }
-  const eye = { x: sx / table.rows, y: sy / table.rows };
+  for (let row = 0; row < table.size; row++) { sx += table.xs[row]!; sy += table.ys[row]!; }
+  const eye = { x: sx / table.size, y: sy / table.size };
   // Every record read once and let go, as the layer's first look reads them: what the table keeps of such a walk measured apart from the layer.
   const walkFrom = await heap();
   let volumes = 0;

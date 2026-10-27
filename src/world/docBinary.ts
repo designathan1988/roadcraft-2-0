@@ -1,4 +1,5 @@
 import { EMPTY_SECTIONS, type TableSections, sectionsBytes } from './buildings/sections';
+import { type TableBase, baseBuffers, baseOrder } from './buildings/tableRows';
 
 /** THE MAP AS BINARY SECTIONS, NEVER ONE TEXT (report "Arquitetura para cidades grandes", "A conta de memória": V8 strings stop near 512 MiB; region files of offsets and lengths, each section read on its own): each part of the map's JSON one short UTF-8 section (a long list cut in runs), the records of each kind kept in a table (`DOC_TABLES`) their table and what was written over it (`TableSections`). An undo of a whole map keeps the same image unpacked (`DocImage`), the tables shared with the map it was, never copied. */
 
@@ -71,13 +72,18 @@ export function imageBytes(image: DocImage): number {
 // ------------------------------------------------------------------ the file
 
 const MAGIC = 0x42444352; // 'RCDB'
-const FORMAT = 1;
+/** 2 (2026-10-27): a table's base as several tables (a map's squares', `TableBase`), each a base section in its rows' order, and the order of
+ *  the store's rows (`S_ORDERS`); a file of format 1 (one table a base) is still read. */
+const FORMAT = 2;
+const FIRST_FORMAT = 1;
 /** Section kinds: the parts, then each table's four (base, gone, replaced, added) from its first kind on (`firstKind`): the buildings' from 3, the landscaping's from 7, the lots' from 11, the poles' from 15, the wires' from 19 (2026-10-26; a file without a table's sections holds those records in its parts). */
 const S_PART = 1, S_RUN = 2, S_TABLES = 3;
 const K_BASE = 0, K_GONE = 1, K_REPLACED = 2, K_ADDED = 3, KINDS_A_TABLE = 4;
 const firstKind = (name: DocTable): number => S_TABLES + DOC_TABLES.indexOf(name) * KINDS_A_TABLE;
 /** A table's field written over its rows (`TableSections.field`: its name the section's, its (id, value) pairs the body), after every table's four: the buildings' 23, the landscaping's 24, and on (2026-10-26). */
 const S_FIELDS = S_TABLES + DOC_TABLES.length * KINDS_A_TABLE;
+/** The order of a table's rows over its base's tables (`TableBase` order), after every table's field: the buildings' 28, the landscaping's 29, and on (format 2). */
+const S_ORDERS = S_FIELDS + DOC_TABLES.length;
 /** Header words: magic, format, sections; then per section: kind, name length, offset, length. */
 const HEAD = 3, ENTRY = 4;
 const align8 = (n: number): number => Math.ceil(n / 8) * 8;
@@ -86,7 +92,7 @@ const align8 = (n: number): number => Math.ceil(n / 8) * 8;
 export function isDocBinary(bytes: ArrayBufferLike): boolean {
   if (bytes.byteLength < HEAD * 4) return false;
   const head = new Uint32Array(bytes, 0, 2);
-  return head[0] === MAGIC && head[1] === FORMAT;
+  return head[0] === MAGIC && head[1]! >= FIRST_FORMAT && head[1]! <= FORMAT;
 }
 
 /** An image packed in one buffer: a directory of sections (kind, name, offset, length), each section 8-byte aligned. Deterministic: the same image, the same bytes. */
@@ -97,7 +103,10 @@ export function packImage(image: DocImage): ArrayBuffer {
   const add = (kind: number, buffer: ArrayBufferLike | null): void => { if (buffer) sections.push({ kind, name: none, bytes: new Uint8Array(buffer) }); };
   for (const name of DOC_TABLES) {
     const first = firstKind(name), s = image.tables[name];
-    add(first + K_BASE, s.base);
+    // Its base's tables in their rows' order, each a section, and the store's order of their rows.
+    if (s.base) for (const buffer of baseBuffers(s.base)) add(first + K_BASE, buffer);
+    const order = s.base ? baseOrder(s.base) : null;
+    if (order) sections.push({ kind: S_ORDERS + DOC_TABLES.indexOf(name), name: none, bytes: new Uint8Array(order.buffer, order.byteOffset, order.byteLength) });
     if (s.gone.length) sections.push({ kind: first + K_GONE, name: none, bytes: new Uint8Array(s.gone.buffer, s.gone.byteOffset, s.gone.byteLength) });
     add(first + K_REPLACED, s.replaced);
     add(first + K_ADDED, s.added);
@@ -129,9 +138,9 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
   const count = words[2]!;
   const dir = new Uint32Array(buffer, 0, HEAD + count * ENTRY);
   const parts: DocPart[] = [];
-  interface Read { base: ArrayBufferLike | null; gone: Float64Array; replaced: ArrayBufferLike | null; added: ArrayBufferLike | null; field?: { name: string; pairs: Float64Array } }
+  interface Read { bases: ArrayBufferLike[]; order: Uint32Array | null; gone: Float64Array; replaced: ArrayBufferLike | null; added: ArrayBufferLike | null; field?: { name: string; pairs: Float64Array } }
   const tables = {} as Record<DocTable, Read>;
-  for (const name of DOC_TABLES) tables[name] = { base: null, gone: new Float64Array(0), replaced: null, added: null };
+  for (const name of DOC_TABLES) tables[name] = { bases: [], order: null, gone: new Float64Array(0), replaced: null, added: null };
   for (let i = 0; i < count; i++) {
     const w = HEAD + i * ENTRY;
     const kind = dir[w]!, nameLength = dir[w + 1]!, nameAt = dir[w + 2]!, length = dir[w + 3]!;
@@ -139,6 +148,12 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
     const body = new Uint8Array(buffer, bodyAt, length);
     if (kind === S_PART || kind === S_RUN) {
       parts.push({ name: decoder.decode(new Uint8Array(buffer, nameAt, nameLength).slice()), run: kind === S_RUN, bytes: body.slice() });
+      continue;
+    }
+    if (kind >= S_ORDERS) {
+      const owner = DOC_TABLES[kind - S_ORDERS];
+      if (!owner) throw new Error(`[save] a map in binary sections holds an unknown section ${kind}`);
+      tables[owner].order = new Uint32Array(body.slice().buffer);
       continue;
     }
     if (kind >= S_FIELDS) {
@@ -151,11 +166,17 @@ export function unpackImage(buffer: ArrayBufferLike, own: (bytes: Uint8Array) =>
     if (kind < S_TABLES || !name) throw new Error(`[save] a map in binary sections holds an unknown section ${kind}`);
     const table = tables[name];
     switch ((kind - S_TABLES) % KINDS_A_TABLE) {
-      case K_BASE: table.base = own(body); break;
+      case K_BASE: table.bases.push(own(body)); break;
       case K_GONE: table.gone = new Float64Array(body.slice().buffer); break;
       case K_REPLACED: table.replaced = own(body); break;
       case K_ADDED: table.added = own(body); break;
     }
   }
-  return { parts, tables };
+  const sections = {} as Record<DocTable, TableSections>;
+  for (const name of DOC_TABLES) {
+    const { bases, order, ...rest } = tables[name];
+    const base: TableBase | null = bases.length === 0 ? null : bases.length === 1 && !order ? bases[0]! : { tables: bases, order };
+    sections[name] = { base, ...rest };
+  }
+  return { parts, tables: sections };
 }

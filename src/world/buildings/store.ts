@@ -154,8 +154,9 @@ export class BuildingStore {
     if (this.below) { this.below.eachSummarised(row, record); return; }
     const items = this.items;
     if (!(items instanceof BuildingItems)) { for (const b of items.values()) record(b); return; }
-    items.eachRow((rows, at, wear) => {
-      const table = rows.table;
+    items.eachRow((rows, r, wear) => {
+      // Its columns in its own table (a square's, `TableRows.tableOf`), at its row there.
+      const table = rows.tableOf(r), at = rows.localRow(r);
       if (table.summaryWidth === SUMMARY_WIDTH && table.boxes) row(table.ids[at]! as BuildingId, table, at, wear);
       else record(items.get(table.ids[at]! as BuildingId)!);
     }, record);
@@ -311,10 +312,12 @@ export class BuildingStore {
     if (this.below) return this.below.summaryOf(id);
     const items = this.items;
     if (!(items instanceof BuildingItems) || !items.table) return null;
-    const table = items.table.table;
-    if (table.summaryWidth !== SUMMARY_WIDTH || !table.boxes) return null;
     const row = items.standing(id);
-    return row ? { table, at: row.row, wear: row.field } : null;
+    if (!row) return null;
+    // Its own table (a square's, `TableRows.tableOf`), at its row there.
+    const table = items.table.tableOf(row.row);
+    if (table.summaryWidth !== SUMMARY_WIDTH || !table.boxes) return null;
+    return { table, at: items.table.localRow(row.row), wear: row.field };
   }
 
   /** A building's wear, its record not decoded where it is a row of the table: the wear written over the row, else the row's own field (`TableRows.field`); 0 when it has none or is not here. */

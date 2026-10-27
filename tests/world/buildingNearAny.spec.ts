@@ -47,7 +47,8 @@ describe('the buildings several rectangles reach', () => {
   it('is how the camera solids and the gardens find what the ground moved under', () => {
     const solids = readFileSync('src/world/buildings/cameraSolids.ts', 'utf8');
     expect(solids).toMatch(/town\.nearAny\(rects, reach,/);
-    expect(solids).not.toMatch(/for \(const r of rects\)/);
+    // No search of the buildings a rectangle (the cells a question reaches filled a rectangle at a time is no search: `fill`).
+    expect(solids).not.toMatch(/for \(const r of rects\)[^\n]*\.near(Any|Ids)?\(/);
     const gardens = readFileSync('src/render/gardenLists.ts', 'utf8');
     expect(gardens).toMatch(/banks\.idsMeetingAny\(rects\)/);
     expect(gardens).not.toMatch(/for \(const rect of rects\)/);

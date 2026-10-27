@@ -1,4 +1,5 @@
 import { type SerializedDoc, landscapeRecord, lotRecord, poleRecord, spanPlace } from '@world/doc';
+import type { TableBase } from '@world/buildings/tableRows';
 import { DOC_TABLES, type DocTable } from '@world/docBinary';
 import type { FieldWrites } from '@world/buildings/items';
 import { RecordTable, TableWriter, encodeRecords } from '@world/buildings/recordTable';
@@ -113,9 +114,9 @@ export class PreparedCityWriter {
   }
 }
 
-/** The tables a city opens with (`restoreInto`): its buildings' and the other kinds' (null: those records in the data, or none). */
-export interface OpenedTables extends CityTables {
-  readonly buildings: ArrayBufferLike | null;
+/** The tables a city opens with (`restoreInto`): its buildings' and the other kinds' (null: those records in the data, or none), each one table or a map's squares' (`TableBase`). */
+export interface OpenedTables extends Readonly<Record<CityTable, TableBase | null>> {
+  readonly buildings: TableBase | null;
   /** The field written over a table's rows (the buildings' wears saved since their squares): its records the table's (`TableSections.field`). */
   readonly fields?: Partial<Record<DocTable, FieldWrites>>;
 }
@@ -140,7 +141,7 @@ export function preparedCity(data: SerializedDoc, table: ArrayBufferLike, beside
 
 /** The tables of an opened city, as `restoreInto` takes them. */
 export function openedTables(city: OpenedCity): OpenedTables {
-  const out = { buildings: city.table } as Record<DocTable, ArrayBufferLike | null>;
+  const out = { buildings: city.table } as Record<DocTable, TableBase | null>;
   for (const name of CITY_TABLES) out[name] = city[name];
   return out;
 }
