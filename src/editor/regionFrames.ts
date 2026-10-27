@@ -1,6 +1,6 @@
 import { tableRecords } from '@world/buildings/recordTable';
 import {
-  GLOBAL_MAGIC, MANIFEST_MAGIC, SQUARE_MAGIC, WEAR_MAGIC, f64Bytes, f64Of, gunzipBytes, jsonBytes, jsonOf, packFrame, readFrame,
+  GLOBAL_MAGIC, MANIFEST_MAGIC, SQUARE_MAGIC, WEAR_MAGIC, f64Bytes, f64Of, gunzipBytes, inflated, jsonBytes, jsonOf, packFrame, readFrame,
 } from './saveBinary';
 
 /** THE FRAMES OF A MAP SAVED AS BINARY REGIONS (`chunkedSave.ts` manifests 6 to 8): a square's records (a kind kept in a table its record table, cut from the map's without decoding; a kind kept as objects its records' JSON) and their places in the order as doubles, a square's wears as doubles, a part kept outside the squares and the manifest as JSON - each one frame known by its magic word (`saveBinary.ts`) */
@@ -71,6 +71,8 @@ export function readValueFrame(bytes: ArrayBufferLike | Uint8Array, magic: typeo
 /** How a stored square, wears and part of the binary regions are read back from their blobs (the squares and parts compressed by the writer). */
 export const REGION_CODEC = {
   square: async (blob: Blob): Promise<SquareSections | null> => readSquareSections(await gunzipBytes(blob)),
+  /** A square's sections from its stored bytes already read (`squaresDecode.ts`: the read, the decompression and the frame timed apart). */
+  squareOf: async (raw: Uint8Array): Promise<SquareSections | null> => readSquareSections(await inflated(raw)),
   wears: async (blob: Blob): Promise<Map<number, number> | null> => readWearFrame(await blob.arrayBuffer()),
   global: async (blob: Blob): Promise<unknown> => readValueFrame(await gunzipBytes(blob), GLOBAL_MAGIC),
 };

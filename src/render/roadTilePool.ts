@@ -63,6 +63,8 @@ export class RoadTilePool implements RoadTiler {
   }
   private hidden = false;
   private broken = false;
+  /** Wall time the tiles asked of the lanes took to come back, ms, summed over the asks (the world's diary, `renderer.ts`); set to 0 by its reader. */
+  wallMs = 0;
 
   constructor() {
     this.unseen = true;
@@ -84,6 +86,11 @@ export class RoadTilePool implements RoadTiler {
   }
 
   tiles(job: TileJob): Promise<Map<string, Tile>[]> {
+    const asked = performance.now();
+    return this.shared(job).then((made) => { this.wallMs += performance.now() - asked; return made; });
+  }
+
+  private shared(job: TileJob): Promise<Map<string, Tile>[]> {
     const lanes = this.start();
     if (!lanes) return Promise.reject(new Error('no workers in this browser'));
     const { tiles } = job;

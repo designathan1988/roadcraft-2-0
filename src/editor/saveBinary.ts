@@ -100,9 +100,14 @@ export function gzipBytes(bytes: ArrayBuffer | Uint8Array): Promise<Blob> {
 
 /** A stored blob's bytes: decompressed when gzip (MDN `DecompressionStream`), as they are when not. */
 export async function gunzipBytes(blob: Blob): Promise<Uint8Array> {
-  const raw = new Uint8Array(await blob.arrayBuffer());
+  return inflated(new Uint8Array(await blob.arrayBuffer()));
+}
+
+/** Bytes as stored decompressed where they are gzip (`isGzip`), else as they are: the bytes fed to the stream as they stand, not wrapped in a
+ *  blob again (a copy of every square of a map read back). */
+export async function inflated(raw: Uint8Array): Promise<Uint8Array> {
   if (!isGzip(raw)) return raw;
   if (typeof DecompressionStream === 'undefined') throw new Error('[save] a compressed save and no DecompressionStream to read it');
-  const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream('gzip'));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  const source = new ReadableStream<BufferSource>({ start(controller) { controller.enqueue(raw as Uint8Array<ArrayBuffer>); controller.close(); } });
+  return new Uint8Array(await new Response(source.pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
 }

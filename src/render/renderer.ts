@@ -1048,7 +1048,7 @@ export function createSceneRenderer(
   const storedKeys = new Set<string>();
   const storedAt = new Map<string, string>();
   /** What the builds asked of the kept tiles since the last build landed (`worldSteps`, its diary entry): told kept or not, read, found. */
-  const keptAsked = { yes: 0, no: 0, fetched: 0, found: 0 };
+  const keptAsked = { yes: 0, no: 0, fetched: 0, found: 0, readMs: 0 };
   const placeOf = (key: string): string => key.slice(0, key.lastIndexOf('|'));
   const noteStored = (key: string): void => {
     const place = placeOf(key);
@@ -1125,7 +1125,11 @@ export function createSceneRenderer(
     // DO NOT read the whole store at the opening: it grows with every place the camera went (CLAUDE.md, "Streaming world").
     stored: {
       has: (key) => { const kept = storedKeys.has(key); if (kept) keptAsked.yes++; else keptAsked.no++; return kept; },
-      fetch: (keys) => { keptAsked.fetched += keys.length; return fetchTiles(keys).then((got) => { keptAsked.found += got.size; return got; }); },
+      fetch: (keys) => {
+        keptAsked.fetched += keys.length;
+        const asked = performance.now();
+        return fetchTiles(keys).then((got) => { keptAsked.found += got.size; keptAsked.readMs += performance.now() - asked; return got; });
+      },
     },
     // Kept by the road tile workers that make them (`roadTile.worker.ts`): the page only marks the key.
     workersKeep: tilesPrefix && typeof Worker !== 'undefined' ? tilesPrefix : null,
@@ -2499,8 +2503,9 @@ export function createSceneRenderer(
     performance.mark('world:surfaced');
     surfaceBlocks = [];
     derived(net, 'surfaces', freshRoads.rebuilt, 'road surfaces rebuilt', worldCause,
-      { ms: freshRoads.workMs, detail: `${freshRoads.built} tiles built, ${freshRoads.reused} reused; the store: ${keptAsked.yes} of ${keptAsked.yes + keptAsked.no} tiles kept, ${keptAsked.fetched} read, ${keptAsked.found} found, ${storedKeys.size} keys known${storedRead ? '' : ' (not all read yet)'}` });
-    keptAsked.yes = keptAsked.no = keptAsked.fetched = keptAsked.found = 0;
+      { ms: freshRoads.workMs, detail: `${freshRoads.built} tiles built, ${freshRoads.reused} reused; the store: ${keptAsked.yes} of ${keptAsked.yes + keptAsked.no} tiles kept, ${keptAsked.fetched} read in ${keptAsked.readMs.toFixed(0)} ms, ${keptAsked.found} found, ${storedKeys.size} keys known${storedRead ? '' : ' (not all read yet)'}; built off the page in ${roadTiles.wallMs.toFixed(0)} ms` });
+    keptAsked.yes = keptAsked.no = keptAsked.fetched = keptAsked.found = keptAsked.readMs = 0;
+    roadTiles.wallMs = 0;
     // The structures' details, the poles and the street furniture are each kept as they are when the edit's blocks reach none
     const atdetails = performance.now();
     // The structures of the cells this build takes and lets go, with the blocks the roads changed in; a build that cannot say where: every cell held. Never the map's (`within`: the view's cells).

@@ -57,7 +57,7 @@ export interface TiledSession {
   /** The field written over a table's rows where its stored value differs from the row's own (a building's wear saved since its square). */
   readonly fields?: SavedFields;
   /** How long its parts of the read took off the page, ms: the squares decompressed and read, the kinds' tables joined. */
-  readonly timing?: { readonly squares: number; readonly join: number };
+  readonly timing?: { readonly squares: number; readonly join: number; readonly read: number; readonly inflate: number; readonly parse: number; readonly mb: number };
   readonly settings: unknown;
   readonly savedAt: number;
   readonly layout: SavedLayout;
@@ -147,15 +147,27 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
   /** A kind kept in a table: each square's table and the order of its rows, joined once every square is read (`joined`). */
   const tableRead = new Map<KeyedName, { table: RecordTable; orders: Float64Array | null; square: string }[]>();
   const listRead = new Map<ListName, { item: unknown; ord: number; square: string }[]>();
+  /** Wall time of each phase of the squares, ms, and the bytes stored: their blobs read, decompressed, their frames and records read. */
+  const phase = { read: 0, inflate: 0, parse: 0, bytes: 0 };
   // DO NOT wait for each square's decompression before starting the next (EDT-03: hundreds, one after the other, at the opening): a batch at a time in flight, read in the same order.
   for (let i = 0; i < blobs.length; i += GUNZIP_BATCH) {
-    const batch: Promise<SquareBlob | SquareSections | null>[] = [];
+    const batch: Blob[] = [];
     for (let k = i; k < Math.min(blobs.length, i + GUNZIP_BATCH); k++) {
       const blob = got[k];
       if (!blob) return null;
-      batch.push(codec.square(blob));
+      batch.push(blob);
     }
-    const values = await Promise.all(batch);
+    let values: (SquareBlob | SquareSections | null)[];
+    if (read.codec === 'region') {
+      let at = performance.now();
+      const raws = await Promise.all(batch.map(async (blob) => new Uint8Array(await blob.arrayBuffer())));
+      phase.read += performance.now() - at;
+      for (const raw of raws) phase.bytes += raw.byteLength;
+      at = performance.now();
+      values = await Promise.all(raws.map((raw) => REGION_CODEC.squareOf(raw)));
+      phase.inflate += performance.now() - at;
+    } else values = await Promise.all(batch.map((blob) => codec.square(blob)));
+    const parsed = performance.now();
     for (let k = 0; k < values.length; k++) {
       const value = values[k];
       if (!value) return null;
@@ -185,6 +197,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
         records.r.forEach((item, j) => out.push({ item, ord: records.o![j]!, square }));
       }
     }
+    phase.parse += performance.now() - parsed;
   }
   const squaresMs = performance.now() - started;
   // A kind with a square in JSON beside its tables (a save of two formats): every record of it as an object, the tables decoded too.
@@ -216,7 +229,7 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
     tables[spec.table!] = made.buffer;
     if (made.field) fields[spec.table!] = made.field;
   }
-  const timing = { squares: squaresMs, join: performance.now() - started - squaresMs };
+  const timing = { squares: squaresMs, join: performance.now() - started - squaresMs, read: phase.read, inflate: phase.inflate, parse: phase.parse, mb: phase.bytes / 1048576 };
   for (const [name, out] of keyedRead) out.sort(name === 'lots' ? (a, b) => a.order - b.order || a.id - b.id : (a, b) => a.id - b.id);
   for (const out of listRead.values()) out.sort((a, b) => a.ord - b.ord);
   const records = (name: KeyedName): unknown[] => (keyedRead.get(name) ?? []).map((e) => e.record);
