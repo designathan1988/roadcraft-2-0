@@ -120,3 +120,18 @@ describe('the lots by their owner', () => {
     expect(doc.lotStore.addKeys(['b:1,2,3,4'], undefined, 'test')).toBe(false);
   });
 });
+
+describe('the lots near a rectangle by their ids', () => {
+  it('hold every lot whose box meets it, none decoded', () => {
+    const rng = new Rng(77);
+    const doc = new RoadDoc();
+    for (let k = 0; k < 400; k++) doc.lotStore.apply({ add: [square(rng)] }, 'test: new');
+    for (let k = 0; k < 60; k++) {
+      const x = rng.float() * SIDE, y = rng.float() * SIDE, w = rng.float() * m(200);
+      const rect: ChangeRect = [x, y, x + w, y + w];
+      const near = new Set(doc.lotIdsNear(rect));
+      for (const lot of doc.lotsIn(rect)) expect(near.has(lot.id), `lot ${lot.id}`).toBe(true);
+      for (const lot of doc.lots) if (meets(lotBox(lot), rect)) expect(near.has(lot.id)).toBe(true);
+    }
+  });
+});

@@ -324,6 +324,10 @@ export class RoadDoc {
   lotsIn(rect: ChangeRect): Lot[] {
     return this.lotStore.in(rect);
   }
+  /** The ids of every lot whose box may meet `rect` (a superset of `lotsIn`'s), none decoded. */
+  lotIdsNear(rect: ChangeRect): number[] {
+    return this.lotStore.idsNear(rect);
+  }
   /** The lot whose shape holds a point, or undefined. */
   lotAt(p: Vec2): Lot | undefined {
     return this.lotStore.at(p);

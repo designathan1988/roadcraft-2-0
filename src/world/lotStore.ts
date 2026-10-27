@@ -193,6 +193,12 @@ export class LotStore {
     return this.cells().idsMeeting(rect, this.centreOf);
   }
 
+  /** The ids of every lot whose box may meet `rect` (those `in` tests, a superset of them), none decoded: their centres within a lot's reach of it. */
+  idsNear(rect: ChangeRect): number[] {
+    if (this.below) return this.below.idsNear(rect);
+    return this.cells().idsMeeting([rect[0] - LOT_REACH, rect[1] - LOT_REACH, rect[2] + LOT_REACH, rect[3] + LOT_REACH], this.centreOf);
+  }
+
   /** The lots whose box meets `rect`, in increasing id order: a superset of those whose shape reaches it */
   in(rect: ChangeRect): Lot[] {
     if (this.below) return this.below.in(rect);

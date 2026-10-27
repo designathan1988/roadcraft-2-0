@@ -194,8 +194,11 @@ export class LotTool {
     const delta = this.refusedNet === null ? null : net.changesSince(this.refusedNet);
     this.refusedNet = net.state;
     if (delta === null) { this.refused.clear(); return this.refused; }
+    // By their ids alone (a superset of the lots the change reaches: one let go needlessly is only tried again). DO NOT decode the lots of the
+    // change's rectangles: the network's window moves a tile of 1 km at a time under a moving camera, and every lot of it was decoded (2026-10-27).
+    if (this.refused.size === 0) return this.refused;
     for (const r of delta.rects) {
-      for (const lot of this.doc.lotsIn([r[0] - REFUSED_REACH, r[1] - REFUSED_REACH, r[2] + REFUSED_REACH, r[3] + REFUSED_REACH])) this.refused.delete(lot.id);
+      for (const id of this.doc.lotIdsNear([r[0] - REFUSED_REACH, r[1] - REFUSED_REACH, r[2] + REFUSED_REACH, r[3] + REFUSED_REACH])) this.refused.delete(id);
     }
     return this.refused;
   }
