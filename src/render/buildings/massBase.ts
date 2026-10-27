@@ -8,15 +8,18 @@ import type { Building, Volume } from '@world/buildings/types';
 import { m } from '@world/units';
 import { CELL } from '@world/cells';
 import { type Bounds, type MassSquare, type ShellGrid, indexArray, massGrid, shellBounds } from './cellArrays';
-import { BURY, LOT_COLOURS, type Rgb, TERRACE_RGB, massColours, rgbOf } from './massing';
-import type { MassRecorder, ProgramStage } from './program';
+import { BURY, CURTAIN_WALL, LOT_COLOURS, type Rgb, TERRACE_RGB, massColours, rgbOf } from './massing';
+import type { BaseGrid, MassRecorder, ProgramStage } from './program';
 
 /**
  * THE BUILDINGS' TOP LEVEL (the base, above the plates): every building of a plate's square as the prisms of its real blocks - each
  * block's own footprint stood from its floor to its eaves (a pitched roof flat at half its rise), its paved lots flat - merged into one
- * mesh a square, in the leanest vertex a mass can have: four unsigned shorts, its place on the square's grid and its colour in the
- * fourth (`paint`, 5-6-5 bits of sRGB), shaded by each face's own slope (`flatShading`), each triangle in the colour of its last corner
- * (a `flat` varying: the walls and the roof share their top corners). Made first at the opening and never let go (`massCells.ts`):
+ * mesh a square, in eight unsigned shorts a vertex: its place on the square's grid, its colour in the fourth (`paint`, 5-6-5 bits of
+ * sRGB), its block's facade grid in the last four (`gridShorts`: its storeys, its bays, its windows), shaded by each face's own slope
+ * (`flatShading`), each triangle in the colour and the grid of its last corner (`flat` varyings: the walls and the roof share their top
+ * corners; a wall's last corner is on its foot, `prism`). Its walls draw their windows, their glass and their lit rooms at night as the
+ * masses draw them (`massingMaterial.ts`): DO NOT draw it as painted prisms, the town stood as coloured boxes wherever nothing finer was
+ * drawn yet (the owner's photos, 2026-10-27). Made first at the opening and never let go (`massCells.ts`):
  * drawn under every cell nothing finer draws (a level not resident, let go for the budget, not come yet), so no view shows a hole in
  * the town. Its triangles run cell by cell (`BasePiece.cells`): the cells a finer level draws are left out of its draw (three's
  * geometry groups), never drawn twice. Measured on the city of 25,000 buildings (2026-10-21): 6.6 MB, 277 B a building (53 MB for 200,000).
@@ -41,8 +44,12 @@ export interface BaseMass {
 
 /** Numbers a cell's entry holds in `BasePiece.cells`. */
 export const BASE_CELL_STRIDE = 4;
-/** Shorts a base vertex holds. */
-export const BASE_VERTEX = 4;
+/** Shorts a base vertex holds: its place (3), its paint, its grid (`GRID_SHORTS`). */
+export const BASE_VERTEX = 8;
+/** Shorts of a vertex's grid (`gridShorts`). */
+export const GRID_SHORTS = 4;
+/** A vertex with no grid: no window drawn (a roof, a lot, a block with no bay). */
+const NO_GRID: readonly [number, number, number, number] = [0, 0, 0, 0];
 
 /** The windows' mean over a wall from afar (`massingMaterial.ts`: the pane's share across times its height in the storey, 0.3 to 0.85, times 1.45): an ordinary wall's half-glazed bays, and a curtain wall all glass. */
 const WALL_GLASS = 0.5 * 0.55 * 1.45;
@@ -66,16 +73,33 @@ export function paint(rgb: Rgb): number {
   return (Math.round(toSrgb(rgb[0]) * 31) << 11) | (Math.round(toSrgb(rgb[1]) * 63) << 5) | Math.round(toSrgb(rgb[2]) * 31);
 }
 
-/** One cell's arrays as they are written: places in floats (three's axes) and a paint a vertex. */
+/** A block's grid (`BaseGrid`) as four shorts, read back by `massingMaterial.ts` (BASE_GRID_GLSL): its storey's height and its bay's width
+ *  in centimetres; its window's share across in 255ths, a curtain wall's flag, the building's use (offices and works, `MassRecorder.seed` + 2)
+ *  and 64ths of its seed; its sill and head in 31sts of the storey and where its storeys are counted from over the prism's foot, in eighths of a metre. */
+export function gridShorts(grid: BaseGrid, seed: number, foot: number): [number, number, number, number] {
+  const clamp = (v: number, most: number): number => Math.max(0, Math.min(most, Math.round(v)));
+  const curtain = grid.glass >= CURTAIN_WALL ? 1 : 0;
+  const share = grid.glass - curtain * CURTAIN_WALL;
+  const office = seed >= 1.5 ? 1 : 0;
+  return [
+    clamp(grid.storey * 100, 65535), clamp(grid.bay * 100, 65535),
+    (clamp(share * 255, 255) << 8) | (curtain << 7) | (office << 6) | clamp((seed - Math.floor(seed)) * 64, 63),
+    (clamp(grid.sill * 31, 31) << 11) | (clamp(grid.head * 31, 31) << 6) | clamp((grid.z0 - foot) * 8, 63),
+  ];
+}
+
+/** One cell's arrays as they are written: places in floats (three's axes), a paint and a grid (`GRID_SHORTS`) a vertex. */
 export class CellWriter {
   readonly position: number[] = [];
   readonly paint: number[] = [];
+  readonly grid: number[] = [];
   readonly index: number[] = [];
   get vertices(): number { return this.paint.length; }
   /** A point of the plan at height `z`. */
-  vertex(x: number, y: number, z: number, colour: number): void {
+  vertex(x: number, y: number, z: number, colour: number, grid: readonly number[] = NO_GRID): void {
     this.position.push(x, z, -y);
     this.paint.push(colour);
+    this.grid.push(grid[0]!, grid[1]!, grid[2]!, grid[3]!);
   }
 }
 const mix = (a: Rgb, b: Rgb, t: number): Rgb => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
@@ -102,12 +126,12 @@ function slab(w: CellWriter, xs: ArrayLike<number>, ys: ArrayLike<number>, z: nu
   return base;
 }
 
-/** A block's prism: its roof (`top`, the ring shared with the walls' heads) in its colour, its walls in theirs from their foot ring. */
-function prism(w: CellWriter, xs: ArrayLike<number>, ys: ArrayLike<number>, bottom: number, top: number, wall: number, roof: number): void {
+/** A block's prism: its roof (`top`, the ring shared with the walls' heads) in its colour, its walls in theirs and with their grid from their foot ring. */
+function prism(w: CellWriter, xs: ArrayLike<number>, ys: ArrayLike<number>, bottom: number, top: number, wall: number, roof: number, grid: readonly number[]): void {
   const high = slab(w, xs, ys, top, roof);
   const n = xs.length;
   const low = w.vertices;
-  for (let i = 0; i < n; i++) w.vertex(xs[i]!, ys[i]!, bottom, wall);
+  for (let i = 0; i < n; i++) w.vertex(xs[i]!, ys[i]!, bottom, wall, grid);
   // Each side seen from outside (its foot from i to j, then up: anticlockwise), each triangle's last corner on the foot: the wall's colour (WebGL 2's provoking vertex is the last).
   for (let i = 0; i < n; i++) {
     const j = (i + 1) % n;
@@ -140,9 +164,11 @@ export function recordBase(rec: MassRecorder, b: Building, floor: number | undef
       const top = eaves + (pitched ? roofRise(b, v) / 2 : 0);
       const bottom = floor + volumeElevation(b, v, v.base) - (v.base === 0 ? BURY : 0);
       const spec = wallMaterial(b, v, 0);
-      const wall = mix(rgb(spec), GLASS, spec.finish === 'glass' ? CURTAIN_GLASS : WALL_GLASS);
+      const grid = rec.grids.get(v.id);
+      // Its own wall where its windows are drawn on it (`massingMaterial.ts`); their mean painted in where it has none to draw.
+      const wall = grid ? rgb(spec) : mix(rgb(spec), GLASS, spec.finish === 'glass' ? CURTAIN_GLASS : WALL_GLASS);
       const roof = v.roof === 'terrace' ? TERRACE_RGB : rgb(roofMaterial(b, v));
-      rec.prisms.push({ xs: Float64Array.from(xs), ys: Float64Array.from(ys), bottom, top, wall: paint(wall), roof: paint(roof) });
+      rec.prisms.push({ xs: Float64Array.from(xs), ys: Float64Array.from(ys), bottom, top, wall: paint(wall), roof: paint(roof), grid: grid ? gridShorts(grid, rec.seed, bottom) : null });
     }
   }
 }
@@ -170,7 +196,7 @@ export function recordBaseLots(rec: MassRecorder, b: Building, floor: number | u
  *  `recordBaseLots`), its body put on its lots' floor. */
 export function writeBase(w: CellWriter, p: ProgramStage): void {
   const floor = p.lots.floor ?? 0;
-  for (const q of p.mass.prisms) prism(w, q.xs, q.ys, q.bottom + floor, q.top + floor, q.wall, q.roof);
+  for (const q of p.mass.prisms) prism(w, q.xs, q.ys, q.bottom + floor, q.top + floor, q.wall, q.roof, q.grid ?? NO_GRID);
   for (const q of p.lots.slabs) slab(w, q.xs, q.ys, q.level, q.paint);
 }
 
@@ -178,6 +204,7 @@ export function writeBase(w: CellWriter, p: ProgramStage): void {
 export interface BaseSlice {
   readonly position: Float64Array;
   readonly paint: Uint16Array;
+  readonly grid: Uint16Array;
   readonly index: Uint32Array;
 }
 
@@ -185,6 +212,7 @@ export interface BaseSlice {
 interface BaseCell {
   readonly position: ArrayLike<number>;
   readonly paint: ArrayLike<number>;
+  readonly grid: ArrayLike<number>;
   readonly index: ArrayLike<number>;
 }
 
@@ -212,7 +240,7 @@ export class BaseWriter {
   sliceOf(cell: string): BaseSlice | null {
     const w = this.cells.get(cell)?.w;
     if (!w) return null;
-    return { position: Float64Array.from(w.position), paint: Uint16Array.from(w.paint), index: Uint32Array.from(w.index) };
+    return { position: Float64Array.from(w.position), paint: Uint16Array.from(w.paint), grid: Uint16Array.from(w.grid), index: Uint32Array.from(w.index) };
   }
 
   done(square: MassSquare): BaseMass | null {
@@ -250,6 +278,7 @@ export class BaseWriter {
         for (let t = 0; t < w.paint.length; t++) {
           const o = (v + t) * BASE_VERTEX;
           out[o] = q(p[t * 3]!, place.x); out[o + 1] = q(p[t * 3 + 1]!, place.y); out[o + 2] = q(p[t * 3 + 2]!, place.z); out[o + 3] = w.paint[t]!;
+          for (let g = 0; g < GRID_SHORTS; g++) out[o + 4 + g] = w.grid[t * GRID_SHORTS + g]!;
           floats[(v + t) * 3] = p[t * 3]!; floats[(v + t) * 3 + 1] = p[t * 3 + 1]!; floats[(v + t) * 3 + 2] = p[t * 3 + 2]!;
         }
         for (let t = 0; t < w.index.length; t++) index[n + t] = w.index[t]! + v;

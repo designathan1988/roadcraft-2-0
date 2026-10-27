@@ -3,6 +3,7 @@ import type { LabContext } from '../labTypes';
 import { listServer, postToServer, saveDesktop, serverUrl } from '../recorder/deliver';
 import { layersOf, verdictOf, type Finding } from './findings';
 import type { AbResult, Snapshot } from './measure';
+import type { GpuTimeline } from './gpuTimeline';
 import type { TourResult } from './tour';
 
 /**
@@ -128,6 +129,11 @@ export function diagnosisReport(ctx: LabContext, snap: Snapshot, findings: reado
     for (const f of snap.functions) md.push(`| ${cell(f.name || '(anonymous)')} | ${cell(f.where)} | ${n(f.selfMs)} | ${n(f.totalMs)} |`);
     md.push('');
   }
+  if (snap.libraryFunctions.length) {
+    md.push('## Library and browser functions (CPU profile)', '', '| function | where | kind | self ms | total ms |', '|---|---|---|---|---|');
+    for (const f of snap.libraryFunctions) md.push(`| ${cell(f.name || '(anonymous)')} | ${cell(f.where)} | ${f.category || 'browser'} | ${n(f.selfMs)} | ${n(f.totalMs)} |`);
+    md.push('');
+  }
   const w = snap.waste;
   if (w) {
     md.push(`## What buys nothing on the screen (${w.frames} frames watched)`, '');
@@ -160,11 +166,93 @@ export function diagnosisReport(ctx: LabContext, snap: Snapshot, findings: reado
     for (const c of snap.checks) md.push(`| ${c.verdict} | ${cell(c.title)} | ${cell(c.value)} |`);
     md.push('');
   }
+  md.push(...timelineMd(snap.timeline, 'GPU timeline, the view still (every draw timed)'));
   if (snap.suspects.length) md.push('## CPU profile suspects', '', ...snap.suspects.slice(0, 30).map((x) => `- **${x.kind}** ${x.name || '(anonymous)'} in ${x.where}: ${x.detail}`), '');
 
   const top = kept.filter((f) => f.severity === 'high' || f.severity === 'medium').slice(0, 3).map((f) => f.title);
   const summary = `${verdict.bound}, ${kept.length} causes${top.length ? `: ${top.join('; ')}` : ''}${against ? ` · against ${against.stamp}: ${against.added.length} new, ${against.gone.length} gone` : ''}`;
   return { stamp, json, md: md.join('\n'), summary, against, server: null, desktop: null };
+}
+
+/** The GPU's timeline as tables (`gpuTimeline.ts`): the frames, the heaviest draws, the stalls, the renders by caller, the uploads, the formats, the waits. */
+function timelineMd(t: GpuTimeline | null, title: string): string[] {
+  if (!t) return [`## ${title}`, '', 'Not recorded (no timer extension).', ''];
+  const md: string[] = [`## ${title}`, ''];
+  md.push(`${n(t.seconds)} s, ${t.frames.length} frames of the game timed draw by draw. GPU a frame p50 ${n(t.gpu.p50)} ms, p95 ${n(t.gpu.p95)}, max ${n(t.gpu.max)}; interval p50 ${n(t.interval.p50)} ms, p95 ${n(t.interval.p95)}, max ${n(t.interval.max)} (display frame ${n(t.vsyncMs)} ms). GPU busy ${n(t.gpuBusy * 100, 0)}% of the time. ${t.late} late frames, ${t.lateOnGpu} waiting on the GPU. ${t.lost} timings lost.`, '');
+  const late = t.frames.filter((f) => f.waitedOn !== 'neither').sort((a, b) => b.intervalMs - a.intervalMs).slice(0, 12);
+  if (late.length) {
+    md.push('| late frame ms | page ms | GPU ms | draws | page ms in draws | waited on |', '|---|---|---|---|---|---|');
+    for (const f of late) md.push(`| ${n(f.intervalMs)} | ${n(f.cpuMs)} | ${n(f.gpuMs)} | ${f.draws} | ${n(f.drawCpuMs)} | ${f.waitedOn} |`);
+    md.push('');
+  }
+  md.push('| draw | GPU ms a frame | max ms | calls |', '|---|---|---|---|');
+  for (const d of t.heaviest.slice(0, 20)) md.push(`| ${cell(d.draw)} | ${n(d.gpuMsPerFrame, 2)} | ${n(d.maxMs)} | ${d.calls} |`);
+  md.push('');
+  if (t.stalls.length) {
+    md.push('| stall: draw | GPU ms | usually ms | page ms |', '|---|---|---|---|');
+    for (const x of t.stalls) md.push(`| ${cell(x.draw)} | ${n(x.gpuMs)} | ${n(x.typicalMs, 2)} | ${n(x.cpuMs, 2)} |`);
+    md.push('');
+  }
+  md.push('| renders by caller | in the frame | target | calls | GPU ms | max GPU ms | page ms |', '|---|---|---|---|---|---|---|');
+  for (const r of t.renders) md.push(`| ${cell(r.caller)} | ${r.inFrame ? 'yes' : 'NO'} | ${r.target} | ${r.calls} | ${n(r.gpuMs)} | ${n(r.maxGpuMs)} | ${n(r.cpuMs)} |`);
+  md.push('');
+  if (t.uploads.length) {
+    md.push('| uploads by caller | call | calls | MB | largest MB |', '|---|---|---|---|---|');
+    for (const u of t.uploads) md.push(`| ${cell(u.caller)} | ${u.call} | ${u.calls} | ${n(u.mb, 2)} | ${n(u.maxMb, 2)} |`);
+    md.push('');
+  }
+  if (t.formats.length) {
+    md.push('| vertex format | converted by the driver | binds | drawn by |', '|---|---|---|---|');
+    for (const f of t.formats) md.push(`| ${f.format} | ${f.converted ? 'YES' : 'no'} | ${f.binds} | ${cell(f.draws.slice(0, 3).join('; '))} |`);
+    md.push('');
+  }
+  if (t.sync.length) {
+    md.push('| waiting call | caller | calls | ms |', '|---|---|---|---|');
+    for (const x of t.sync) md.push(`| ${x.call} | ${cell(x.caller)} | ${x.calls} | ${n(x.ms, 2)} |`);
+    md.push('');
+  }
+  if (t.steps.length) {
+    md.push('| game step (hitch) | calls | ms | max ms |', '|---|---|---|---|');
+    for (const w of t.steps) md.push(`| ${cell(w.what)} | ${w.calls} | ${n(w.ms)} | ${n(w.maxMs)} |`);
+    md.push('');
+  }
+  if (t.pageWork.length) {
+    md.push('| long frames: script | where | calls | ms | max ms |', '|---|---|---|---|---|');
+    for (const w of t.pageWork) md.push(`| ${cell(w.what)} | ${cell(w.where)} | ${w.calls} | ${n(w.ms)} | ${n(w.maxMs)} |`);
+    md.push('');
+  }
+  if (t.cpuSelf.length) {
+    md.push('| CPU: function (own time) | where | own ms | with callees ms |', '|---|---|---|---|');
+    for (const f of t.cpuSelf) md.push(`| ${cell(f.name)} | ${cell(f.where)} | ${n(f.selfMs)} | ${n(f.totalMs)} |`);
+    md.push('', '| CPU: function (with callees) | where | with callees ms | own ms |', '|---|---|---|---|');
+    for (const f of t.cpuTotal) md.push(`| ${cell(f.name)} | ${cell(f.where)} | ${n(f.totalMs)} | ${n(f.selfMs)} |`);
+    md.push('');
+  }
+  if (t.programs.length) {
+    md.push('| programs compiled | for the draw | asked from |', '|---|---|---|');
+    for (const p of t.programs) md.push(`| ${p.programs} | ${cell(p.draw)} | ${cell(p.caller)} |`);
+    md.push('');
+  }
+  if (t.resizes.length) md.push(`Drawing buffer resized: ${t.resizes.map((r) => `${r.calls}× ${r.caller}`).join(', ')}`, '');
+  return md;
+}
+
+/** A camera move recorded draw by draw (`gpuTimeline.ts`, the diagnosis's "Record a move"): its causes and its tables. */
+export function moveReport(ctx: LabContext, t: GpuTimeline | null, findings: readonly Finding[]): DiagnosisReport {
+  const date = new Date();
+  const stamp = `move-${date.toISOString().slice(0, 19).replace(/:/g, '-')}`;
+  const strip = ({ object: _o, ...f }: Finding): KeptFinding => f;
+  const meta = { format: 'roadcraft-lab-move/1', date: date.toISOString(), build: formatBuildStamp(), url: location.href, gpu: gpuName(ctx), quality: ctx.quality.level() };
+  const kept = findings.map(strip);
+  const json: Record<string, unknown> = { meta, findings: kept, timeline: t, settings: ctx.effects.snapshot() };
+  const md: string[] = ['# Camera move — Roadcraft', '', `Recorded by the debug lab (F7, Diagnosis › Record a move) at ${meta.date} while the camera moved. GPU ${meta.gpu} · quality ${meta.quality} · build ${meta.build}.`, ''];
+  md.push(`## Causes (${kept.length})`, '');
+  kept.forEach((f, i) => {
+    md.push(`### ${i + 1}. [${f.severity}] ${f.area}: ${f.title}`, '', ...f.evidence.map((e) => `- ${e}`), `- Why: ${f.why}`, ...(f.where ? [`- Code: \`${f.where}\``] : []), '');
+  });
+  md.push(...timelineMd(t, 'GPU timeline of the move (every draw timed)'));
+  const summary = `${kept.length} causes${kept.length ? `: ${kept.slice(0, 3).map((f) => f.title).join('; ')}` : ''}`;
+  return { stamp, json, md: md.join('\n'), summary, against: null, server: null, desktop: null };
 }
 
 /** The report written where it can be (the dev server, the desktop app): its places told. */
@@ -211,6 +299,11 @@ export function tourReport(ctx: LabContext, tour: TourResult): DiagnosisReport {
     const s = r.snap, v = verdictOf(s);
     md.push(`| ${r.stop.label} | ${n(r.stop.zoom, 3)} | ${n((r.stop.azimuth * 180) / Math.PI, 0)} | ${n((r.stop.elevation * 180) / Math.PI, 0)} | ${n(s.frameMs)} | ${n(1000 / s.frameMs, 0)} | ${n(s.cpuMs)} | ${n(s.gpuMs)} | ${n(s.drawCalls, 0)} | ${n(s.triangles, 0)} | ${v.bound} | ${r.findings.length} | ${r.unsettled ? `no (${n(r.settleMs / 1000)} s)` : `${n(r.settleMs / 1000)} s`} |`);
   }
+  md.push('', `## How each scene came in (photos in \`lab-reports/shots/${tour.folder}/\`)`, '', '| stop | landed after | settled after | photos | still to land at first photo |', '|---|---|---|---|---|');
+  for (const r of tour.stops) {
+    const photos = [r.load.before, ...r.load.samples.map((x) => x.photo), r.load.after].filter(Boolean).length;
+    md.push(`| ${r.stop.label} | ${r.load.landedMs === null ? 'never in the wait' : `${n(r.load.landedMs / 1000, 1)} s`} | ${n(r.settleMs / 1000, 1)} s${r.unsettled ? ' (not settled)' : ''} | ${photos} | ${r.load.samples[0]?.notLanded ?? '—'} |`);
+  }
   md.push('', `## Every cause, by weight (${causes.length})`, '');
   causes.forEach((c, i) => {
     md.push(`### ${i + 1}. [${c.severity}] ${c.area}: ${c.title}`, '');
@@ -223,9 +316,12 @@ export function tourReport(ctx: LabContext, tour: TourResult): DiagnosisReport {
   });
   for (const r of tour.stops) {
     md.push(`## Stop: ${r.stop.label}`, '');
+    md.push(`- Photos: before ${r.load.before ?? '—'}; after ${r.load.after ?? '—'}`);
+    md.push(`- Loading: ${r.load.samples.map((x) => `${n(x.ms / 1000, 1)} s: ${x.notLanded} to land, ${n(x.triangles / 1000, 0)} k tri${x.photo ? ` (${x.photo.split('/').pop()})` : ''}`).join(' · ') || '—'}`);
     if (r.snap.passes.length) md.push(`- GPU by pass: ${r.snap.passes.map((p) => `${p.label} ${n(p.avg, 2)} ms`).join(', ')}`);
     md.push(`- Layers: ${layersOf(r.snap.draws).slice(0, 6).map((l) => `${l.layer} ${n(l.triangles / 1000, 0)} k tri / ${l.calls} draws`).join(', ')}`);
     md.push(`- Top causes: ${r.findings.slice(0, 6).map((f) => `[${f.severity}] ${f.title}`).join('; ') || 'none'}`, '');
+    md.push(...timelineMd(r.load.timeline, `GPU timeline of the move to ${r.stop.label} (every draw timed)`).map((line) => line.replace(/^## /, '### ')));
   }
   const worst = [...tour.stops].sort((a, b) => b.snap.frameMs - a.snap.frameMs)[0];
   const summary = `${tour.stops.length} stops; worst ${worst ? `${worst.stop.label} ${n(worst.snap.frameMs)} ms` : '—'}; ${causes.length} causes (${causes.filter((c) => c.severity === 'high').length} high)`;

@@ -1,4 +1,6 @@
 import { Box3, type Camera, Frustum, Group, InstancedMesh, type Mesh, type Object3D } from 'three';
+import type { SharedGroundAt } from '../sharedGround';
+import type { PavingSource } from '@world/paving';
 import { Digest } from '@core/digest';
 
 import type { RoadDoc } from '@world/doc';
@@ -1181,6 +1183,16 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     covers(x, y) {
       return cover.covers(x, y);
+    },
+    jobGround() {
+      if (!lastGround) return null;
+      const share = (lastGround.groundAt as SharedGroundAt).share?.current;
+      if (!share) return null;
+      const paving = lastGround.pavedAt as PavingSource | undefined;
+      return {
+        ground: share, naturalIsGround: lastGround.naturalAt === lastGround.groundAt, paved: paving !== undefined,
+        pack: (rect) => paving?.pack?.(rect) ?? null,
+      };
     },
     knownFloor(id) {
       // As the cells' jobs measured it (`CellPool.floorKnown`): the building's record as the town files it (its signature), the ground of its cell

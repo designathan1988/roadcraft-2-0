@@ -61,8 +61,14 @@ export interface MassSide {
 }
 export const SIDE_FLOATS = 8;
 
-/** The base's (`massBase.ts`): a block's prism on the plan (anticlockwise), from its foot to its top over its floor, its two paints (5-6-5); a paved lot flat at `level` (absolute: a lot's, `LotsProgram`). */
-export interface BasePrism { readonly xs: Float64Array; readonly ys: Float64Array; readonly bottom: number; readonly top: number; readonly wall: number; readonly roof: number }
+/** A block's facade grid as its walls show it from afar (`buildingMesh.ts` recordBlock, the bays the walk laid out): its typical storey's
+ *  height and its bay's width, where its storeys are counted from (absolute, as the walk lays it), its window's share across (on a curtain
+ *  wall `CURTAIN_WALL` more), sill and head (shares of the storey). The base draws its windows from it (`massBase.ts`, `massingMaterial.ts`). */
+export interface BaseGrid { readonly storey: number; readonly bay: number; readonly z0: number; readonly glass: number; readonly sill: number; readonly head: number }
+
+/** The base's (`massBase.ts`): a block's prism on the plan (anticlockwise), from its foot to its top over its floor, its two paints (5-6-5),
+ *  its facade grid packed in four shorts (`gridShorts`; null: a block with no bay laid out, drawn without windows); a paved lot flat at `level` (absolute: a lot's, `LotsProgram`). */
+export interface BasePrism { readonly xs: Float64Array; readonly ys: Float64Array; readonly bottom: number; readonly top: number; readonly wall: number; readonly roof: number; readonly grid: readonly [number, number, number, number] | null }
 export interface BaseSlab { readonly xs: Float64Array; readonly ys: Float64Array; readonly level: number; readonly paint: number }
 
 /** The mass stage of a program: what every level drawn from afar is drawn from, in a few flat arrays (a few KB a building: the programs
@@ -148,6 +154,8 @@ export class MassRecorder {
   private readonly tris: number[] = [];
   readonly prisms: BasePrism[] = [];
   readonly slabs: BaseSlab[] = [];
+  /** Each closed block's facade grid by its volume's id (`recordBlock`), read by the base (`massBase.ts` recordBase). */
+  readonly grids = new Map<number, BaseGrid>();
 
   /** Every height written absolute, as the walk lays the building on its floor; taken over the floor when packed (`done`). */
   constructor(readonly frame: MassProgram['frame'], readonly seed: number) {}

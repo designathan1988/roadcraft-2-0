@@ -7,7 +7,7 @@ import { type CellMass, MASS_FACADE, MASS_GRID } from './cellArrays';
 import type { BuildingKit } from './kit';
 import { FLAT_DEPTH } from './buildingMesh';
 import { cellIndex, levelCells, plateOf, TILE_CELLS, tileOf } from './levelKeys';
-import { BASE_CELL_STRIDE, BASE_VERTEX, type BaseMass, type BasePiece } from './massBase';
+import { BASE_CELL_STRIDE, BASE_VERTEX, type BaseMass, type BasePiece, GRID_SHORTS } from './massBase';
 import { PLATE_DETAIL, TILE_DETAIL } from './massing';
 
 /** THE BUILDINGS' FAR LEVEL, cell by cell: each cell of the buildings' grid */
@@ -116,6 +116,8 @@ function baseMesh(piece: BasePiece, place: { readonly x: number; readonly y: num
   const vertices = new InterleavedBuffer(piece.vertices, BASE_VERTEX);
   g.setAttribute('position', new InterleavedBufferAttribute(vertices, 3, 0, true));
   g.setAttribute('basePaint', new InterleavedBufferAttribute(vertices, 1, 3, true));
+  // Its block's facade grid as whole shorts (`massBase.ts` gridShorts): not normalised, read as the integers they are.
+  g.setAttribute('baseGrid', new InterleavedBufferAttribute(vertices, GRID_SHORTS, 4, false));
   g.setIndex(new BufferAttribute(piece.index, 1));
   const span = place.step * 65535;
   g.boundingBox = boxOf(piece.bounds);

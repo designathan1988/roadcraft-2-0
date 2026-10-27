@@ -1558,6 +1558,20 @@ function recordBlock(e: Emitter, b: Building, v: Volume, floor: number): void {
     kept.push(joined);
   }
   rec.block(sides, kept);
+  // Its grid as the base draws it from afar (`massBase.ts`): the widest run of its storeys above the street's (the ground floor's shops and
+  // doors are not the facade), its side's bay; its storeys counted from its lowest bay. DO NOT leave the base without windows: it stood as
+  // painted boxes wherever nothing finer was drawn yet, the town at every approach (the owner, 2026-10-27).
+  let widest: MassBay | null = null, lowest = Infinity;
+  for (const row of kept) {
+    for (const one of row) {
+      lowest = Math.min(lowest, one.z0);
+      if (widest === null || (widest.ground && !one.ground) || (widest.ground === one.ground && one.width > widest.width)) widest = one;
+    }
+  }
+  const side = widest ? sides.get(widest.side) : undefined;
+  if (widest && side && side.bay > 0 && widest.height > 0) {
+    rec.grids.set(v.id, { storey: widest.height, bay: side.bay, z0: lowest, glass: widest.glass, sill: widest.sill, head: widest.head });
+  }
   // The parapet only where the roof really ends: not against a neighbour as tall or taller (as `emitRoof` lays the detailed one).
   const crown = v.roof === 'flat' ? (v.dress?.crown === 'attic' ? ATTIC_H : PARAPET_H) : 0;
   if (crown <= 0) return;

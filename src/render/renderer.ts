@@ -421,8 +421,12 @@ const GOVERN_FRAMES = 60;
 /** The objects of the scene the governor's walk reads between two looks at the frame's time, and that time a frame, ms (`geometryBytesSteps`). */
 const GOVERN_SLICE = 256;
 const GOVERN_SLICE_MS = 1;
-/** The road cells the view wants taken at a step past those within the detail's reach (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
+/** The road cells the view wants taken at a step past those within the detail's reach while near ones are still built (`cellStep`): the near cells land first. */
 const STEP_CELLS = 2;
+/** The road cells of the view taken in one step once none near waits (`cellStep`): a step's build has a fixed cost (every pass walked, the
+ *  next step only once it is done), so the view's cells share one. DO NOT take them two a step: a district's dozens of cells came two a world
+ *  build, and most of the view stood on the network's far level for many seconds (the owner's photos, 2026-10-27). */
+const VIEW_STEP_CELLS = 32;
 /** How far round the eye the road cells in the view are wanted in detail (`mesh/roadResidency.ts` wantReach): past it, and past the tier's far budget within it, the network's far level draws them. */
 const ROAD_WANT_REACH = m(2_500);
 /** The roads the opening's solve left, solved a share a frame once the town is shown (`completeSolve`): ~15-20 ms of a frame on level ground (the 16,708 roads of a city of the largest radius: 1.5 roads solved a road taken, ~0.04 ms each, Node, 2026-10-21). */
@@ -1815,7 +1819,7 @@ export function createSceneRenderer(
   const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => floors.follow(net.doc.buildings, floorGroundSince, shaped);
   /** The camera's solids' cells filled off the page ahead of the questions (`cameraSolids.ts` prefetch): each building's volumes worked out by a job,
    *  stood on the floor kept of its row or measured by the cells' jobs where its blocks are its volumes, as `floors.floorOf` gives it. */
-  const solidsAsk = solidsJobAsk();
+  const solidsAsk = solidsJobAsk(() => buildings.jobGround());
   const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH, solidsAsk ? {
     ask: solidsAsk,
     footOf: (id, blocksAreVolumes) => {
@@ -2399,7 +2403,8 @@ export function createSceneRenderer(
     // surfaces' textures, for the many steps its near cells took (the player, 2026-10-26).
     const ready = look.build.filter(cellHeld);
     const near = ready.filter((key) => gap(key) < roadFocus.reach);
-    const build = [...near, ...ready.filter((key) => gap(key) >= roadFocus.reach).slice(0, STEP_CELLS)];
+    const past = ready.filter((key) => gap(key) >= roadFocus.reach);
+    const build = near.length ? [...near, ...past.slice(0, STEP_CELLS)] : past.slice(0, VIEW_STEP_CELLS);
     const release = look.release.filter((key) => taken.has(key));
     if (!build.length && !release.length) return;
     for (const key of build) { taken.add(key); awaiting.add(key); }
@@ -3682,7 +3687,12 @@ export function createSceneRenderer(
       }
       frameMark('frame:solids');
       // The light the buildings shut out of the streets round the view (`canyonLight.ts`).
-      post.followTown(rig.target.x, -rig.target.z, townSolids, canyonChanges(net.doc.changes));
+      // And the cells the solids filed off the page since (`takeArrived`): laid in the window as they come, the view's first look not waiting for them.
+      {
+        const changes = canyonChanges(net.doc.changes);
+        const arrived = cameraSolidsKept.takeArrived();
+        post.followTown(rig.target.x, -rig.target.z, townSolids, changes === null || arrived.length === 0 ? changes : [...changes, ...arrived]);
+      }
       const detailed = rig.viewport.zoom >= quality.detailCutoffZoom;
       const plantMap = rig.viewport.zoom < PLANT_MAP_ZOOM;
       // The buildings' detail and parts by the error on the screen (`levelOfDetail`, `cullDetails`).

@@ -5,7 +5,7 @@ session knows what to do, where the work stands, and how the owner wants it done
 user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTRADO DENTRO DO PROJETO").
 
 ## Read first, in this order
-1. `docs/agent/STATE.md`: where the work stands - the standing orders, the root causes found, what is done, what is next.
+1. `docs/agent/STATE.md`: where the work stands (and `docs/agent/BACKLOG.md`: what was found on the way, to do after the task in hand) - the standing orders, the root causes found, what is done, what is next.
 2. This file's rules below.
 3. `docs/agent/memory/*.md`: one file per rule or fact, each with its why and how to apply (index below).
 4. `CLAUDE.md` (the repository's root): the owner's own rules of work, in his words.
@@ -70,3 +70,4 @@ user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTR
 - [ui-redesign-rejected](memory/ui-redesign-rejected.md) - The UI redesign prototype agent (v1-v3, scratch ui-redesign/roadcraft-ui.html) was cancelled by the owner for repeating the current UI
 - [vigia-must-see-images](memory/vigia-must-see-images.md) - When supervising other sessions (VIGIA), open every before/after image myself and send it to the user; numbers and code alone are not enough
 - [vigia-supervision-lessons](memory/vigia-supervision-lessons.md) - How to supervise the roadcraft work sessions so they deliver: small committed stages, index commits, short turns, study before ordering
+- [one-thing-at-a-time](memory/one-thing-at-a-time.md) - Fix one thing at a time; anything found on the way goes into docs/agent/BACKLOG.md and waits until the current task is done

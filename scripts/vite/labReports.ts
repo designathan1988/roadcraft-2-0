@@ -13,6 +13,10 @@ const STAMP = /^[A-Za-z0-9_-]{1,80}$/;
 const FILE = /^[A-Za-z0-9_-]{1,80}\.(json|md)$/;
 
 function readBody(req: IncomingMessage): Promise<string> {
+  return readBytes(req).then((bytes) => bytes.toString('utf8'));
+}
+
+function readBytes(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -21,7 +25,7 @@ function readBody(req: IncomingMessage): Promise<string> {
       if (size > MAX_BODY) { reject(new Error('too large')); req.destroy(); return; }
       chunks.push(chunk);
     });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
@@ -46,7 +50,7 @@ export function labReportsPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = (req.url ?? '').split('?')[0]!;
-        if (!url.startsWith('/__lab/report')) { next(); return; }
+        if (!url.startsWith('/__lab/report') && url !== '/__lab/shot') { next(); return; }
         void (async () => {
           try {
             if (url === '/__lab/report' && req.method === 'POST') {
@@ -65,6 +69,29 @@ export function labReportsPlugin(): Plugin {
               await fs.promises.writeFile(path.join(dir, files[1]!), md, 'utf8');
               server.config.logger.info(`lab report written: ${FOLDER}/${files[1]}`, { timestamp: true });
               send(res, 200, { files: files.map((f) => `${FOLDER}/${f}`) });
+              return;
+            }
+            // A photo of the game the lab took (the city tour's: before, while and after a scene loads), into `lab-reports/shots/<folder>/`:
+            // the PNG's own bytes as the body, its folder and name in the query. DO NOT take it as a data URL in JSON: the page built a base64
+            // string and its JSON copy, ~20 MB a photo, and the collections they caused were read as the game's own stalls (2026-10-27).
+            if (url === '/__lab/shot' && req.method === 'POST') {
+              const query = new URLSearchParams((req.url ?? '').split('?')[1] ?? '');
+              const folder = query.get('folder'), name = query.get('name');
+              if (!folder || !STAMP.test(folder) || !name || !STAMP.test(name) || req.headers['content-type'] !== 'image/png') {
+                send(res, 400, { error: 'expected a PNG body (content-type image/png) and ?folder=&name= of [A-Za-z0-9_-]' });
+                return;
+              }
+              let bytes: Buffer;
+              try {
+                bytes = await readBytes(req);
+              } catch (error) {
+                send(res, String(error).includes('too large') ? 413 : 400, { error: String(error) });
+                return;
+              }
+              const to = path.join(dir, 'shots', folder);
+              await fs.promises.mkdir(to, { recursive: true });
+              await fs.promises.writeFile(path.join(to, `${name}.png`), bytes);
+              send(res, 200, { file: `${FOLDER}/shots/${folder}/${name}.png` });
               return;
             }
             if (url === '/__lab/reports' && req.method === 'GET') {

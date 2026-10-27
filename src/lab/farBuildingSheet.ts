@@ -9,7 +9,7 @@ import { assembleBuildingMeshes, emitProgram } from '../render/buildings/buildin
 import { cellMass } from '../render/buildings/cellArrays';
 import { type BuildingKit, type PartKind, createBuildingKit } from '../render/buildings/kit';
 import { COARSE_PARTS } from '../render/buildings/layerCells';
-import { BASE_VERTEX, type BaseMass, type BasePiece, BaseWriter, writeBase } from '../render/buildings/massBase';
+import { BASE_VERTEX, type BaseMass, type BasePiece, BaseWriter, GRID_SHORTS, writeBase } from '../render/buildings/massBase';
 import { cellMesh } from '../render/buildings/massCells';
 import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, massFloor, massOf } from '../render/buildings/massing';
 import type { PartView } from '../render/buildings/partCells';
@@ -178,6 +178,8 @@ function baseMeshOf(piece: BasePiece, place: BaseMass['place'], kit: BuildingKit
   const vertices = new InterleavedBuffer(piece.vertices, BASE_VERTEX);
   g.setAttribute('position', new InterleavedBufferAttribute(vertices, 3, 0, true));
   g.setAttribute('basePaint', new InterleavedBufferAttribute(vertices, 1, 3, true));
+  // Its block's facade grid as whole shorts (`massBase.ts` gridShorts): not normalised, read as the integers they are.
+  g.setAttribute('baseGrid', new InterleavedBufferAttribute(vertices, GRID_SHORTS, 4, false));
   g.setIndex(new BufferAttribute(piece.index, 1));
   g.addGroup(0, piece.index.length, 0);
   const mesh = new Mesh(g, [kit.massingBase]);

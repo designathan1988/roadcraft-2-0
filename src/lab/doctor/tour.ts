@@ -1,6 +1,8 @@
 import type { LabContext } from '../labTypes';
-import { settle, type Cancel } from '../tests/measure';
+import { sceneSign, settle, type Cancel } from '../tests/measure';
 import { findingsOf, verdictOf, type Finding } from './findings';
+import { recordGpuTimeline, type GpuTimeline } from './gpuTimeline';
+import { timelineFindings } from './timelineFindings';
 import { snapshot, type Snapshot } from './measure';
 
 /**
@@ -28,8 +30,29 @@ export interface TourStop {
   readonly elevation: number;
 }
 
+/** One moment of a scene loading: what was still to land, what was drawn, and the photo taken then. */
+export interface LoadSample {
+  readonly ms: number;
+  readonly notLanded: number;
+  readonly triangles: number;
+  readonly draws: number;
+  readonly photo: string | null;
+}
+
+/** How a stop's scene came in: the photo before it was asked, a photo a second while it loaded, the one once it settled. */
+export interface LoadTimeline {
+  readonly before: string | null;
+  readonly samples: readonly LoadSample[];
+  readonly after: string | null;
+  /** From the camera's move to the first frame with nothing left to land, ms; null when it never came in the wait. */
+  readonly landedMs: number | null;
+  /** The GPU's timeline from the camera's move on (`gpuTimeline.ts`): what the frames of the move waited on, every draw timed. */
+  readonly timeline: GpuTimeline | null;
+}
+
 export interface TourResult {
-  readonly stops: readonly { readonly stop: TourStop; readonly snap: Snapshot; readonly findings: readonly Finding[]; readonly settleMs: number; readonly unsettled: boolean }[];
+  readonly folder: string;
+  readonly stops: readonly { readonly stop: TourStop; readonly snap: Snapshot; readonly findings: readonly Finding[]; readonly settleMs: number; readonly unsettled: boolean; readonly load: LoadTimeline }[];
   /** Every cause seen, its worst weight, and where. */
   readonly causes: readonly { readonly finding: Finding; readonly stops: readonly string[] }[];
   readonly ms: number;
@@ -40,6 +63,8 @@ export interface TourResult {
 const DISTRICT_ZOOM = 2.5;
 const STREET_ZOOM = 28;
 const TURN = Math.PI / 2;
+/** How long a move's frames are timed draw by draw from the camera's move, ms. */
+const LOAD_TIMELINE_MS = 6000;
 
 /** The stops over the city's bounds: the whole, a 3×3 grid of districts, five streets, the edge. */
 export function tourStops(b: { minX: number; minY: number; maxX: number; maxY: number; fitZoom: number }, azimuth: number, elevation: number): TourStop[] {
@@ -64,6 +89,59 @@ export function tourStops(b: { minX: number; minY: number; maxX: number; maxY: n
   return stops;
 }
 
+/** Photos of the game's canvas as it is drawn (the next frame's, taken in its own frame callback so its picture is still there), at the
+ *  canvas's own resolution, PNG, written by the dev server into `lab-reports/shots/<folder>/` (`scripts/vite/labReports.ts`). DO NOT shrink
+ *  them nor compress them lossily: at 1280 px JPEG a facade's windows and a road's markings could not be told apart (the owner, 2026-10-27).
+ *  DO NOT encode them with `toDataURL` in the frame: the PNG of a full-resolution canvas was encoded on the main thread inside the game's
+ *  frame, hundreds of ms a photo, and its base64 and JSON copies (~20 MB a photo) filled the heap; the tour then measured its own photos
+ *  as the game's long frames and collections (2026-10-27). `toBlob` encodes off the frame; the bytes are posted as they are. Null where none
+ *  could be written. */
+function photographer(ctx: LabContext, folder: string): (name: string) => Promise<string | null> {
+  return (name) => new Promise((done) => {
+    const stop = ctx.onFrame(() => {
+      stop();
+      const source = ctx.scene.gl.domElement;
+      if (!source.width) { done(null); return; }
+      source.toBlob((blob) => {
+        if (!blob) { console.warn('lab tour: the canvas gave no picture'); done(null); return; }
+        const query = new URLSearchParams({ folder, name });
+        void fetch(`/__lab/shot?${query.toString()}`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: blob })
+          .then((r) => (r.ok ? r.json() as Promise<{ file: string }> : Promise.reject(new Error(`HTTP ${r.status}`))))
+          .then((r) => done(r.file), (error: unknown) => { console.warn('lab tour: photo not written', error); done(null); });
+      }, 'image/png');
+    });
+    ctx.requestDraw();
+  });
+}
+
+/** The scene at `stop` settled, a photo a second meanwhile, the time it took to land (`LoadTimeline`). */
+async function loadAt(ctx: LabContext, probe: TourProbe, stop: TourStop, shoot: (name: string) => Promise<string | null>, tag: string, cancel: Cancel): Promise<{ load: LoadTimeline; settleMs: number; unsettled: boolean }> {
+  const before = await shoot(`${tag}-0-before`);
+  const t0 = performance.now();
+  probe.setView(stop);
+  // The move's frames timed draw by draw while the scene comes in: where a move's slow frames go (the owner's camera, 2026-10-27).
+  const timing = recordGpuTimeline(ctx, LOAD_TIMELINE_MS).catch((error: unknown) => { console.error('lab tour: the GPU timeline failed', error); return null; });
+  const samples: LoadSample[] = [];
+  let landedMs: number | null = null;
+  let done = false;
+  const settling = settle(ctx, cancel, 1500, 25_000).finally(() => { done = true; });
+  // A photo a second while it loads (the first at once): what the player sees as the scene comes in.
+  for (let k = 0; !done && k < 30; k++) {
+    const sign = sceneSign(ctx);
+    const ms = performance.now() - t0;
+    if (landedMs === null && sign.notLanded === 0 && k > 0) landedMs = ms;
+    const photo = await shoot(`${tag}-1-load-${String(Math.round(ms)).padStart(6, '0')}ms`);
+    const stats = ctx.scene.stats;
+    samples.push({ ms, notLanded: sign.notLanded, triangles: stats.drawnTriangles, draws: stats.drawCalls, photo });
+    await new Promise<void>((next) => { window.setTimeout(next, 1000); });
+  }
+  const s = await settling;
+  if (landedMs === null && sceneSign(ctx).notLanded === 0) landedMs = performance.now() - t0;
+  const after = await shoot(`${tag}-2-after`);
+  const timeline = await timing;
+  return { load: { before, samples, after, landedMs, timeline }, settleMs: s.ms, unsettled: s.unsettled };
+}
+
 export async function runTour(ctx: LabContext, cancel: Cancel, progress: (text: string) => void): Promise<TourResult> {
   const t0 = performance.now();
   const probe = (window as unknown as { __roadcraft?: Partial<TourProbe> }).__roadcraft;
@@ -71,6 +149,8 @@ export async function runTour(ctx: LabContext, cancel: Cancel, progress: (text: 
   const view = probe.view();
   const home = { x: probe.camera.x, y: probe.camera.y, zoom: probe.camera.zoom, azimuth: view.azimuth, elevation: view.elevation };
   const stops = tourStops(probe.bounds(), view.azimuth, view.elevation);
+  const folder = `tour-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}`;
+  const shoot = photographer(ctx, folder);
   const out: TourResult['stops'][number][] = [];
   let cancelled = false;
   ctx.emit('doctor.tour', `city tour: ${stops.length} stops`, { stops: stops.map((s) => s.label) });
@@ -78,13 +158,12 @@ export async function runTour(ctx: LabContext, cancel: Cancel, progress: (text: 
     for (const [i, stop] of stops.entries()) {
       if (cancel.stopped) { cancelled = true; break; }
       const tag = `${i + 1}/${stops.length} ${stop.label}`;
-      progress(`${tag}: going there and settling`);
-      probe.setView(stop);
-      const s = await settle(ctx, cancel, 1500, 25_000);
+      progress(`${tag}: going there, a photo a second while it loads`);
+      const loaded = await loadAt(ctx, probe as TourProbe, stop, shoot, String(i + 1).padStart(2, '0'), cancel);
       progress(`${tag}: measuring`);
       const snap = await snapshot(ctx, (text) => progress(`${tag}: ${text}`));
-      const findings = findingsOf(snap);
-      out.push({ stop, snap, findings, settleMs: s.ms, unsettled: s.unsettled });
+      const findings = [...findingsOf(snap), ...timelineFindings(loaded.load.timeline, `moving to ${stop.label}`).map((f) => ({ ...f, id: `move.${f.id}` }))];
+      out.push({ stop, snap, findings, settleMs: loaded.settleMs, unsettled: loaded.unsettled, load: loaded.load });
       ctx.emit('doctor.tour.stop', `${tag}: ${verdictOf(snap).bound}, ${findings.length} causes`, { stop: stop.label, frameMs: snap.frameMs, gpuMs: snap.gpuMs, cpuMs: snap.cpuMs });
     }
   } catch (error) {
@@ -103,6 +182,7 @@ export async function runTour(ctx: LabContext, cancel: Cancel, progress: (text: 
   }
   const rank = { high: 0, medium: 1, low: 2, info: 3 } as const;
   return {
+    folder,
     stops: out,
     causes: [...causes.values()].sort((a, b) => rank[a.finding.severity] - rank[b.finding.severity] || b.finding.ms - a.finding.ms),
     ms: performance.now() - t0,

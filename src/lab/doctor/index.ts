@@ -2,7 +2,9 @@ import { icon } from '../icons';
 import type { LabContext, LabTab } from '../labTypes';
 import { findingsOf, layerSwitch, layersOf, verdictOf, type Finding } from './findings';
 import { quickAb, snapshot, type AbResult, type Snapshot } from './measure';
-import { diagnosisReport, keep, lastKept, tourReport, type DiagnosisReport, type KeptFinding } from './report';
+import { diagnosisReport, keep, lastKept, moveReport, tourReport, type DiagnosisReport, type KeptFinding } from './report';
+import { recordGpuTimeline } from './gpuTimeline';
+import { timelineFindings } from './timelineFindings';
 import { runTour } from './tour';
 import type { Cancel } from '../tests/measure';
 import { download, openText } from '../recorder/deliver';
@@ -54,6 +56,29 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
     } finally {
       busy = false;
       touring = null;
+      draw();
+    }
+  }
+
+  /** How long a camera move is recorded, ms. */
+  const MOVE_MS = 8000;
+  /** The camera's move as the player makes it, every draw timed on the GPU meanwhile (`gpuTimeline.ts`): what its slow frames waited on, written as a report. DO NOT judge a move from a still view: the 100-200 ms frames after a zoom showed in no still measure (2026-10-27). */
+  async function recordMove(): Promise<void> {
+    if (busy) return;
+    busy = true;
+    status = `Recording ${MOVE_MS / 1000} s: move the camera now (zoom, turn, pan)`;
+    draw();
+    try {
+      const t = await recordGpuTimeline(ctx, MOVE_MS);
+      const found = timelineFindings(t, 'camera move').sort((a, b) => b.ms - a.ms);
+      report = await keep(moveReport(ctx, t, found));
+      status = `Move recorded: ${report.summary}`;
+      ctx.emit('doctor.move', `camera move report ${report.stamp}: ${report.summary}`, { stamp: report.stamp, server: report.server, desktop: report.desktop });
+    } catch (error) {
+      console.error('lab doctor: the move was not recorded', error);
+      status = `the move was not recorded: ${String(error)}`;
+    } finally {
+      busy = false;
       draw();
     }
   }
@@ -214,6 +239,7 @@ export function createDoctorTabs(ctx: LabContext): LabTab[] {
   function draw(): void {
     const top = el('div', 'lab-row lab-doc-top');
     top.append(button('refresh', busy ? 'Measuring…' : 'Measure now', 'Measures the frame, every GPU pass, one frame\'s every draw, the CPU, the page\'s hidden work and what buys nothing on the screen (about 10 s); the report is written at once', () => { void measure(); }, 'lab-doc-primary'), el('span', 'lab-muted', status));
+    top.append(button('camera', 'Record a move', `Times every draw on the GPU for ${MOVE_MS / 1000} s while you move the camera: the frames that waited on the GPU, the stalls, the heaviest draws, the GPU work outside the frame, the uploads, the converted vertex formats, the waits; written as a report`, () => { void recordMove(); }));
     top.append(touring
       ? button('stop', 'Stop the tour', 'Stops after the stop being measured; the stops measured are written', () => { if (touring) touring.stopped = true; })
       : button('map', 'City tour', 'Measures the whole city: the whole map from above and turned, nine districts, five streets seen low, the edge (about 8 min); one report of every stop and every cause, with where it was seen', () => { void cityTour(); }));

@@ -55,7 +55,23 @@ const BASE_PAINT_GLSL = `
   vec3 baseSrgb = vec3(floor(basePacked / 2048.0) / 31.0, mod(floor(basePacked / 32.0), 64.0) / 63.0, mod(basePacked, 32.0) / 31.0);
   vColor = vec4(mix(baseSrgb / 12.92, pow((baseSrgb + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), baseSrgb)), 1.0);`;
 
-/** The masses' material; `base`, the top level's (`massBase.ts`): no normal and no facade of its own - each face shaded by its own slope (three's `flatShading`), each triangle in its last corner's colour (a `flat` varying), no window drawn (their mean is in the wall's colour). */
+/** The base's facade (`massBase.ts` gridShorts, a wall's last corner's: `flat`): its wall's way along from the face's own slope (as three's
+ *  `flatShading` takes its normal), its storeys counted from its foot, its bays, its windows - the masses' facade, drawn by the same pulses and
+ *  lit rooms below. A roof (its face up) or a block with no grid (its storey 0) draws none. */
+const BASE_GRID_GLSL = `{
+  vec3 faceN = normalize(cross(dFdx(vBaseWorld), dFdy(vBaseWorld)));
+  float storey = vBaseGrid.x / 100.0, bay = vBaseGrid.y / 100.0;
+  if (abs(faceN.y) < 0.5 && storey > 0.0 && bay > 0.0) {
+    float along = dot(vBaseWorld.xz, normalize(vec2(-faceN.z, faceN.x)));
+    float c = vBaseGrid.z, d = vBaseGrid.w;
+    float curtain = mod(floor(c / 128.0), 2.0), office = mod(floor(c / 64.0), 2.0);
+    fFacade = vec4(along, bay, storey, vBaseFoot + mod(d, 64.0) / 8.0);
+    fGlazing = vec2(floor(c / 256.0) / 255.0 + curtain * ${CURTAIN_WALL.toFixed(1)}, mod(c, 64.0) / 64.0 + office * 2.0);
+    fWindow = vec2(floor(d / 2048.0), mod(floor(d / 64.0), 32.0)) / 31.0;
+  } else fFacade.y = 0.0;
+}`;
+
+/** The masses' material; `base`, the top level's (`massBase.ts`): no normal of its own - each face shaded by its own slope (three's `flatShading`), each triangle in its last corner's colour and grid (`flat` varyings), its windows drawn from its grid (`BASE_GRID_GLSL`). */
 export function createMassingMaterial(uniforms: MassingUniforms, base = false): MeshStandardMaterial {
   const material = new MeshStandardMaterial({ vertexColors: true, roughness: 0.92, metalness: 0, flatShading: base });
   material.name = base ? 'building-massing-base' : 'building-massing';
@@ -76,10 +92,10 @@ export function createMassingMaterial(uniforms: MassingUniforms, base = false): 
     if (base) {
       // Its colour from its paint, one a triangle; an up normal for what reads one in the vertex stage (the shadow's normal bias, the lots' overlay): the face's own is taken from its slope in the fragment stage.
       shader.vertexShader = shader.vertexShader
-        .replace('#include <color_pars_vertex>', 'flat varying vec4 vColor;\nattribute float basePaint;')
-        .replace('#include <color_vertex>', BASE_PAINT_GLSL)
+        .replace('#include <color_pars_vertex>', 'flat varying vec4 vColor;\nattribute float basePaint;\nattribute vec4 baseGrid;\nflat varying vec4 vBaseGrid;\nflat varying float vBaseFoot;\nvarying vec3 vBaseWorld;')
+        .replace('#include <color_vertex>', `${BASE_PAINT_GLSL}\n  vBaseGrid = baseGrid;\n  vBaseWorld = (modelMatrix * vec4(position, 1.0)).xyz;\n  vBaseFoot = vBaseWorld.y;`)
         .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = vec3(0.0, 1.0, 0.0);');
-      shader.fragmentShader = shader.fragmentShader.replace('#include <color_pars_fragment>', 'flat varying vec4 vColor;');
+      shader.fragmentShader = shader.fragmentShader.replace('#include <color_pars_fragment>', 'flat varying vec4 vColor;\nflat varying vec4 vBaseGrid;\nflat varying float vBaseFoot;\nvarying vec3 vBaseWorld;');
     }
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
@@ -99,22 +115,26 @@ vec3 massLamp = vec3(1.0);
 ${ROOM_LAMP_GLSL}
 ${PULSE_GLSL('mass')}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-if (vFacade.y > 0.0) {
+vec4 fFacade = vFacade;
+vec2 fGlazing = vGlazing;
+vec2 fWindow = vWindow;
+${base ? BASE_GRID_GLSL : ''}
+if (fFacade.y > 0.0) {
   // Bays along the face and storeys up it.
-  vec2 cell = vec2(vFacade.x / vFacade.y, (vHeight - vFacade.w) / max(vFacade.z, 0.01));
+  vec2 cell = vec2(fFacade.x / fFacade.y, (vHeight - fFacade.w) / max(fFacade.z, 0.01));
   vec2 foot = massFootprint(cell);
   // A curtain wall's share is \`CURTAIN_WALL\` over its windows' (\`massing.ts\`): its windows as the detail cuts them, its storeys' spandrels and its mullions between them.
-  massCurtain = step(${curtainShare}, vGlazing.x);
-  float share = vGlazing.x - massCurtain * ${curtainShare};
+  massCurtain = step(${curtainShare}, fGlazing.x);
+  float share = fGlazing.x - massCurtain * ${curtainShare};
   float across = massPulse(cell.x, foot.x, 0.5 - 0.5 * share, 0.5 + 0.5 * share);
-  float up = massPulse(cell.y, foot.y, vWindow.x, vWindow.y);
+  float up = massPulse(cell.y, foot.y, fWindow.x, fWindow.y);
   // A window under a pixel leaves its mean: kept at full strength the glass the detail shows, not washed into the wall (the town at 1–2 km read as pastel boxes, 2026-10-20).
   // A curtain wall's at its own share: what is round its windows is its glass finish, as dark as the detail draws it, not a wall to wash.
   massGlass = clamp(across * up * mix(1.45, 1.0, massCurtain), 0.0, 1.0) * step(0.0, cell.y);
   // Which room is lit: its own lot near, the share awake once a window is under a pixel; by day (\`massingNight\` 0, a uniform: one branch for every pixel) none glows, so none is worked out.
   if (massingNight > 0.0) {
     vec2 room = floor(cell);
-    float seed = fract(vGlazing.y), office = step(1.5, vGlazing.y);
+    float seed = fract(fGlazing.y), office = step(1.5, fGlazing.y);
     float lot = fract(sin(dot(room, vec2(12.9898, 78.233)) + seed * 437.585) * 43758.5453);
     float near = step(1.0 - roomsAwake, lot);
     float sub = smoothstep(0.5, 1.5, max(foot.x, foot.y));
@@ -125,7 +145,7 @@ if (vFacade.y > 0.0) {
   // The panes as the detail draws them: dark glass, the sky's reflection and the room behind it (emissive below); round a curtain wall's, its glass finish (its albedo here, its metal, gloss and sky below).
   diffuseColor.rgb = mix(diffuseColor.rgb * mix(1.0, ${curtainAlbedo}, massCurtain), ${glass}, massGlass);
   // The foot of the wall in the street's shade: a block stands on the ground, not on a card (the town from afar, 2026-10-20).
-  diffuseColor.rgb *= mix(0.62, 1.0, smoothstep(0.0, ${m(1.4).toFixed(4)}, vHeight - vFacade.w));
+  diffuseColor.rgb *= mix(0.62, 1.0, smoothstep(0.0, ${m(1.4).toFixed(4)}, vHeight - fFacade.w));
 }`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>\nroughnessFactor = mix(mix(roughnessFactor, ${curtainRough}, massCurtain), 0.06, massGlass);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, ${curtainMetal}, massCurtain * (1.0 - massGlass));`)
@@ -136,7 +156,7 @@ if (vFacade.y > 0.0) {
 #endif`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>\ntotalEmissiveRadiance += (massLamp * massingNight * massLit + ${ROOM_SEEN_GLSL} * roomDaylight) * massGlass;`);
   };
-  material.customProgramCacheKey = () => (base ? 'building-massing-base-v2' : 'building-massing-lamps-v8');
+  material.customProgramCacheKey = () => (base ? 'building-massing-base-v3' : 'building-massing-lamps-v8');
   // A built lot's yard, coloured from afar as up close (`lotOverlay.ts`).
   applyLotOverlay(material, { building: true });
   return material;

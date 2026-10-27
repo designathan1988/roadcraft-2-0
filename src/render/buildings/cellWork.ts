@@ -116,7 +116,7 @@ export function replyBuffers(reply: WorkReply): ArrayBuffer[] {
   if (reply.result.base) out.push(...baseBuffers(reply.result.base));
   for (const { slice } of reply.result.slices ?? []) {
     if (slice.mass) out.push(...cellMassBuffers(slice.mass));
-    if (slice.base) out.push(slice.base.position.buffer as ArrayBuffer, slice.base.paint.buffer as ArrayBuffer, slice.base.index.buffer as ArrayBuffer);
+    if (slice.base) out.push(slice.base.position.buffer as ArrayBuffer, slice.base.paint.buffer as ArrayBuffer, slice.base.grid.buffer as ArrayBuffer, slice.base.index.buffer as ArrayBuffer);
   }
   return out;
 }

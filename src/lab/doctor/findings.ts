@@ -1,5 +1,6 @@
 import { gpuLedger } from '@render/gpuLedger';
 import type { Draw, Snapshot } from './measure';
+import { timelineFindings } from './timelineFindings';
 
 /** THE DIAGNOSIS'S FINDINGS: the snapshot read as causes - the bottleneck, the passes and layers the GPU spends on, the objects that weigh most, the shadows, the draw calls, the CPU's systems and functions, the hitches, the memory - each with its figures, why it matters, the switch that tests it and where to look. */
 
@@ -199,7 +200,7 @@ export function findingsOf(s: Snapshot): Finding[] {
       why: 'Near the cap the game drops building detail; above it the driver swaps memory and hitches.',
     });
   }
-  out.push(...hiddenFindings(s), ...wasteFindings(s), ...checkFindings(s), ...suspectFindings(s));
+  out.push(...hiddenFindings(s), ...wasteFindings(s), ...checkFindings(s), ...suspectFindings(s), ...timelineFindings(s.timeline, 'view still'));
   const rank: Record<Severity, number> = { high: 0, medium: 1, low: 2, info: 3 };
   out.sort((a, b) => rank[a.severity] - rank[b.severity] || b.ms - a.ms);
   // The bottleneck's side first: GPU causes count only when the GPU sets the pace, CPU ones when the CPU does.
