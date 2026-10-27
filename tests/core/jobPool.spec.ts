@@ -213,6 +213,22 @@ describe('the job system', () => {
     setJobWorkerMaker(null);
   });
 
+  it('sends a job fit to cross to an idle job process while the jobs before it wait for the page\'s workers', async () => {
+    const { setJobWorkerMaker, submitJob } = await import('@/jobs/jobPool');
+    const remote = new Set<FakeWorker>();
+    setJobWorkerMaker((long) => { if (!long) return null; const w = new FakeWorker(); remote.add(w); return w as unknown as Worker; });
+    // The page's workers all busy with the first jobs, more of them waiting: only the page's threads run them.
+    for (const name of ['a', 'b', 'c', 'd', 'e', 'f']) submitJob({ service: 'cells', key: null, priority: 1, write: () => ({ data: name, transfer: [] }), done: () => {}, failed: () => {} });
+    const sent = (w: FakeWorker): string[] => w.asked.flatMap((m) => (typeof m.data === 'string' ? [m.data] : []));
+    const page = FakeWorker.made.filter((w) => !remote.has(w));
+    expect(page.flatMap(sent).length).toBeLessThan(6);
+    // Asked after them, ranked after them: it runs now, in a job process, not behind them.
+    submitJob({ service: 'furnitureCells', key: null, priority: 9, crosses: true, write: () => ({ data: 'away', transfer: [] }), done: () => {}, failed: () => {} });
+    expect([...remote].flatMap(sent)).toEqual(['away']);
+    expect(page.flatMap(sent)).not.toContain('away');
+    setJobWorkerMaker(null);
+  });
+
   it('keeps the road tiles lanes on workers of their own in the job processes, no lane of another kind beside them', async () => {
     const { jobPort, setJobWorkerMaker } = await import('@/jobs/jobPool');
     setJobWorkerMaker((long) => (long ? new FakeWorker() as unknown as Worker : null), 12);

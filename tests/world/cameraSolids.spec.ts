@@ -137,7 +137,8 @@ describe('camera solids filed as the questions reach them', () => {
     whole.follow(store, ground);
     off.solids();
     off.prefetch([[m(-100), m(-100), m(700), m(700)]]);
-    expect(pending.length).toBeGreaterThan(10);
+    // One job a block of 8 x 8 cells of 50 m (`PREFETCH_BLOCK`): the rectangle's cells -2..14 a side stand in blocks -1..1, 3 x 3 of them.
+    expect(pending.length).toBe(9);
     // One building moved while its cell was asked: filed as it stands now.
     const moved = [...store.all()][5]!;
     store.put({ ...moved, x: moved.x + m(6) });

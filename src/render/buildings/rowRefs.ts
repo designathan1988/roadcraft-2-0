@@ -1,4 +1,4 @@
-import { RecordTable, type TableReader, TableWriter, readRow, tableBytes, tableRecords } from '@world/buildings/recordTable';
+import { RecordTable, type TableReader, type TableRow, TableWriter, readRow, tableBytes, tableRecords } from '@world/buildings/recordTable';
 import type { BuildingStore } from '@world/buildings/store';
 import type { Building, BuildingId } from '@world/buildings/types';
 
@@ -59,12 +59,15 @@ export function rowCopier(): (ids: readonly BuildingId[], buildings: BuildingSto
   };
 }
 
-/** The buildings a job was handed, in a worker: its refs' rows read where they stand (each table's reader made once, kept in `readers` while its buffer lives), then its own table's. */
-export function* rowBuildings(rows: BuildingRows, readers: WeakMap<ArrayBufferLike, TableReader<Building>>): Generator<Building> {
+/** The records a job was handed, in a worker: its refs' rows read where they stand (each table's reader made once, kept in `readers` while its buffer lives), then its own table's. A building's, or any kind kept in a table (the landscaping's, `furnitureCell.worker.ts`). */
+export function* rowRecords<T extends TableRow>(rows: BuildingRows, readers: WeakMap<ArrayBufferLike, TableReader<T>>): Generator<T> {
   for (const { buffer, row } of rows.refs ?? []) {
     let reader = readers.get(buffer);
-    if (!reader) readers.set(buffer, reader = new RecordTable(buffer).reader<Building>(true));
+    if (!reader) readers.set(buffer, reader = new RecordTable(buffer).reader<T>(true));
     yield readRow(reader, row);
   }
-  if (rows.table) yield* tableRecords<Building>(rows.table);
+  if (rows.table) yield* tableRecords<T>(rows.table);
 }
+
+/** The buildings a job was handed, in a worker (`rowRecords`). */
+export const rowBuildings = (rows: BuildingRows, readers: WeakMap<ArrayBufferLike, TableReader<Building>>): Generator<Building> => rowRecords<Building>(rows, readers);

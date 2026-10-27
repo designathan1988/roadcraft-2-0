@@ -997,7 +997,7 @@ export function createSceneRenderer(
   /** The roads' structures, cell by cell (`structureCells.ts`), made with the first world. */
   let details: StructureCells | null = null;
   /** What the player placed on the footways and the long grass, kept item by item from the diary (`streetFurnitureLayer.ts`) */
-  const furniture = createStreetFurniture(sceneryKit);
+  const furniture = createStreetFurniture(sceneryKit, () => onAssetsReady());
   world.add(furniture.group, furniture.grass);
   /** The poles and wires held round the view, block by block (`poleLayer.ts` PoleCells). */
   let utilities: PoleCells | null = null;

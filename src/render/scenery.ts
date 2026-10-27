@@ -45,6 +45,7 @@ import {
   type BushKind,
   type TreeSpecies,
 } from './propGeometry';
+import { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, POOL_ALONG } from './lampMeasures';
 
 export { LAMP_HEIGHT, LAMP_OUTREACH } from './propGeometry';
 
@@ -56,13 +57,8 @@ const TREE_WIND: WindResponse = { sway: 0.045, flutter: 0.009 };
 const BUSH_WIND: WindResponse = { sway: 0.05, flutter: 0.014 };
 const GRASS_WIND: WindResponse = { sway: 0.22, flutter: 0.04 };
 
-/** Radius of the bright core under a street lamp (the cone's foot). */
-export const LAMP_POOL_RADIUS = m(4.6);
-/** The light a street lamp lays on the road: not a spotlight's disc but the long patch of a road luminaire's spread */
-export const POOL_ALONG = 1.6;
-/** A lamp's visible cone of light, drawn as Volumetric Light Beam draws one (saladgamer.com/vlb-doc/comp-lightbeam-sd/) */
-/** The cone's radius at the ground: the bright core of the pool. */
-export const LAMP_BEAM_RADIUS = LAMP_POOL_RADIUS * 0.8;
+// The lamp's pool and cone (`lampMeasures.ts`): what the furniture is placed by, on the page and off it.
+export { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, POOL_ALONG };
 /** Radius of the cut apex, over the radius at the ground: the lens (about 0.28 m of 3.7). */
 const BEAM_SOURCE = 0.075;
 /** Sides and segments of the cone (VLB: 18 sides; 3 segments at least, for a smooth falloff). */

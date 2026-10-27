@@ -220,7 +220,7 @@ export interface PropLayer {
   readonly busy: boolean;
   /** The diary's changes since the last look: the cells and blocks they reached dropped, placed again as the view asks. */
   follow(journal: ChangeJournal): void;
-  /** The cells and blocks with a thing that grows with the hour dropped (a new city hour). */
+  /** The cells and blocks with a thing that grows with the hour dropped, and the placements come with one not yet taken (a new city hour). */
   forgetGrowing(): void;
   /** Every placement asked off the page let go, its answer never taken (the layer placed from another document). */
   forgetAsked(): void;
@@ -278,7 +278,7 @@ const packBytes = (packs: ReadonlyMap<number, Pack>): number => {
 /** A layer of things held round the view. */
 export function createPropLayer(spec: PropLayerSpec): PropLayer {
   /** What is asked off the page (`propAsks.ts`): a cell derived once its placement came. */
-  const { ready, placementFor, prune, follow: followOff, clear: clearAsked } = createPropAsks(spec);
+  const { ready, placementFor, prune, follow: followOff, forgetGrowing: forgetGrowingAsked, clear: clearAsked } = createPropAsks(spec);
   const group = new Group();
   group.name = spec.name;
   const cells: CellInstances = createCellInstances(spec.kinds, YAW_POSE, spec.margin);
@@ -638,6 +638,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     },
     forgetAsked() { clearAsked(); },
     forgetGrowing() {
+      forgetGrowingAsked();
       near.forget([...growingNear]);
       far.forEach((f, cls) => f.forget([...growingFar[cls]!]));
     },

@@ -1,5 +1,6 @@
 import { WEAK_MACHINE } from '@core/weakMachine';
 import type { AdoptLane, CloseLane, FromJob, JobService, ToJob } from './jobScope';
+import { type JobSpec, JobQueue, type Queued } from './jobQueue';
 
 /** THE JOB SYSTEM: one pool of workers (hardwareConcurrency - 2, within the machine's memory) for every kind of work off the page, in place of a pool per kind */
 /** DO NOT make every worker at the start nor give a kind's job to any free worker: each worker is a whole JS heap with the code and state of every service it ran, so 22 of them each running every service took the page's process past 6 GB on a 3 x 3 tile region (2026-10-16, Chrome memory-infra: 2.8 GB of V8 in the workers, out of memory at 8 GB) - workers are made as work waits, and a kind's jobs go first to the workers that already run it */
@@ -49,30 +50,6 @@ const DESKTOP_PAGE_WORKERS = 2;
 /** Workers for every other kind (the traffic's lanes, the cells, the far levels, the roads, the ground): the rest of the pool, one at least. */
 export const shortWorkers = (): number => Math.max(1, jobWorkers() - longWorkers());
 
-/** A job of the central queue (Cidade's job pool, `submit`): its message written when a worker takes it, answered once. */
-interface JobSpec {
-  readonly service: JobService;
-  /** A newer job with the same key replaces this one: never sent if still waiting, its answer dropped if begun. */
-  readonly key: string | null;
-  /** Lower first: the job's distance to the eye (`focusDistance`), in metres, or below it for what must come first; with `at`, its band (what comes before the distance, the same for a kind of job). */
-  readonly priority: number;
-  /** Where on the map the job's work stands: its rank is `priority` plus its distance to where the view looks NOW, re-ranked as the view moves (`setJobFocus`), not where it looked when the job was asked. */
-  readonly at?: readonly [number, number];
-  /** The message, written only when a worker takes the job (a job waiting its turn holds no copy of it); `to`, the worker taking it. */
-  readonly write: (to: JobTaker) => { readonly data: unknown; readonly transfer: Transferable[] };
-  /** Fit for a worker in a desktop job process (`processWorker.ts`): its message holds only what the job reads (`cellPool.ts` the ground's plates around it), copied there. Without it the job waits for the page's own workers. */
-  readonly crosses?: boolean;
-  /** What the job's worker keeps for the next job of the same affinity (`cellWork.ts` the buildings' programs, a worker's own heap): the job goes
-   *  to the worker that ran the last one (`owners`) while it is free, the jobs after it in the queue run first while it is busy (`AFFINITY_LOOK`). */
-  readonly affinity?: string;
-  readonly done: (answer: unknown) => void;
-  /** Its worker failed, or none can run it: the asker does it another way. */
-  readonly failed: (message: string) => void;
-}
-
-/** The worker a job's message is written for: whether it shares the page's memory (a worker of the page), or every shared buffer of the message is copied to it (a desktop job process's, `processWorker.ts` unshared). */
-interface JobTaker { readonly sharesMemory: boolean }
-
 /** A job of the queue as its asker holds it. */
 export interface JobTicket {
   /** Not wanted any more: never sent if waiting, its answer dropped if begun. */
@@ -86,161 +63,8 @@ export interface JobTicket {
  *  an affinity (the pool's work waits for no one worker), the affinity then moving with it. */
 const AFFINITY_LOOK = 32;
 
-/** A job in the queue: waiting, running on a worker, or over (answered, cancelled or replaced by a newer one of its key). */
-interface Queued { readonly seq: number; readonly spec: JobSpec; state: 'waiting' | 'running' | 'over'; rank: number }
-
 /** A job's place in the queue now: its band and its distance to the view's focus (`JobSpec.at`), or its priority alone. */
 const rankOf = (spec: JobSpec): number => (spec.at ? spec.priority + focusDistance(spec.at[0], spec.at[1]) : spec.priority);
-
-/** ONE PRIORITY QUEUE FOR EVERY WORKER: a binary min-heap by (priority, order asked); a job replaced or cancelled is left in it and skipped when popped */
-class JobQueue {
-  private readonly heap: Queued[] = [];
-  /** Each key's newest job, while it is not over. */
-  private readonly newest = new Map<string, Queued>();
-  private seq = 0;
-  private count = 0;
-
-  /** Jobs waiting for a worker. */
-  get waiting(): number {
-    return this.count;
-  }
-
-  /** Jobs ever asked of the queue (read only: the debugging lab). */
-  get submitted(): number {
-    return this.seq;
-  }
-
-  submit(spec: JobSpec): Queued {
-    const job: Queued = { seq: ++this.seq, spec, state: 'waiting', rank: rankOf(spec) };
-    if (spec.key !== null) {
-      const older = this.newest.get(spec.key);
-      if (older) this.end(older);
-      this.newest.set(spec.key, job);
-    }
-    this.count++;
-    this.push(job);
-    // DO NOT let the jobs over (replaced or cancelled) pile up in the heap: they are left in it and skipped when popped, and a camera moving replaces thousands a second (the far nodes and the cells asked again under their keys), each dispatch popping them one by one (500 ms of a 16 s drag, 2026-10-16); compacted once they outnumber the waiting.
-    if (this.heap.length > this.count * 2 + 64) this.compact();
-    return job;
-  }
-
-  /** Every waiting job placed by where the view looks now (`setJobFocus`), the heap made again. */
-  rerank(): void {
-    for (const job of this.heap) if (job.state === 'waiting') job.rank = rankOf(job.spec);
-    this.compact();
-  }
-
-  /** The heap made again of the waiting jobs alone (Floyd's build-heap, O(n)). */
-  private compact(): void {
-    const a = this.heap;
-    let n = 0;
-    for (const job of a) if (job.state === 'waiting') a[n++] = job;
-    a.length = n;
-    for (let i = (n >> 1) - 1; i >= 0; i--) this.sink(i);
-  }
-
-  /** The waiting job that would run next, left waiting; null when none waits. */
-  peek(): Queued | null {
-    while (this.heap.length > 0 && this.heap[0]!.state !== 'waiting') this.pop();
-    return this.heap[0] ?? null;
-  }
-
-  /** Of the first `look` entries of the heap (its top levels), the first in rank of the waiting jobs `fits` takes; null when none. */
-  near(look: number, fits: (job: Queued) => boolean): Queued | null {
-    let best: Queued | null = null;
-    for (let i = 0; i < this.heap.length && i < look; i++) {
-      const job = this.heap[i]!;
-      if (job.state === 'waiting' && (best === null || this.less(job, best)) && fits(job)) best = job;
-    }
-    return best;
-  }
-
-  /** A waiting job marked running out of its turn (`near`): left in the heap, skipped when popped (as one replaced). */
-  takeThis(job: Queued): void {
-    if (job.state !== 'waiting') return;
-    this.count--;
-    job.state = 'running';
-  }
-
-  /** The waiting job to run next, marked running; null when none waits. */
-  take(): Queued | null {
-    for (let job = this.pop(); job; job = this.pop()) {
-      if (job.state !== 'waiting') continue;
-      this.count--;
-      job.state = 'running';
-      return job;
-    }
-    return null;
-  }
-
-  cancel(job: Queued): void {
-    this.end(job);
-  }
-
-  /** A running job's answer, handed to its asker if it is still wanted. */
-  answer(job: Queued, data: unknown): void {
-    if (this.end(job) === 'running') job.spec.done(data);
-  }
-
-  /** A running job that failed, said to its asker if it is still wanted. */
-  fail(job: Queued, message: string): void {
-    if (this.end(job) === 'running') job.spec.failed(message);
-  }
-
-  /** Every waiting job failed: no worker can run them. */
-  failAll(message: string): void {
-    for (let job = this.take(); job; job = this.take()) this.fail(job, message);
-  }
-
-  /** The job over; what it was. */
-  private end(job: Queued): Queued['state'] {
-    const was = job.state;
-    if (was === 'waiting') this.count--;
-    job.state = 'over';
-    if (job.spec.key !== null && this.newest.get(job.spec.key) === job) this.newest.delete(job.spec.key);
-    return was;
-  }
-
-  private less(a: Queued, b: Queued): boolean {
-    return a.rank < b.rank || (a.rank === b.rank && a.seq < b.seq);
-  }
-
-  private push(job: Queued): void {
-    const a = this.heap;
-    a.push(job);
-    let i = a.length - 1;
-    while (i > 0) {
-      const up = (i - 1) >> 1;
-      if (!this.less(a[i]!, a[up]!)) break;
-      [a[i], a[up]] = [a[up]!, a[i]!];
-      i = up;
-    }
-  }
-
-  private pop(): Queued | undefined {
-    const a = this.heap;
-    const top = a[0];
-    const last = a.pop();
-    if (top === undefined || last === undefined || a.length === 0) return top;
-    a[0] = last;
-    this.sink(0);
-    return top;
-  }
-
-  /** The job at `i` moved down until both children are after it. */
-  private sink(i: number): void {
-    const a = this.heap;
-    for (;;) {
-      const l = i * 2 + 1, r = l + 1;
-      let m = i;
-      if (l < a.length && this.less(a[l]!, a[m]!)) m = l;
-      if (r < a.length && this.less(a[r]!, a[m]!)) m = r;
-      if (m === i) return;
-      [a[i], a[m]] = [a[m]!, a[i]!];
-      i = m;
-    }
-  }
-}
 
 /** A worker of the pool: the lanes it hosts (`place`), its port per service for queued jobs, the queued job it runs, whether it failed. */
 interface Host {
@@ -271,7 +95,7 @@ class JobSystem {
   readonly workers: Host[] = [];
   readonly ports = new Map<number, JobPort>();
   nextPort = 1;
-  readonly queue = new JobQueue();
+  readonly queue = new JobQueue(rankOf);
   /** The services whose lanes go first (`laneFirst`): their workers are given no queued job while they do, where another worker can take it (`keptForFirst`). */
   readonly firstLanes = new Set<JobService>();
   focusX = 0;
@@ -562,6 +386,12 @@ function dispatch(): void {
       system.queue.failAll(`no job workers: ${String(error)}`);
       return;
     }
+    // No worker for it now: the first job fit to cross, to a job process that stands free (one the first job could not take anyway).
+    if (!host && job.spec.crosses !== true) {
+      const away = system.queue.awayTop();
+      const there = away ? hostFor(away.spec.service, true) : null;
+      if (away && there) { job = away; host = there; }
+    }
     if (!host) {
       if (system.workers.length > 0 && system.workers.every((h) => h.failed)) system.queue.failAll('every job worker failed');
       retireIdle();
@@ -610,13 +440,14 @@ export interface JobWorkerStats {
 }
 
 /** The pool as it stands, read only: its workers, the queue's waiting jobs, the most it may hold (the debugging lab's consumers; nothing is changed). */
-export function jobPoolStats(): { readonly most: number; readonly longMost: number; readonly shortMost: number; readonly waiting: number; readonly submitted: number; readonly ports: number; readonly workers: readonly JobWorkerStats[] } {
+export function jobPoolStats(): { readonly most: number; readonly longMost: number; readonly shortMost: number; readonly waiting: number; readonly waitingBy: Record<string, { readonly page: number; readonly away: number }>; readonly submitted: number; readonly ports: number; readonly workers: readonly JobWorkerStats[] } {
   const now = performance.now();
   return {
     most: jobWorkers(),
     longMost: longWorkers(),
     shortMost: shortWorkers(),
     waiting: system.queue.waiting,
+    waitingBy: system.queue.waitingBy(),
     submitted: system.queue.submitted,
     ports: system.ports.size,
     workers: system.workers.map((h) => ({

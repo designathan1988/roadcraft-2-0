@@ -41,6 +41,9 @@ export interface PropAsks {
   prune(): void;
   /** The placements a change reached (their rectangles grown by the layer's `pad`) let go: everything, when the diary cannot say where. */
   follow(journal: ChangeJournal): void;
+  /** The placements come with a thing that grows with the hour let go, not yet taken (a new city hour): those still to come are placed at the
+   *  hour they come at (`PropAskSpec.ask`). */
+  forgetGrowing(): void;
   /** Every placement asked let go, its answer never taken. */
   clear(): void;
 }
@@ -103,6 +106,9 @@ export function createPropAsks(spec: PropAskSpec): PropAsks {
           }
         }
       }
+    },
+    forgetGrowing() {
+      for (const [k, known] of asked) if (known.placement?.growing) asked.delete(k);
     },
     clear() { asked.clear(); },
   };

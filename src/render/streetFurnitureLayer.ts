@@ -1,64 +1,39 @@
 import { type BufferGeometry, Color, Group, type Frustum, type InstancedMesh, type Matrix4, type MeshDepthMaterial } from 'three';
 
-import { Rng } from '@core/rng';
-import { angleOf } from '@core/vec2';
 import type { Change, ChangeJournal, ChangeKind, ChangeRect } from '@world/changes';
 import { CellFiling, grow } from '@world/cells';
-import { Derived, type DerivedSpec } from '@world/derived';
+import { Derived, type DerivedSpec, JournalCursor } from '@world/derived';
 import type { RoadElevation } from '@world/elevation';
 import { ACCESS_REACH, GROW_MINUTES, MAX_ITEM_RADIUS, plantGrowth, type LandscapeItem } from '@world/landscape';
 import type { Network } from '@world/network';
-import { footwayRiseAt } from '@world/roads/footwayRise';
-import { FOOTWAY_RISE } from '@world/roadTypes';
-import { furnitureOf } from '@world/streetFurniture';
 import { m } from '@world/units';
 import { CLUMP_READ_REACH, grassClump, type Tuft } from './grass';
 import type { KindSpec } from './cellInstances';
 import { RunBuilder, kindOf, warmMeshes, type RunStore } from './instanceRuns';
-import { BUSH_KINDS, TREE_SPECIES, type BushKind, type TreeSpecies } from './propGeometry';
+import { BUSH_KINDS, TREE_SPECIES } from './propGeometry';
 import { PICTURE_PX, PROP_PICTURES, propPictures, sceneryPictures, type PropPicture, type PropPictures, type SceneryPictures } from './plantImpostors';
 import { createPropLayer, type PropLayer, type PropPlacement } from './propCells';
+import { FURNITURE_MODELS, type FurniturePlace, type LampLens, furniturePlace, isFurniture, unpackPlaces } from './furniturePlace';
+import type { FurnitureCellAsk, FurnitureCellReply } from './furnitureCell.worker';
+import { canQueueJobs, submitJob } from '../jobs/jobPool';
+import { TIER_SPAN } from './buildings/cellPool';
+import { RecordTable, TableWriter, tableBytes } from '@world/buildings/recordTable';
+import { type RoadDoc, type SerializedDoc, savedNode, savedSegment } from '@world/doc';
+import type { NodeId, SegmentId } from '@world/ids';
+import { roadsOfTiles, tilesMeeting } from '@world/networkWindow';
+import { isLevelLand } from './networkFarInput';
+import { type SharedGroundAt, type SharedGroundData, groundAround } from './sharedGround';
+// Its street trees' species by roll (`furniturePlace.ts`), for the lab's catalogue.
+export { streetSpecies } from './furniturePlace';
 import { PROP_LEAST_PX, PROP_NEAR_PX, PROP_PICTURE_PX, propMeasure, propMidLevel, simplifierLoading, type PropMidLevel } from './propLevels';
-import { BEAM_FADE, LAMP_BEAM_RADIUS, LAMP_HEIGHT, LAMP_OUTREACH, LAMP_POOL_RADIUS, POOL_ALONG, SHADOW_REACH, foliageTint, type SceneryKit } from './scenery';
+import { BEAM_FADE, SHADOW_REACH, type SceneryKit } from './scenery';
 
 /** DO NOT go back to that: one bench placed paid for every bench of the city. */
-
-/** Street trees are pollarded smaller than a tree in open ground. */
-const STREET_TREE_MIN = m(6.5);
-const STREET_TREE_RANGE = m(3);
 
 /** How far a placed item stands from what moves it: a road within reach of its footway and of the crossings near it. */
 const ROAD_REACH = ACCESS_REACH + MAX_ITEM_RADIUS + m(1);
 /** Its deck's height read at its point. */
 const DECK_REACH = m(1);
-
-/** The furniture's stores, in the order the scenery's meshes were made. */
-const FURNITURE_MODELS = ['lamp', 'lens', 'pool', 'beam', 'bin', 'bench', 'hydrant', 'postbox', 'phone', 'drain', 'treePit'] as const;
-type FurnitureModel = (typeof FURNITURE_MODELS)[number];
-const MODEL = Object.fromEntries(FURNITURE_MODELS.map((model, i) => [model, i])) as Record<FurnitureModel, number>;
-
-/** One instance of a placed item: its store, where, how turned and sized, its tint. */
-interface Placed {
-  readonly store: number;
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-  readonly yaw: number;
-  readonly sx: number;
-  readonly sy: number;
-  readonly sz: number;
-  readonly tint: Color | null;
-  /** A plant: its full height, times its growth; `sx`, `sy`, `sz` are then times the height it has. 0: it does not grow. */
-  readonly h: number;
-}
-
-/** A placed item as it stands: its instances, where it is (its filing), when it was planted. */
-interface FurniturePlace {
-  readonly x: number;
-  readonly y: number;
-  readonly planted: number | undefined;
-  readonly placed: readonly Placed[];
-}
 
 /** What the layer is refreshed from: the diary it reads, and the roads and their heights it places on. */
 export interface FurnitureSource {
@@ -166,87 +141,6 @@ export function furnitureStores(kit: SceneryKit, pictures: SceneryPictures, ladd
     plant(`street-bushes-${k}`, kit.bushes[k], kit.shrubs, kit.shrubsDepth, kit.cards[k], kit.shrubCards, kit.shrubCardsDepth, pictures.bushAt(k));
   }
   return stores;
-}
-
-/** Each street plant's store (`furnitureStores`): the props', then the trees' by species, then the bushes'. */
-const treeStore = (species: TreeSpecies): number => FURNITURE_MODELS.length + TREE_SPECIES.indexOf(species);
-const bushStore = (kind: BushKind): number => FURNITURE_MODELS.length + TREE_SPECIES.length + BUSH_KINDS.indexOf(kind);
-
-/** Picks a species for a street tree: mostly planes, some flowering ipês. */
-export function streetSpecies(roll: number): TreeSpecies {
-  if (roll < 0.55) return 'broadleafTall';
-  if (roll < 0.78) return 'broadleaf';
-  return roll < 0.89 ? 'ipeYellow' : 'ipePink';
-}
-
-/** Where a lamp's lens stands on its post (`SceneryKit.lens`). */
-export interface LampLens { readonly reach: number; readonly height: number }
-
-/** Where a placed item's instances stand, or undefined when it draws nothing. */
-function furniturePlace(net: Network, elevation: RoadElevation, placed: LandscapeItem, lens: LampLens): FurniturePlace | undefined {
-  const item = furnitureOf(net, placed);
-  if (!item) return undefined;
-  const out: Placed[] = [];
-  const put = (store: number, p: Omit<Placed, 'store' | 'tint' | 'h'> & { tint?: Color; h?: number }): void => {
-    out.push({ store, x: p.x, y: p.y, z: p.z, yaw: p.yaw, sx: p.sx, sy: p.sy, sz: p.sz, tint: p.tint ?? null, h: p.h ?? 0 });
-  };
-  // On the item's OWN road.
-  const base = elevation.onSegment(item.segment, item.x, item.y) + footwayRiseAt(net, item.x, item.y);
-  // Local +X of a lamp reaches over the road; local -Z of a bench, a post box or a hydrant turns its back on the road.
-  const inward = angleOf({ x: -item.outward.x, y: -item.outward.y });
-  const facing = angleOf({ x: item.outward.y, y: -item.outward.x });
-  const at = { x: item.x, y: item.y, z: base, sx: 1, sy: 1, sz: 1 };
-  switch (item.kind) {
-    case 'lamp': {
-      put(MODEL.lamp, { ...at, yaw: inward });
-      put(MODEL.lens, { ...at, yaw: inward });
-      // The light falls over the road and the footway behind the lamp: across, the carriageway's width
-      const road = net.ribbons.get(item.segment)?.road;
-      const across = Math.max(LAMP_POOL_RADIUS, (road ? road.width : m(7)) * 0.55 + m(2.5));
-      const centre = Math.max(LAMP_OUTREACH * 0.85, across - m(3));
-      put(MODEL.pool, { x: item.x - item.outward.x * centre, y: item.y - item.outward.y * centre, z: base + m(0.012),
-        yaw: inward, sx: across, sy: 1, sz: LAMP_HEIGHT * POOL_ALONG });
-      // And the cone it is lit by, from the lens down to the road under it.
-      put(MODEL.beam, { x: item.x - item.outward.x * lens.reach, y: item.y - item.outward.y * lens.reach, z: base + lens.height,
-        yaw: 0, sx: LAMP_BEAM_RADIUS, sy: lens.height + FOOTWAY_RISE, sz: LAMP_BEAM_RADIUS });
-      break;
-    }
-    case 'bin':
-      put(MODEL.bin, { ...at, yaw: item.seed * Math.PI * 2 });
-      break;
-    case 'bench': {
-      // Its seat faces where the layout says somebody sitting looks.
-      const faces = item.faces ?? { x: -item.outward.x, y: -item.outward.y };
-      put(MODEL.bench, { ...at, yaw: angleOf({ x: -faces.y, y: faces.x }) });
-      break;
-    }
-    case 'postbox':
-    case 'hydrant':
-    case 'phone':
-    case 'drain':
-      // Built facing -Z; turned so the phone's shell opens to the footway and the drain's grate lies in the gutter on the road
-      put(MODEL[item.kind], { ...at, yaw: facing + Math.PI });
-      break;
-    case 'streetTree': {
-      put(MODEL.treePit, { ...at, yaw: angleOf(item.along) });
-      // Planted young, it grows to its full height over a few days.
-      const rng = new Rng(Math.floor(item.seed * 0xffffff));
-      const species = streetSpecies(rng.float());
-      const tree = { x: item.x, y: item.y, z: base + m(0.03), yaw: rng.float() * Math.PI * 2,
-        sx: 0.85 + rng.float() * 0.2, sy: 1, sz: 0.85 + rng.float() * 0.2, tint: foliageTint(rng), h: STREET_TREE_MIN + item.seed * STREET_TREE_RANGE };
-      put(treeStore(species), tree);
-      break;
-    }
-    case 'shrub': {
-      const rng = new Rng(Math.floor(item.seed * 0xffffff));
-      const h = m(0.8) + rng.float() * m(0.4);
-      const kind: BushKind = rng.float() < 0.4 ? 'bushFlowering' : 'bush';
-      const shrub = { x: item.x, y: item.y, z: base - m(0.05), yaw: rng.float() * Math.PI * 2, sx: 1.05, sy: 1, sz: 1.05, tint: foliageTint(rng), h };
-      put(bushStore(kind), shrub);
-      break;
-    }
-  }
-  return { x: placed.x, y: placed.y, planted: item.planted, placed: out };
 }
 
 const sameColour = (a: Color | null, b: Color | null): boolean =>
@@ -398,24 +292,131 @@ const stillGrowing = (planted: number | undefined, minutes: number): boolean =>
 /** How far from its item a placed thing may stand: a lamp's pool of light out over the widest road. */
 const FURNITURE_SPREAD = m(40);
 
-/** The items the furniture draws (not the long grass, the signs, the street names). */
-const isFurniture = (item: LandscapeItem): boolean => item.kind !== 'meadow' && item.kind !== 'sign' && item.kind !== 'streetname';
 
 /** The furniture's things standing about a rectangle at the city's time `now` (the hour's start): each item near it placed (`furniturePlace`), a plant sized by its growth then. */
 export function furnitureAbout(source: FurnitureSource, stores: readonly RunStore[], lens: LampLens, now: number, rect: ChangeRect): PropPlacement {
-  const builder = new RunBuilder(stores);
-  let growing = false;
+  const places: FurniturePlace[] = [];
   for (const item of source.net.doc.landscapeIn(grow(rect, FURNITURE_SPREAD))) {
     if (!isFurniture(item)) continue;
     const place = furniturePlace(source.net, source.elevation, item, lens);
-    if (!place) continue;
+    if (place) places.push(place);
+  }
+  return placementOf(places, stores, now);
+}
+
+/** Places put in runs of the furniture's stores at the city's time `now` (the hour's start): what the layer draws of them. */
+export function placementOf(places: readonly FurniturePlace[], stores: readonly RunStore[], now: number): PropPlacement {
+  const builder = new RunBuilder(stores);
+  let growing = false;
+  for (const place of places) {
     placeInto(builder, place, now);
     if (stillGrowing(place.planted, now)) growing = true;
   }
   return { packs: builder.build(), growing };
 }
 
-export function createStreetFurniture(kit: SceneryKit): StreetFurnitureLayer {
+/** The queue matches each answer to its job (`submitJob`'s own number): an ask's id is not read. */
+const UNNUMBERED = 0;
+/** The furniture's band in the queue (`cellPool.ts` cellPriority): after the masses (2-2.75), the buildings' cover and the gardens (2.9) and the
+ *  summaries (3), nearest the view first. DO NOT ask it with the cover: the plants of the opening wait for the cover, and a 10 km city's
+ *  furniture cells and blocks held the page's one job thread before it (the opening 47 -> 104 s, 2026-10-27). */
+const FURNITURE_BAND = 3.5;
+
+/**
+ * The roads' records as a job reads them (`savedNode`, `savedSegment`), each made once while the roads stand (the diary's roads, read through
+ * a cursor): the cells and blocks next to each other ask the same tiles' roads. DO NOT make them again an ask: a far block's tiles hold thousands.
+ */
+class RoadRecords {
+  private readonly cursor = new JournalCursor(['roads']);
+  private doc: RoadDoc | null = null;
+  private readonly nodes = new Map<NodeId, SerializedDoc['nodes'][number]>();
+  private readonly segments = new Map<SegmentId, SerializedDoc['segments'][number]>();
+  /** Each tile's roads and those at their ends (`roadsOfTiles`). */
+  private readonly tiles = new Map<number, readonly SegmentId[]>();
+
+  /** The roads of the tiles a rectangle meets and those at their ends, in id order, their records and their nodes'. */
+  of(doc: RoadDoc, rect: ChangeRect): { scope: SegmentId[]; nodes: SerializedDoc['nodes']; segments: SerializedDoc['segments'] } {
+    // Another document, or a road changed since the last ask: every record made again as asked.
+    const changed = this.cursor.read(doc.changes);
+    if (doc !== this.doc || changed === null || changed.length) {
+      this.doc = doc;
+      this.nodes.clear();
+      this.segments.clear();
+      this.tiles.clear();
+    }
+    const scope = new Set<SegmentId>();
+    for (const tile of tilesMeeting(rect)) {
+      let roads = this.tiles.get(tile);
+      if (!roads) this.tiles.set(tile, roads = [...roadsOfTiles(doc, [tile])]);
+      for (const id of roads) scope.add(id);
+    }
+    const ids = [...scope].sort((a, b) => a - b);
+    const nodeIds = new Set<NodeId>();
+    const segments = ids.map((id) => {
+      let saved = this.segments.get(id);
+      if (!saved) {
+        const seg = doc.segment(id)!;
+        this.segments.set(id, saved = savedSegment(seg));
+      }
+      nodeIds.add(saved.a as NodeId);
+      nodeIds.add(saved.b as NodeId);
+      return saved;
+    });
+    const nodes = [...nodeIds].sort((a, b) => a - b).map((id) => {
+      let saved = this.nodes.get(id);
+      if (!saved) this.nodes.set(id, saved = savedNode(doc.node(id)!));
+      return saved;
+    });
+    return { scope: ids, nodes, segments };
+  }
+}
+
+/**
+ * What a job places the furniture about `rect` from (`furnitureCell.worker.ts`), read now: the items there (rows of the map's landscaping table
+ * where it holds them, the others encoded), the roads of the tiles round them and every road at their ends with their nodes (as the page's
+ * network holds a tile's, `networkWindow.ts`), their heights as the page's solve has them (`fieldFor`), the ground it read; null where they
+ * cannot be handed over (no field to pack, a table not in shared memory).
+ */
+/** `shared`: the job's thread shares the page's memory (its items read by their rows where the map's table holds them); else every item is copied
+ *  into a table of its own and the ground cut to the plates round the rectangle (`groundAround`: a job process, whose memory is its own). */
+export function furnitureAskOf(source: FurnitureSource, rect: ChangeRect, lens: LampLens, level: boolean, ground: SharedGroundData | null,
+  records: RoadRecords = new RoadRecords(), shared = true): { data: FurnitureCellAsk; transfer: ArrayBuffer[] } | null {
+  const doc = source.net.doc;
+  const reach = grow(rect, FURNITURE_SPREAD);
+  const refs: { buffer: ArrayBufferLike; row: number }[] = [];
+  const written: LandscapeItem[] = [];
+  const copied = new TableWriter<LandscapeItem>(false);
+  /** The map's tables rows are copied from, each read once. */
+  const sources = new Map<ArrayBufferLike, RecordTable>();
+  let copies = 0;
+  for (const id of doc.landscapeIdsIn(reach)) {
+    const ref = doc.recordRef('landscape', id);
+    if (ref && shared && typeof SharedArrayBuffer !== 'undefined' && ref.buffer instanceof SharedArrayBuffer) { refs.push({ buffer: ref.buffer, row: ref.row }); continue; }
+    // A job process: the row copied as it is (no record decoded); one written on the page encoded.
+    if (ref && !shared) {
+      let from = sources.get(ref.buffer);
+      if (!from) sources.set(ref.buffer, from = new RecordTable(ref.buffer));
+      copied.copyRows(from, [ref.row]);
+      copies++;
+      continue;
+    }
+    const item = doc.landscape.get(id);
+    if (item) written.push(item);
+  }
+  if (written.length) { copied.add(written); copies += written.length; }
+  const roads = grow(reach, ROAD_REACH);
+  const { scope, nodes, segments } = records.of(doc, roads);
+  const field = source.elevation.fieldFor?.([roads], scope);
+  if (!field) return null;
+  const table = copies ? tableBytes(copied.finish().buffer) : null;
+  return {
+    data: { id: UNNUMBERED, rect, refs, table, lens, level, ground: ground && !shared ? groundAround(ground, roads) : ground, markingStyle: doc.markingStyle, scope, field: field.data, nodes, segments },
+    transfer: [...field.transfer, ...(table ? [table] : [])],
+  };
+}
+
+/** `arrived`: a cell's furniture placed off the page came (a frame asked to draw it). */
+export function createStreetFurniture(kit: SceneryKit, arrived: () => void = () => {}): StreetFurnitureLayer {
   const pictures = sceneryPictures(kit);
   const ladder = propLadder(kit);
   const stores = furnitureStores(kit, pictures, ladder);
@@ -427,12 +428,46 @@ export function createStreetFurniture(kit: SceneryKit): StreetFurnitureLayer {
   });
   let source: FurnitureSource | null = null;
   let hour = Number.NaN;
+  /** The roads' records the furniture's jobs are handed, made once while the roads stand. */
+  const roadRecords = new RoadRecords();
+  /**
+   * THE FURNITURE ABOUT A RECTANGLE ASKED OF THE PAGE'S JOB THREADS (`furnitureCell.worker.ts`), each answer put in runs here at the city's hour as
+   * it comes. The job solves the roads round the rectangle itself: an item stands on its road wherever the view is, not only on the roads the
+   * page's network holds round the view (`networkWindow.ts`). DO NOT place them on the page: a far block of 1 km placed its thousands of items
+   * there in one frame, each one's road looked up in the network. Null without a job queue.
+   */
+  const furnitureAsk = canQueueJobs() ? (rect: ChangeRect): Promise<PropPlacement> | null => {
+    if (!source) return null;
+    const level = isLevelLand(source.net.doc);
+    const share = (source.groundAt as SharedGroundAt).share;
+    if (!level && !share?.current) return null;
+    return new Promise<PropPlacement>((done, fail) => {
+      submitJob({
+        // Fit for a job process (`crosses`): every road it reads handed with it, its items copied there and its ground cut to the rectangle's plates.
+        service: 'furnitureCells', key: null, priority: FURNITURE_BAND * TIER_SPAN, at: [(rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2], crosses: true,
+        // Its items, roads and heights read when a thread takes it: as they stand then (an answer asked before a change is let go, `propAsks.ts`).
+        write: (to) => {
+          const now = source;
+          const ask = now ? furnitureAskOf(now, rect, kit.lens, level, level ? null : share?.current ?? null, roadRecords, to.sharesMemory) : null;
+          if (!ask) throw new Error('[furniture] the roads round a rectangle could not be handed to a job');
+          return ask;
+        },
+        done: (answer) => {
+          const reply = answer as FurnitureCellReply;
+          if ('error' in reply) { fail(new Error(reply.error)); return; }
+          done(placementOf(unpackPlaces(reply.places), stores, hour * 60));
+        },
+        failed: (message) => fail(new Error(message)),
+      });
+    });
+  } : null;
   const layer = createPropLayer({
     name: 'street-furniture', version: 1, kinds: stores.map(kindOf), margin: SHADOW_REACH,
     // What an item's place reads (`furnitureProduct`): the item, its road within reach, the road's deck under it.
     changes: ['landscape', 'roads', 'elevation'], pad: ROAD_REACH + FURNITURE_SPREAD,
     pictures: pictures.set, pictureOf, stills: [ladder.pictures.set],
     place: (rect) => (source ? furnitureAbout(source, stores, kit.lens, hour * 60, rect) : { packs: new Map(), growing: false }),
+    ...(furnitureAsk ? { ask: furnitureAsk, arrived } : {}),
   });
   // The grass throws no shadow: only what the view itself takes. Its cells as the furniture's: placed as the view asks, let go past the budget.
   const meadowStores = MEADOW_STORES(kit);
@@ -463,7 +498,9 @@ export function createStreetFurniture(kit: SceneryKit): StreetFurnitureLayer {
       if (source && source.net.doc !== net.doc) for (const l of layers) { l.near.clear(); for (const f of l.far) f.clear(); }
       source = fresh;
       for (const l of layers) l.follow(net.doc.changes);
-      // A new hour: the cells with a plant still growing placed again (and only those).
+      // A new hour: the cells with a plant still growing placed again (and only those), and the placements come with one not yet taken.
+      // DO NOT let go every placement asked: a job's answer is put in runs at the hour it comes at (`placementOf`), and every cell asked again
+      // each city hour (about 4 minutes) piled the jobs asked before, still queued, under the new ones (2026-10-27).
       if (!Object.is(nowHour, hour)) {
         hour = nowHour;
         layer.forgetGrowing();

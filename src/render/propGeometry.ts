@@ -24,6 +24,7 @@ import { lowPolyTreeParts, type LowPolyKind, type LowPolyParts } from './lowPoly
 import { m } from '@world/units';
 import { TREE_PIT } from '@world/streetFurniture';
 import { CURB_BAND, FOOTWAY_RISE } from '@world/roadTypes';
+import { LAMP_HEIGHT, LAMP_OUTREACH } from './lampMeasures';
 
 /** Procedural geometry for everything that stands on the ground. */
 
@@ -228,9 +229,8 @@ export function wildflowerGeometry(): BufferGeometry {
 
 // ---------------------------------------------------------------- furniture
 
-/** A residential lighting column is 8 to 10 m with a 1.5 to 2.5 m outreach. */
-export const LAMP_HEIGHT = m(9);
-export const LAMP_OUTREACH = m(2.1);
+// A lamp's column and outreach (`lampMeasures.ts`): what the furniture is placed by, on the page and off it.
+export { LAMP_HEIGHT, LAMP_OUTREACH };
 /** Galvanised grey, not near-black. */
 const LAMP_METAL = rgb(0x8a918e);
 const LAMP_PLINTH = rgb(0x5d6461);
