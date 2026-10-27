@@ -143,3 +143,30 @@ describe('the floors of the rows of a table', () => {
     expect(reads).toBeGreaterThan(after);
   });
 });
+
+describe('the floors measured elsewhere', () => {
+  it('are taken for a building whose blocks are its volumes, and worked out here for one with a void', () => {
+    const doc = layCity(planCity({ ...DEFAULT_CITY, seed: 2, size: 'small' }));
+    const net = new Network(doc);
+    net.rebuild();
+    applyLots(doc, planLots(doc, net));
+    doc.lots.forEach((l, k) => zoneLots(doc, [l.id], { use: (['residential', 'commercial', 'industrial'] as const)[k % 3]!, density: 'medium' }));
+    const refused = new Set<number>();
+    for (let k = 0; k < 100; k++) if (growOnLot({ doc, net, groundAt: base }, refused, 0x5eed) === null && refused.size >= doc.lots.length) break;
+    const plain = [...doc.buildings.all()].find((b) => !b.volumes.some((v) => v.mode))!;
+    expect(plain).toBeDefined();
+    let reads = 0;
+    const groundAt = (x: number, y: number): number => { reads++; return base(x, y); };
+    const measured = new Map<number, number>([[plain.id, floorHeight(plain, base)]]);
+    const floors = buildingFloors(groundAt, undefined, (b) => { const r = storedBounds(b, FLOOR_READ_REACH); return [r.minX, r.minY, r.maxX, r.maxY]; }, FLOOR_READ_REACH,
+      null, (b) => measured.get(b.id));
+    // Measured: taken, its ground never read here.
+    expect(floors.floorOf(plain)).toBe(measured.get(plain.id));
+    expect(reads).toBe(0);
+    // A void among its volumes: the jobs measure its blocks resolved, another building - worked out here on its own.
+    const carved = { ...plain, volumes: [...plain.volumes, { ...plain.volumes[0]!, id: 999, mode: 'void' as const, w: m(1), d: m(1) }] };
+    measured.set(carved.id, -12345);
+    expect(floors.floorOf(carved)).toBeCloseTo(floorHeight(carved, base), 9);
+    expect(reads).toBeGreaterThan(0);
+  });
+});

@@ -23,8 +23,23 @@ export interface BuildingFloors {
  * and the floor was worked out again with the record at the next ask - the street's props, the gardens and the camera's solids of a 10 km city
  * decoded their buildings and sampled their ground again at every frame of a move (0.55 s of 3.3 s of frames, one profile, 2026-10-27).
  */
+/**
+ * `measured`: a building's floor as worked out elsewhere on the same ground and paving (the cells' jobs, `layer.ts` knownFloor), taken in place of
+ * working it out here for a building whose blocks are its volumes as they stand (none a void, an intersection or an exclusive one: the jobs
+ * measure the blocks resolved, `blocks.ts` resolveBlocks, the same building then). DO NOT work out on the page what a job measured: a camera
+ * move across a 10 km city worked out the floors of the canyon light's window of 2 km, every building's ground bays, at every frame (2 s of 6.9).
+ */
 export function buildingFloors(groundAt: GroundAt, pavedAt: PavedAt | undefined, boxOf: (b: Building) => Rect, reach: number,
-  standing: ((b: Building) => { readonly table: TableRows; readonly row: number } | null) | null = null): BuildingFloors {
+  standing: ((b: Building) => { readonly table: TableRows; readonly row: number } | null) | null = null,
+  measured: ((b: Building) => number | undefined) | null = null): BuildingFloors {
+  /** The floor of `b` as measured elsewhere where it is the same building there, else worked out here. */
+  const work = (b: Building): number => {
+    if (measured && !b.volumes.some((v) => v.mode)) {
+      const known = measured(b);
+      if (known !== undefined) return known;
+    }
+    return floorHeight(b, groundAt, pavedAt);
+  };
   /** The floors of the records written on the page (held by their store) and of a record not standing as a table's row. */
   let known = new WeakMap<Building, number>();
   /** The floors of a table's rows, by row (NaN: not worked out), while the table is the store's. */
@@ -39,11 +54,11 @@ export function buildingFloors(groundAt: GroundAt, pavedAt: PavedAt | undefined,
         let column = rows.get(at.table);
         if (!column) rows.set(at.table, column = new Float64Array(at.table.size).fill(Number.NaN));
         let floor = column[at.row]!;
-        if (Number.isNaN(floor)) column[at.row] = floor = floorHeight(b, groundAt, pavedAt);
+        if (Number.isNaN(floor)) column[at.row] = floor = work(b);
         return floor;
       }
       let floor = known.get(b);
-      if (floor === undefined) known.set(b, floor = floorHeight(b, groundAt, pavedAt));
+      if (floor === undefined) known.set(b, floor = work(b));
       return floor;
     },
     forget(b) {

@@ -91,7 +91,6 @@ import { type BlockDigestAsk, type GroundShapeAsk, type PadsAsk, type PlateShape
 import { type Pad, padLevelAt } from '@world/buildings/pads';
 import { RoadFootprints } from './roadFootprints';
 import { refOf } from '@world/buildings/recordTable';
-import type { BuildingStore } from '@world/buildings/store';
 import { shapeBoth } from './terrainShaping';
 import { PLANT_MAP_ZOOM, createSceneryKit, plantSamples, type SceneryKit } from './scenery';
 import { createStreetFurniture } from './streetFurnitureLayer';
@@ -1771,16 +1770,14 @@ export function createSceneRenderer(
     const grow = (r: ChangeRect, d: number): ChangeRect => [r[0] - d, r[1] - d, r[2] + d, r[3] + d];
     return entries.flatMap((e) => e.kind === 'buildings' ? e.rects! : e.rects!.map((r) => grow(r, CANYON_GROUND_REACH)));
   };
-  /** The store whose buildings' floors are kept (`followFloors`): a floor of one of its table's rows is kept by the row (`BuildingStore.recordRow`). */
-  let floorStore: BuildingStore | null = null;
-  /** Each building's floor, once per record while what it reads stands, a table's row by its row (`floors.ts`) */
-  const floors = buildingFloors(builtGroundAt, pavedHeightAt, floorBox, FLOOR_READ_REACH, (b) => floorStore?.recordRow(b) ?? null);
+  /** Each building's floor, once per record while what it reads stands, a table's row by its row (`floors.ts`): the rows of the store of the map the
+   *  world was built for (`worldNet`, another map's another table). DO NOT take the store from `followFloors`: on level land it is never called, and
+   *  every floor of a generated city was worked out again at every frame of a move (1.5 s of 5.7 s of frames, 2026-10-27). */
+  const floors = buildingFloors(builtGroundAt, pavedHeightAt, floorBox, FLOOR_READ_REACH, (b) => worldNet?.doc.buildings.recordRow(b) ?? null,
+    // As the buildings' cells' jobs measured it (`layer.ts` knownFloor): a record standing as the town's own, on the ground and paving as they stand.
+    (b) => (worldNet?.doc.buildings.recordRow(b) ? buildings.knownFloor(b.id) : undefined));
   /** `shaped`: the regions the caller is shaping, where the diary cannot say what moved (`floors.ts` `follow`). */
-  const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => {
-    // Another map's store: its rows are another table's, kept apart by it.
-    floorStore = net.doc.buildings;
-    floors.follow(net.doc.buildings, floorGroundSince, shaped);
-  };
+  const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => floors.follow(net.doc.buildings, floorGroundSince, shaped);
   const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH);
   /** The roads watched for vanishing from the picture */
   let roadsWatchedAt = 0;

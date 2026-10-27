@@ -87,6 +87,8 @@ export interface BuildingLayer {
   covers(x: number, y: number): boolean;
   /** Whether `covers` answers everywhere in a rectangle (its cells worked out off the page and in), the missing cells asked meanwhile. */
   coverReady(rect: readonly [number, number, number, number]): boolean;
+  /** A building's floor as the cells' jobs measured it on the ground and paving as they stand (`CellPool.floorKnown`); undefined where none did. */
+  knownFloor(id: BuildingId): number | undefined;
   /** Bumped when what `covers` answers changes (a footprint or a lot moved, came or went). */
   readonly coversVersion: number;
   /** Height of a building's lot or parking bay as drawn at a world point, NaN off them */

@@ -1181,6 +1181,14 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     covers(x, y) {
       return cover.covers(x, y);
     },
+    knownFloor(id) {
+      // As the cells' jobs measured it (`CellPool.floorKnown`): the building's record as the town files it (its signature), the ground of its cell
+      // and the paving read as they stand now. Undefined where no job measured it so, or it measured none (no closed block).
+      const slot = slotNow(id);
+      if (slot < 0) return undefined;
+      const floor = pool.floorKnown({ key: String(id), sig: columns.sig[slot]!, digest: digestOfCell(columns.cellOf(slot)) }, groundNow.pavedAt !== undefined);
+      return floor ?? undefined;
+    },
     coverReady(rect) {
       return cover.ready(rect);
     },
