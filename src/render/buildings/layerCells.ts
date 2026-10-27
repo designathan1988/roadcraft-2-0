@@ -11,6 +11,7 @@ import { CELL } from '@world/cells';
 import type { ChangeJournal, ChangeRect } from '@world/changes';
 import type { BuildingStore } from '@world/buildings/store';
 import { ViewCells } from '@world/viewCells';
+import { JournalCursor } from '@world/derived';
 import type { BuildingMeshes } from './buildingMesh';
 import type { CellEntry } from './chunk';
 import { PART_KINDS, type PartKind } from './kit';
@@ -117,7 +118,7 @@ const COVER_VERSION = 1;
 export const coverPolygons = (b: Building): Vec2[][] => [...solidFootprints(b, PLANT_MARGIN), ...footprintRects(b)];
 
 /** One cell of the cover: the polygons reaching it, flat (x, y pairs; polygon k's points from `starts[k]` to `starts[k + 1]`), filed by bucket. */
-interface CoverCell {
+export interface CoverCell {
   readonly xy: Float64Array;
   readonly starts: Uint32Array;
   readonly buckets: ReadonlyMap<number, Uint32Array>;
@@ -135,6 +136,9 @@ export interface CoverIndex {
   follow(source: CoverSource): void;
   /** The eye: the cells round it derived ahead of the plants' questions, `most` a call. */
   look(x: number, y: number, most?: number): void;
+  /** Whether every cell a rectangle reaches is in, so `covers` answers there: the missing ones asked (`CoverAsk`) and false meanwhile; always true where the cells are derived on the spot (no ask). */
+  ready(rect: ChangeRect): boolean;
+  /** Whether a building covers (x, y): a question where `ready` said the cells are in (a missing cell asked, false meanwhile, where they are derived off the page). */
   covers(x: number, y: number): boolean;
   /** Moves when what `covers` answers may have changed (a building came, went or changed). */
   readonly version: number;
@@ -148,8 +152,14 @@ const EMPTY_COVER: CoverCell = Object.freeze({ xy: new Float64Array(0), starts: 
 /** A cell's cover from the buildings reaching it: a pure function of the cell and the document. */
 function coverCell(buildings: BuildingStore | null, rect: ChangeRect): CoverCell {
   if (!buildings) return EMPTY_COVER;
-  const near = buildings.near(rect[0] - COVER_PAD, rect[1] - COVER_PAD, rect[2] + COVER_PAD, rect[3] + COVER_PAD);
-  if (near.length === 0) return EMPTY_COVER;
+  return coverCellOf(buildings.near(rect[0] - COVER_PAD, rect[1] - COVER_PAD, rect[2] + COVER_PAD, rect[3] + COVER_PAD), rect);
+}
+
+/** The rectangle whose buildings a cell's cover reads (`coverCell`): the cell grown by `COVER_PAD`. */
+export const coverReach = (rect: ChangeRect): ChangeRect => [rect[0] - COVER_PAD, rect[1] - COVER_PAD, rect[2] + COVER_PAD, rect[3] + COVER_PAD];
+
+/** A cell's cover from the buildings near it (those `coverReach` reaches): on the page, or in a job worker from their rows (`coverCell.worker.ts`). */
+export function coverCellOf(near: Iterable<Building>, rect: ChangeRect): CoverCell {
   const points: number[] = [];
   const starts: number[] = [0];
   const filed = new Map<number, number[]>();
@@ -184,6 +194,39 @@ function coverCell(buildings: BuildingStore | null, rect: ChangeRect): CoverCell
   return { xy: Float64Array.from(points), starts: Uint32Array.from(starts), buckets };
 }
 
+/** A cover cell as numbers alone, to be moved between threads: its buckets' keys, where each bucket's polygons start, and the polygons. */
+export interface PackedCover {
+  readonly xy: Float64Array;
+  readonly starts: Uint32Array;
+  readonly keys: Float64Array;
+  readonly at: Uint32Array;
+  readonly polygons: Uint32Array;
+}
+
+export function packCover(cell: CoverCell): PackedCover {
+  const keys = new Float64Array(cell.buckets.size), at = new Uint32Array(cell.buckets.size + 1);
+  let n = 0, k = 0;
+  for (const list of cell.buckets.values()) n += list.length;
+  const polygons = new Uint32Array(n);
+  n = 0;
+  for (const [key, list] of cell.buckets) { keys[k] = key; at[k] = n; polygons.set(list, n); n += list.length; k++; }
+  at[k] = n;
+  return { xy: cell.xy, starts: cell.starts, keys, at, polygons };
+}
+
+export function unpackCover(p: PackedCover): CoverCell {
+  if (p.starts.length <= 1) return EMPTY_COVER;
+  const buckets = new Map<number, Uint32Array>();
+  for (let k = 0; k < p.keys.length; k++) buckets.set(p.keys[k]!, p.polygons.subarray(p.at[k]!, p.at[k + 1]!));
+  return { xy: p.xy, starts: p.starts, buckets };
+}
+
+/** Where a cell's cover is worked out off the page (`coverJobs.ts`): its rectangle and the buildings near it, the cell when it comes back; null when it cannot be asked (no job queue). */
+export type CoverAsk = (rect: ChangeRect, buildings: BuildingStore) => Promise<CoverCell> | null;
+
+/** Cells asked off the page at once, at most (`CoverIndex.look`, `ready`). */
+const COVER_IN_FLIGHT = 12;
+
 /** The bytes a cover cell holds: its arrays, and each bucket's entry. */
 const coverBytes = (cell: CoverCell): number => {
   let n = cell.xy.byteLength + cell.starts.byteLength;
@@ -203,8 +246,47 @@ function inCoverPolygon(cell: CoverCell, k: number, x: number, y: number): boole
   return inside;
 }
 
-export function createCoverIndex(): CoverIndex {
+/**
+ * `ask`: where a cell is worked out off the page (`coverJobs.ts`); null: on the spot. DO NOT derive a cover cell on the page in a frame: a
+ * dense cell of a 10 km city decoded its hundreds of buildings and turned their footprints into the world in one piece of work, the
+ * plants' share of the frame (4 ms, `CellKeeps.settle`) run over by a task of 100-2,000 ms (one F7 profile of the open city, 2026-10-26).
+ * The plants wait for the cells (`ready`), in their turn.
+ */
+export function createCoverIndex(ask: CoverAsk | null = null): CoverIndex {
   let source: CoverSource | null = null;
+  /** The cells asked off the page and not back yet, each by its asking's own number: one let go (`letGo`) or asked again answers into nothing. */
+  const pending = new Map<number, number>();
+  let asking = 0;
+  const seen = new JournalCursor(['buildings']);
+  /** The cells in flight a change of the buildings reached (grown by the reach a cell reads, `COVER_PAD`): what they read may be gone, asked again; all, where it cannot say where. */
+  const letGo = (entries: readonly { readonly rects: readonly ChangeRect[] | null }[] | null): void => {
+    if (!pending.size || (entries && !entries.length)) return;
+    if (!entries || entries.some((e) => e.rects === null)) { pending.clear(); return; }
+    for (const e of entries) {
+      for (const r of e.rects!) cells.forCellsOver([r[0] - COVER_PAD, r[1] - COVER_PAD, r[2] + COVER_PAD, r[3] + COVER_PAD], (key) => { pending.delete(key); });
+    }
+  };
+  /** A missing cell asked off the page (once at a time, `COVER_IN_FLIGHT` cells at most); false when it cannot be. */
+  const request = (key: number): boolean => {
+    const from = source;
+    if (!ask || !from) return false;
+    if (pending.has(key)) return true;
+    if (pending.size >= COVER_IN_FLIGHT) return true;
+    const asked = ask(cells.rectOf(key), from.buildings);
+    if (!asked) return false;
+    const at = ++asking;
+    pending.set(key, at);
+    asked.then((cell) => {
+      // Let go meanwhile (a change reached it, another document): the answer stands for buildings that may be no more.
+      if (pending.get(key) !== at) return;
+      pending.delete(key);
+      if (source === from) cells.put(key, { value: cell, cpuBytes: coverBytes(cell) });
+    }, (error: unknown) => {
+      if (pending.get(key) === at) pending.delete(key);
+      console.error(`[buildings] the cover of cell ${key} was not worked out off the page`, error);
+    });
+    return true;
+  };
   const cells = new ViewCells<CoverCell>({
     name: 'building cover',
     version: COVER_VERSION,
@@ -228,22 +310,43 @@ export function createCoverIndex(): CoverIndex {
         source = next;
         cells.clear();
         cells.follow(next.changes);
+        seen.read(next.changes);
+        pending.clear();
         version++;
         missing = true;
         return;
       }
       if (cells.follow(next.changes) > 0) { version++; missing = true; }
+      letGo(seen.read(next.changes));
     },
     look(x, y, most = 1) {
       if (!source) return;
       // The wanted cells chosen again only when the eye crossed into another cell, and derived only while some are missing.
       const at = cells.cellAt(x, y);
       if (at !== lookedFrom) { lookedFrom = at; cells.look({ x, y }); missing = true; }
-      if (missing) missing = cells.pump(most) > 0 || cells.wantedKeys.some((key) => !cells.has(key));
+      if (!missing) return;
+      if (ask) {
+        // Off the page: the wanted cells not held asked, nearest first; none derived here.
+        let waiting = false;
+        for (const key of cells.wantedKeys) if (!cells.has(key)) { waiting = true; if (!request(key)) break; }
+        missing = waiting;
+        cells.trim(null);
+        return;
+      }
+      missing = cells.pump(most) > 0 || cells.wantedKeys.some((key) => !cells.has(key));
+    },
+    ready(rect) {
+      if (!source || !ask) return true;
+      let all = true;
+      cells.forCellsOver(rect, (key) => { if (!cells.has(key)) { all = false; request(key); } });
+      return all;
     },
     covers(x, y) {
       if (!source) return false;
-      const cell = cells.ensure(cells.cellAt(x, y));
+      const key = cells.cellAt(x, y);
+      // Off the page: a cell not in is asked, nothing covered meanwhile (the plants ask `ready` first).
+      const cell = ask ? cells.peek(key) : cells.ensure(key);
+      if (!cell) { request(key); return false; }
       const list = cell.buckets.get(bucketKey(Math.floor(x / COVER_CELL), Math.floor(y / COVER_CELL)));
       if (!list) return false;
       for (let i = 0; i < list.length; i++) if (inCoverPolygon(cell, list[i]!, x, y)) return true;

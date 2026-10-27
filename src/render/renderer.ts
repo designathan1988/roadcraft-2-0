@@ -2938,7 +2938,9 @@ export function createSceneRenderer(
     return natureOpen(net, c.x, c.y, at) && !clearingsOf(net.doc)(c.x, c.y) ? at : null;
   };
   /** Which of the ecosystem's swept trees stand, cell by cell (`cellKeeps.ts`), and the trees each plate's cells were filled from. */
-  const natureKeeps = new CellKeeps<Candidate>(natureStands);
+  /** Whether what the plants' tests read is in over a keep cell: the buildings' cover, worked out off the page (`CoverIndex.ready`). */
+  const coverIn = (rect: ChangeRect): boolean => buildings.coverReady(rect);
+  const natureKeeps = new CellKeeps<Candidate>(natureStands, coverIn);
   const natureFiled = new Map<object, { readonly trees: readonly Candidate[]; readonly cells: readonly number[] }>();
   /** DO NOT test and draw every tree of the ecosystem again for one plate swept again: the cells of the plates whose trees changed */
   const fileNature = (sweep: NatureSweep): void => {
@@ -2973,23 +2975,23 @@ export function createSceneRenderer(
   /** Which of the painted covers' and the rivers' places stand, kind by kind and cell by cell (`cellKeeps.ts`). */
   const coverKeeps = {
     // The woods out of the clearings.
-    forest: new CellKeeps<Candidate>((c) => (coverFree(c.x, c.y) && !clearingsOf(keepNet!.doc)(c.x, c.y) ? terrain.renderedHeightAt(c.x, c.y) : null)),
-    scrub: new CellKeeps<Candidate>(coverPlain),
-    rocks: new CellKeeps<Candidate>(coverPlain),
+    forest: new CellKeeps<Candidate>((c) => (coverFree(c.x, c.y) && !clearingsOf(keepNet!.doc)(c.x, c.y) ? terrain.renderedHeightAt(c.x, c.y) : null), coverIn),
+    scrub: new CellKeeps<Candidate>(coverPlain, coverIn),
+    rocks: new CellKeeps<Candidate>(coverPlain, coverIn),
     // A river's stone by its height over the water: thickest at the waterline, thinning up the bank and into the deep.
     shore: new CellKeeps<ShoreCandidate>((c) => {
       const ground = terrain.renderedHeightAt(c.x, c.y);
       const above = ground - c.level;
       const odds = above < -m(2.5) ? 0.06 : above < -m(0.3) ? 0.3 : above < m(0.6) ? 0.45 : above < m(2) ? 0.22 : above < m(4) ? 0.07 : 0;
       return c.draw <= odds && coverFree(c.x, c.y) ? ground : null;
-    }),
+    }, coverIn),
   };
   /** The four kinds as the draw walks them: refreshed, and their changed cells taken, alike. */
   const coverKinds: readonly Pick<CellKeeps<Candidate>, 'refresh' | 'refreshAll' | 'settle' | 'takeChangedCells'>[] = [coverKeeps.forest, coverKeeps.scrub, coverKeeps.rocks, coverKeeps.shore];
   /** @rebuild Every cell of every kind: only when every cell is drawn again. */
   const allCoverCells = (): Set<number> => new Set([...coverKeeps.forest.cellKeys(), ...coverKeeps.scrub.cellKeys(), ...coverKeeps.rocks.cellKeys(), ...coverKeeps.shore.cellKeys()]);
   /** Which of the trees the player planted stand: off the roads, out of the buildings. */
-  const plantedKeeps = new CellKeeps<PlantedTree>((t) => (onCarriageway(keepNet!, t) || buildings.covers(t.x, t.y) ? null : terrain.renderedHeightAt(t.x, t.y)));
+  const plantedKeeps = new CellKeeps<PlantedTree>((t) => (onCarriageway(keepNet!, t) || buildings.covers(t.x, t.y) ? null : terrain.renderedHeightAt(t.x, t.y)), coverIn);
   /** The planted trees standing in a keep cell, from the document's filing by place (`RoadDoc.treesIn`). */
   const plantedIn = (doc: RoadDoc, key: number): PlantedTree[] => doc.treesIn(keepCellRect(key)).filter((t) => keepCellAt(t.x, t.y) === key);
   /** The planted forest's cells, made once the woods' models are in: the region's keep draws in them. */

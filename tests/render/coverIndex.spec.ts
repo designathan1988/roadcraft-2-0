@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { pointInPolygon } from '@core/polygon';
-import { coverPolygons, createCoverIndex } from '@render/buildings/layerCells';
+import { coverRows } from '@render/buildings/coverJobs';
+import { type CoverAsk, coverCellOf, coverPolygons, createCoverIndex, packCover, unpackCover } from '@render/buildings/layerCells';
+import { tableRecords } from '@world/buildings/recordTable';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
 import { BuildingStore } from '@world/buildings/store';
 import { type Building, asBuildingId } from '@world/buildings/types';
@@ -19,6 +21,25 @@ const coveredByAny = (store: BuildingStore, x: number, y: number): boolean => {
   for (const b of store.all()) for (const poly of coverPolygons(b)) if (pointInPolygon({ x, y }, poly)) return true;
   return false;
 };
+
+/** The cover asked off the page as the job threads answer it (`coverCell.worker.ts`), in this thread: the rows copied, read, packed and unpacked; answered when `land` is called. */
+function threadAsk(): { ask: CoverAsk; land: () => Promise<void>; asked: () => number } {
+  const rows = coverRows();
+  const queue: (() => void)[] = [];
+  let asked = 0;
+  const ask: CoverAsk = (rect, buildings) => {
+    asked++;
+    // The rows read when asked; answered later, as a job is.
+    const table = rows(rect, buildings);
+    return new Promise((done) => queue.push(() => done(unpackCover(packCover(coverCellOf(table ? tableRecords<Building>(table) : [], rect))))));
+  };
+  const land = async (): Promise<void> => {
+    while (queue.length) queue.shift()!();
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+  return { ask, land, asked: () => asked };
+}
 
 describe('the cover index, cell by cell', () => {
   it('answers as every building asked, through edits', () => {
@@ -44,6 +65,78 @@ describe('the cover index, cell by cell', () => {
       }
     }
     expect(covered).toBeGreaterThan(30);
+  });
+
+  it('worked out off the page, answers as every building asked once its cells are in, an answer asked before an edit let go', async () => {
+    let seed = 11;
+    const rand = (): number => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+    const changes = new ChangeJournal();
+    const buildings = new BuildingStore(changes);
+    const span = m(520);
+    for (let id = 1; id <= 20; id++) buildings.restore(asBuildingId(id), building(id, rand() * span, rand() * span, rand() * Math.PI));
+    const jobs = threadAsk();
+    const index = createCoverIndex(jobs.ask);
+    index.follow({ buildings, changes });
+    const area = [-span * 0.1, -span * 0.1, span * 1.1, span * 1.1] as const;
+    const fill = async (): Promise<void> => {
+      for (let round = 0; round < 50 && !index.ready(area); round++) await jobs.land();
+      expect(index.ready(area)).toBe(true);
+    };
+    const check = (): number => {
+      let covered = 0;
+      for (let i = 0; i < 3000; i++) {
+        const x = rand() * span * 1.2 - span * 0.1, y = rand() * span * 1.2 - span * 0.1;
+        const want = coveredByAny(buildings, x, y);
+        expect(index.covers(x, y)).toBe(want);
+        if (want) covered++;
+      }
+      return covered;
+    };
+    // Nothing in before its cells come back: not ready, and nothing covered meanwhile.
+    expect(index.ready(area)).toBe(false);
+    await fill();
+    expect(check()).toBeGreaterThan(30);
+    // An edit while cells are in flight: what they read may be gone, so their answers are let go and the cells asked again.
+    buildings.remove(asBuildingId(3));
+    index.follow({ buildings, changes });
+    index.ready(area);
+    buildings.restore(asBuildingId(3), building(3, span / 2, span / 2));
+    buildings.remove(asBuildingId(7));
+    index.follow({ buildings, changes });
+    await fill();
+    check();
+    expect(jobs.asked()).toBeGreaterThan(0);
+  });
+
+  it('lets go of only the cells in flight an edit reached: a town that grows still gets its cover', async () => {
+    const changes = new ChangeJournal();
+    const buildings = new BuildingStore(changes);
+    buildings.restore(asBuildingId(1), building(1, m(40), m(40)));
+    const jobs = threadAsk();
+    const index = createCoverIndex(jobs.ask);
+    index.follow({ buildings, changes });
+    const near = [m(0), m(0), m(100), m(100)] as const;
+    expect(index.ready(near)).toBe(false);
+    const asked = jobs.asked();
+    // A building raised kilometres away while the near cell is in flight: its answer still held, never asked again.
+    buildings.restore(asBuildingId(2), building(2, m(3000), m(3000)));
+    index.follow({ buildings, changes });
+    await jobs.land();
+    expect(index.ready(near)).toBe(true);
+    expect(jobs.asked()).toBe(asked);
+    // One raised in it while it is asked again: the stale answer let go, the cell asked once more.
+    buildings.restore(asBuildingId(3), building(3, m(60), m(10)));
+    index.follow({ buildings, changes });
+    expect(index.ready(near)).toBe(false);
+    const again = jobs.asked();
+    buildings.restore(asBuildingId(4), building(4, m(20), m(80)));
+    index.follow({ buildings, changes });
+    await jobs.land();
+    expect(index.ready(near)).toBe(false);
+    expect(jobs.asked()).toBeGreaterThan(again);
+    await jobs.land();
+    expect(index.ready(near)).toBe(true);
+    for (const [x, y] of [[40, 40], [60, 10], [20, 80], [90, 90]] as const) expect(index.covers(m(x), m(y))).toBe(coveredByAny(buildings, m(x), m(y)));
   });
 
   it('drops only the cells an edit reached, and moves its version with them', () => {

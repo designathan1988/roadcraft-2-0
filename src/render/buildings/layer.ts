@@ -8,6 +8,7 @@ import type { Building, BuildingId } from '@world/buildings/types';
 import { CellFiling } from '@world/cells';
 import { type BuildingMeshes, type LotGround, buildBuildingMeshes, emitChunk, kitBoxes, lotGroundAgain, signatureFloorOf } from './buildingMesh';
 import { BATCH_CELL, type CellCache, ResidentBytes, watchedCells, STREAM_AHEAD, boxGroundDigest, cellGroup, createCoverIndex, dropCell, recordRef } from './layerCells';
+import { coverJobAsk } from './coverJobs';
 import { FLIES, KEPT, KNOWN, SHOWN, SIGNATURE, TownColumns, recordDigests } from './townColumns';
 import { type PartCell, type PartView, dropParts } from './partCells';
 import { FarPartBatch } from './farParts';
@@ -697,7 +698,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     return changed;
   };
   /** Where the buildings stand, for the scenery's plant cull (`covers`, `coversVersion`). */
-  const cover = createCoverIndex();
+  const cover = createCoverIndex(coverJobAsk());
 
   return {
     group,
@@ -1179,6 +1180,9 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     covers(x, y) {
       return cover.covers(x, y);
+    },
+    coverReady(rect) {
+      return cover.ready(rect);
     },
     lotHeightAt(building, x, y) {
       const k = kept.get(building);

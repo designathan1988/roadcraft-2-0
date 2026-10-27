@@ -5,6 +5,11 @@ import { KEEP_CELL } from '@render/candidateKeep';
 
 interface Place { readonly x: number; readonly y: number }
 
+/** Every waiting cell tested (`settle` with no deadline, a cell a call at least). */
+function settled<C extends Place>(keeps: CellKeeps<C>): void {
+  while (keeps.settle(0, 0, Infinity)) { /* the next cells */ }
+}
+
 /** `cells` cells along a row, `each` places in each, all standing on the ground at 0. */
 function town(cells: number, each: number): { keeps: CellKeeps<Place>; lists: Map<number, Place[]> } {
   const keeps = new CellKeeps<Place>(() => 0);
@@ -16,6 +21,7 @@ function town(cells: number, each: number): { keeps: CellKeeps<Place>; lists: Ma
     lists.set(key, list);
     keeps.fill(key, list);
   }
+  settled(keeps);
   return { keeps, lists };
 }
 
@@ -35,6 +41,7 @@ describe('places kept cell by cell', () => {
       const before = keeps.tested;
       const key = [...lists.keys()][Math.floor(cells / 2)]!;
       keeps.fill(key, [...lists.get(key)!, { x: keepCellRect(key)[0] + 30, y: 30 }]);
+      settled(keeps);
       expect(keeps.takeChangedCells()).toEqual(new Set([key]));
       return keeps.tested - before;
     };
@@ -82,8 +89,31 @@ describe('places kept cell by cell', () => {
     keeps.takeChangedCells();
     keeps.clear();
     keeps.fill(keepCellAt(1, 1), [{ x: 1, y: 1 }]);
+    settled(keeps);
     expect(keeps.takeChangedCells()).toBeNull();
     expect(keeps.standingIn(keepCellAt(1, 1))).toEqual([{ c: { x: 1, y: 1 }, z: 0 }]);
+  });
+
+  it('leaves a cell untested while what its test reads is not in, and tests it whole once it is', () => {
+    const near = keepCellAt(1, 1), far = keepCellAt(KEEP_CELL * 3 + 1, 1);
+    let farIn = false;
+    const keeps = new CellKeeps<Place>(() => 0, (rect) => farIn || rect[0] < KEEP_CELL);
+    keeps.fill(near, [{ x: 1, y: 1 }]);
+    keeps.fill(far, [{ x: KEEP_CELL * 3 + 1, y: 1 }, { x: KEEP_CELL * 3 + 2, y: 2 }]);
+    // The far cell not ready: the near one tested, the far one waiting (a call says cells still wait).
+    expect(keeps.settle(0, 0, Infinity)).toBe(true);
+    expect(keeps.standingIn(near)).toHaveLength(1);
+    expect(keeps.standingIn(far)).toEqual([]);
+    expect(keeps.waits).toBe(true);
+    // A change reaching the far cell while it is not ready: still left for its turn.
+    keeps.refresh([[KEEP_CELL * 3, 0, KEEP_CELL * 3 + 5, 5]], 0);
+    expect(keeps.standingIn(far)).toEqual([]);
+    farIn = true;
+    const before = keeps.tested;
+    settled(keeps);
+    expect(keeps.tested - before).toBe(2);
+    expect(keeps.standingIn(far)).toHaveLength(2);
+    expect(keeps.waits).toBe(false);
   });
 
   it('lists the cells a rectangle and its margin reach', () => {

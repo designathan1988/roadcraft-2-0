@@ -83,8 +83,10 @@ export interface BuildingLayer {
   chunkOf(b: Building): { chunk: BuildingChunk; kit: BuildingKit } | null;
   /** The kit its buildings are drawn with (for warming the shaders broken buildings use). */
   readonly kit: BuildingKit;
-  /** Whether a world point is under a building (for the scenery's plant cull). */
+  /** Whether a world point is under a building (for the scenery's plant cull): asked where `coverReady` said its cells are in. */
   covers(x: number, y: number): boolean;
+  /** Whether `covers` answers everywhere in a rectangle (its cells worked out off the page and in), the missing cells asked meanwhile. */
+  coverReady(rect: readonly [number, number, number, number]): boolean;
   /** Bumped when what `covers` answers changes (a footprint or a lot moved, came or went). */
   readonly coversVersion: number;
   /** Height of a building's lot or parking bay as drawn at a world point, NaN off them */

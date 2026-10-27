@@ -238,6 +238,22 @@ export class ViewCells<V> {
     return n;
   }
 
+  /** A cell's product made elsewhere (off the page, `derive` not called): held as one made here, kept to the budgets. */
+  put(key: CellKey, product: CellProduct<V>): void {
+    if (this.held.has(key)) this.drop(key);
+    this.work.derived++;
+    const gpu = product.gpuBytes ?? 0;
+    this.held.set(key, { product, version: this.spec.version, stage: gpu > 0 ? CellStage.resident : CellStage.derived });
+    this.cpuBytes += product.cpuBytes + ENTRY_BYTES;
+    this.gpuBytes += gpu;
+    this.trim(new Set([key]));
+  }
+
+  /** Whether the view wants a cell (`look`, `want`). */
+  wants(key: CellKey): boolean {
+    return this.wantedSet.has(key);
+  }
+
   /** The cells the view wants (`look`), in their order. */
   get wantedKeys(): readonly CellKey[] {
     return this.wanted;

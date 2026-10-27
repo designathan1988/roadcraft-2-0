@@ -53,8 +53,12 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     return this.test(c);
   };
 
-  /** `test`: the ground under a place where it may stand, null where it may not (`CandidateKeep`). */
-  constructor(private readonly test: (c: C) => number | null) {}
+  /**
+   * `test`: the ground under a place where it may stand, null where it may not (`CandidateKeep`). `ready`: whether what the test reads is in
+   * over a cell's rectangle (the buildings' cover worked out off the page, `CoverIndex.ready`); a cell not ready waits its turn untested, and
+   * a change reaching it tests it whole when it is. None: always.
+   */
+  constructor(private readonly test: (c: C) => number | null, private readonly ready: ((rect: ChangeRect) => boolean) | null = null) {}
 
   /** Cells holding tested places. */
   get size(): number {
@@ -124,6 +128,11 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
       }
     }
     for (const [key, cut] of reaching) {
+      // What the test reads not in there yet: the cell tested whole in its turn, once it is.
+      if (this.ready && !this.ready(keepCellRect(key))) {
+        if (!this.stale.has(key)) { this.stale.add(key); this.enqueue(key); }
+        continue;
+      }
       if (this.keeps.get(key)!.refresh(cut, pad)) this.changed?.add(key);
     }
   }
@@ -146,10 +155,18 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
       return { block, d: Math.hypot((i + 0.5) * span - x, (j + 0.5) * span - y) };
     }).sort((a, b) => a.d - b.d);
     let first = true;
+    let unready = false;
     for (const { block } of blocks) {
       const cells = this.queued.get(block)!;
       for (const key of cells) {
         if (!first && performance.now() >= deadline) return true;
+        // What its test reads not in yet (asked by `ready`): left waiting, the next cell taken.
+        // The skip held to the deadline too: thousands of cells may wait on the same few in flight.
+        if (this.ready && !this.ready(keepCellRect(key))) {
+          unready = true;
+          if (performance.now() >= deadline) return true;
+          continue;
+        }
         first = false;
         cells.delete(key);
         const list = this.waiting.get(key);
@@ -165,9 +182,9 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
           if (this.keeps.get(key)?.refresh(null, 0)) this.changed?.add(key);
         }
       }
-      this.queued.delete(block);
+      if (!cells.size) this.queued.delete(block);
     }
-    return false;
+    return unready;
   }
 
   /** The cells whose places changed since the last call, and the call itself the new start; null: every cell. */
