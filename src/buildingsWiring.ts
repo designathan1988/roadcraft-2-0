@@ -3,7 +3,8 @@ import type { Vec2 } from '@core/vec2';
 import { signedArea } from '@core/polygon';
 import { RoadDoc } from '@world/doc';
 import type { Network } from '@world/network';
-import { type BlueprintBody, bodyOf } from '@world/buildings/blueprints';
+import { type BlueprintBody, bodyOf, instantiate } from '@world/buildings/blueprints';
+import { createPhotoStudio } from '@render/buildings/photo';
 import { loadLot } from '@world/buildings/lotLibrary';
 import { DEFAULT_PITCH, baysOn, footprintBox, ridgeAlongX, topLevel } from '@world/buildings/geometry';
 import { BUILDING_FUNCTIONS, type Building, type BuildingId, volumeById } from '@world/buildings/types';
@@ -20,7 +21,7 @@ import type { Viewport } from '@view/viewport';
 import type { SceneHandle } from '@render/renderer';
 import { drawBuildingOverlay } from '@ui/overlay/buildingOverlay';
 import { drawBuilderGrid } from '@ui/overlay/builderGrid';
-import { type ThumbnailStudio, createThumbnailStudio } from '@render/buildings/parts';
+import { interfacePhoto } from '@ui/photos';
 import { createReferenceModel, type ReferenceTarget } from '@render/buildings/referenceModel';
 import { buildFromReference } from '@editor/fromReference';
 import { buildingBounds } from '@world/buildings/geometry';
@@ -117,10 +118,6 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
 
   let dirty = true;
   let painting = false;
-  let studio: ThumbnailStudio | null = null;
-  /** Whether the building tool is in hand (`beforeDraw`), and the pictures asked for before it was. */
-  let builderOpen = false;
-  const deferredPictures = new Set<string>();
   let inspectorOpen = true;
   let category: BuilderCategoryId = 'models';
   let toolId = 'select';
@@ -215,7 +212,7 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
     id === 'wing' ? 'ground' : id === 'stack' ? 'top' : id === 'cut' ? 'cut' : null;
 
   // ------------------------------------------------------------ 3D reference
-  const reference = createReferenceModel(scene.scene, () => deps.requestDraw());
+  const reference = createReferenceModel(scene.scene, scene.gl, () => deps.requestDraw());
   /** Where the reference stands: on the selected building, centred on its plan. */
   const referenceTarget = (): ReferenceTarget | null => {
     const b = tool.selected();
@@ -479,19 +476,43 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
     notify('builder.styleCopied');
   }
 
-  /** Photographs the parts a gallery is about to show, a few per frame, and hands each batch to the workspace as it is ready. */
+  /** The photos of the options a gallery is about to show: the game's taken once beforehand (`ui/photos.ts`), the player's own taken as each
+   *  was saved (`photographBlueprint`). Nothing is photographed as a gallery opens. */
   function requestThumbnails(ids: readonly string[]): void {
-    // The shelves are laid out at boot, Builder open or not
-    if (!builderOpen) {
-      for (const id of ids) deferredPictures.add(id);
-      return;
+    const images = new Map<string, string>();
+    for (const id of ids) {
+      const url = interfacePhoto('builder', id) ?? library.photoOf(id);
+      if (url) images.set(id, url);
     }
-    if (!studio) {
-      studio = createThumbnailStudio(scene.gl);
-      studio.hold(builderOpen);
-    }
-    studio.request(ids, (images) => workspace.setPresetThumbnails(images));
+    if (images.size) workspace.setPresetThumbnails(images);
   }
+
+  /** A design the player saves, photographed once as it is saved, with the game's own renderer (`photo.ts`), and kept with it. */
+  async function photographBlueprint(key: string, body: BlueprintBody): Promise<void> {
+    const studio = createPhotoStudio(scene.gl);
+    try {
+      const blob = await studio.photograph({ ...instantiate(body, { x: 0, y: 0 }, Math.PI / 4), id: -1 } as Building, 'model');
+      if (!blob) return;
+      const photo = await new Promise<string>((done, fail) => {
+        const reader = new FileReader();
+        reader.onload = () => done(reader.result as string);
+        reader.onerror = () => fail(reader.error ?? new Error('the photo could not be read'));
+        reader.readAsDataURL(blob);
+      });
+      if (!library.setPhoto(key, photo)) console.warn(`[buildings] the photo of the design "${key}" could not be kept`);
+      workspace.setPresetThumbnails(new Map([[key, photo]]));
+    } finally {
+      studio.dispose();
+    }
+  }
+  /** The designs saved before their photos were kept: each photographed once, at the first frame the game draws (its surfaces read), and kept. */
+  let olderPhotographed = false;
+  const photographOlder = (): void => {
+    olderPhotographed = true;
+    for (const bp of userBlueprints) {
+      if (!library.photoOf(bp.key)) void photographBlueprint(bp.key, bp.body).catch((error: unknown) => console.error(`[buildings] the design "${bp.key}" could not be photographed`, error));
+    }
+  };
 
   const actions: BuilderActions = {
     requestThumbnails,
@@ -582,8 +603,10 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
           const name = window.prompt(t('building.blueprintName'), '');
           if (name !== null && name.trim() !== '') {
             // A save that did not happen is told, not left for the player to find missing later.
-            if (library.save(name, bodyOf(building))) {
+            const saved = library.save(name, bodyOf(building));
+            if (saved) {
               userBlueprints = library.list();
+              void photographBlueprint(saved.key, saved.body).catch((error: unknown) => console.error(`[buildings] the design "${saved.key}" could not be photographed`, error));
               notify('building.blueprintSaved');
             } else notify('building.blueprintNotSaved');
           }
@@ -1118,16 +1141,7 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
       deps.requestDraw();
     },
     beforeDraw(active) {
-      if (active !== builderOpen) {
-        builderOpen = active;
-        // The pictures' context is kept while the Builder is in use.
-        studio?.hold(active);
-        if (active && deferredPictures.size) {
-          const ids = [...deferredPictures];
-          deferredPictures.clear();
-          requestThumbnails(ids);
-        }
-      }
+      if (!olderPhotographed) photographOlder();
       // A gesture's ghost wins; otherwise, in the interior view, the building cut open at its floor.
       const { w, h } = deps.size();
       const c = deps.view().toWorld(w / 2, h / 2, w, h);

@@ -5,6 +5,7 @@ import noModuleState from './eslint-rules/no-module-state.js';
 import noGlobalRevision from './eslint-rules/no-global-revision.js';
 import noWholeMapWalk from './eslint-rules/no-whole-map-walk.js';
 import noLogicTimer from './eslint-rules/no-logic-timer.js';
+import noLiveInterface from './eslint-rules/no-live-interface.js';
 
 /** The repository's own rules (`eslint-rules/`). */
 const roadcraft = {
@@ -14,6 +15,7 @@ const roadcraft = {
     'no-global-revision': noGlobalRevision,
     'no-whole-map-walk': noWholeMapWalk,
     'no-logic-timer': noLogicTimer,
+    'no-live-interface': noLiveInterface,
   },
 };
 
@@ -114,6 +116,26 @@ export default tseslint.config(
       'roadcraft/no-global-revision': 'error',
       'roadcraft/no-whole-map-walk': 'error',
       'roadcraft/no-logic-timer': 'error',
+    },
+  },
+  {
+    // NOTHING DRAWN AS THE GAME RUNS THAT COULD BE DRAWN ONCE (`eslint-rules/no-live-interface.js`): the menus show photos taken once
+    // (`src/ui/photos.ts`). Only these files may make a canvas, ask a context, encode a picture or make a renderer, each for the reason given;
+    // the textures still painted as the game starts are in `scripts/baselines/eslint-suppressions.json` and may only shrink. DO NOT add a menu here.
+    files: ['src/**/*.ts'],
+    ignores: ['src/**/*.d.ts', 'src/lab/**'],
+    plugins: { roadcraft },
+    rules: {
+      'roadcraft/no-live-interface': ['error', { allowed: {
+        'src/render/renderer.ts': "the game's one renderer and its canvas; the lab's WebGPU comparison",
+        'src/render/gpu/webgpuView.ts': "the WebGPU renderer, the game's one when it is chosen",
+        'src/main.ts': "the game's canvas, and the editor's overlay, drawn as the player draws",
+        'src/graphicsWiring.ts': "the GPU's name, from a context let go at once, before the game's renderer exists (its quality tier)",
+        'src/render/ktx2Texture.ts': "what the GPU can take a compressed texture as, asked before the game's renderer exists",
+        'src/render/inspector.ts': 'a picture the lab or a test asks for (`shot`)',
+        'src/render/buildings/photo.ts': "a design photographed once as the player saves it, with the game's renderer; the Builder's photos taken once (lab)",
+        'src/ui/roads/profileSwatch.ts': "a player's own road photographed once as it is saved (`templates.ts`)",
+      } }],
     },
   },
   {

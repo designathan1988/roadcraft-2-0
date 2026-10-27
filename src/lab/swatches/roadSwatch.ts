@@ -22,13 +22,8 @@ function dashed(ctx: CanvasRenderingContext2D, y: number, width: number, dash: n
   for (let x = 0; x < width; x += dash * 2) ctx.fillRect(x, y, Math.min(dash, width - x), 1.5);
 }
 
-/** Drawn once per class, profile and size. */
-const CACHE = new Map<string, string>();
 
 export function roadSwatch(rt: RoadType, width = 148, height = 78, dpr = 2): string {
-  const key = `${rt.id}|${rt.lanes}|${rt.width}|${rt.median}|${width}x${height}@${dpr}`;
-  const cached = CACHE.get(key);
-  if (cached !== undefined) return cached;
   const canvas = document.createElement('canvas');
   canvas.width = width * dpr;
   canvas.height = height * dpr;
@@ -92,6 +87,5 @@ export function roadSwatch(rt: RoadType, width = 148, height = 78, dpr = 2): str
   }
 
   const url = canvas.toDataURL('image/png');
-  CACHE.set(key, url);
   return url;
 }

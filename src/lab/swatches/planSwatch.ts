@@ -1,4 +1,4 @@
-import type { PlanShapeId } from './builder/catalog';
+import type { PlanShapeId } from '../../ui/builder/catalog';
 
 /** The footprint a shape tool draws, as a picture: the outline filled, on a grid, seen from above */
 
@@ -30,13 +30,8 @@ const OUTLINES: Readonly<Record<PlanShapeId, readonly (readonly [number, number]
   ],
 };
 
-/** Drawn once per shape and size. */
-const CACHE = new Map<string, string>();
 
 export function planSwatch(shape: PlanShapeId, width = 148, height = 78, dpr = 2): string {
-  const key = `${shape}|${width}x${height}@${dpr}`;
-  const cached = CACHE.get(key);
-  if (cached !== undefined) return cached;
   const canvas = document.createElement('canvas');
   canvas.width = width * dpr;
   canvas.height = height * dpr;
@@ -82,6 +77,5 @@ export function planSwatch(shape: PlanShapeId, width = 148, height = 78, dpr = 2
   ctx.stroke();
 
   const url = canvas.toDataURL('image/png');
-  CACHE.set(key, url);
   return url;
 }

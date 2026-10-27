@@ -29,6 +29,7 @@
     "check": "node scripts/run-limited.mjs node scripts/check.mjs",
     "check:all": "node scripts/run-limited.mjs node scripts/check.mjs --all",
     "cook:cities": "node scripts/cook-cities.mjs",
+    "photos": "node scripts/interface-photos.mjs",
     "desktop": "electron desktop/main.cjs",
     "desktop:jobs:watch": "vite build -c scripts/vite/desktop-jobs-dev.config.ts --watch",
     "desktop:dev": "node scripts/desktopDev.mjs",

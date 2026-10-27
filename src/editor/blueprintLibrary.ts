@@ -13,6 +13,8 @@ interface StoredBlueprint {
   readonly body: unknown;
   /** Metres per world unit it was saved in; absent: 0.4, before 2026-10-10. */
   readonly unit?: number;
+  /** Its photo (a PNG data URL), taken once as it was saved (`buildingsWiring.ts`); the Builder's shelf only shows it. */
+  readonly photo?: string;
 }
 
 const isStored = (entry: unknown): entry is StoredBlueprint =>
@@ -40,6 +42,17 @@ export class BlueprintLibrary {
       return [entry, ...entries.filter((e) => !(isStored(e) && e.key === key))];
     });
     return written ? { key, name: title, body } : null;
+  }
+
+  /** Keeps a blueprint's photo with it; false when nothing could be written. */
+  setPhoto(key: string, photo: string): boolean {
+    return this.kept.update((entries) => entries.map((e) => (isStored(e) && e.key === key ? { ...e, photo } : e)));
+  }
+
+  /** A blueprint's kept photo, none until it is taken. */
+  photoOf(key: string): string | undefined {
+    const entry = this.kept.entries().find((e): e is StoredBlueprint => isStored(e) && e.key === key);
+    return typeof entry?.photo === 'string' ? entry.photo : undefined;
   }
 
   /** Removes one blueprint, the rest as they were; false when nothing could be written. */

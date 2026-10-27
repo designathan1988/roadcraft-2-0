@@ -313,7 +313,7 @@
       "count": 7
     },
     "roadcraft/no-module-state": {
-      "count": 34
+      "count": 33
     },
     "roadcraft/no-silent-catch": {
       "count": 14
@@ -332,6 +332,11 @@
       "count": 4
     }
   },
+  "src/render/blast.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 4
+    }
+  },
   "src/render/buildings/buildingMesh.ts": {
     "max-lines": {
       "count": 1
@@ -343,9 +348,6 @@
   "src/render/buildings/cellPool.ts": {
     "roadcraft/no-module-state": {
       "count": 3
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 1
     }
   },
   "src/render/buildings/facadeProps.ts": {
@@ -381,14 +383,12 @@
       "count": 1
     }
   },
-  "src/render/buildings/parts.ts": {
-    "roadcraft/no-module-state": {
-      "count": 2
-    }
-  },
   "src/render/buildings/signature.ts": {
     "max-lines": {
       "count": 1
+    },
+    "roadcraft/no-live-interface": {
+      "count": 4
     },
     "roadcraft/no-module-state": {
       "count": 3
@@ -397,6 +397,11 @@
   "src/render/carBody.ts": {
     "max-lines": {
       "count": 1
+    }
+  },
+  "src/render/casualties.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 2
     }
   },
   "src/render/cellInstances.ts": {
@@ -429,6 +434,11 @@
       "count": 6
     }
   },
+  "src/render/elements.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 2
+    }
+  },
   "src/render/flatAtlas.ts": {
     "max-lines": {
       "count": 1
@@ -452,12 +462,10 @@
       "count": 2
     }
   },
-  "src/render/gardens.ts": {
-    "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
   "src/render/lowPolyTrees.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 2
+    },
     "roadcraft/no-module-state": {
       "count": 1
     }
@@ -549,6 +557,11 @@
       "count": 1
     }
   },
+  "src/render/signs.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 6
+    }
+  },
   "src/render/stagedTexels.ts": {
     "roadcraft/no-module-state": {
       "count": 4
@@ -596,6 +609,9 @@
     }
   },
   "src/render/utilities.ts": {
+    "roadcraft/no-live-interface": {
+      "count": 2
+    },
     "roadcraft/no-module-state": {
       "count": 1
     }
@@ -653,11 +669,6 @@
   },
   "src/sim/agents/reedsShepp.ts": {
     "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
-  "src/sim/agents/trafficBuildings.ts": {
-    "roadcraft/no-whole-map-walk": {
       "count": 1
     }
   },
@@ -815,27 +826,12 @@
       "count": 4
     }
   },
-  "src/ui/materialSwatch.ts": {
-    "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
   "src/ui/overlay/congestion.ts": {
     "roadcraft/no-module-state": {
       "count": 1
     }
   },
-  "src/ui/planSwatch.ts": {
-    "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
   "src/ui/roadSectionEditor.ts": {
-    "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
-  "src/ui/roadSwatch.ts": {
     "roadcraft/no-module-state": {
       "count": 1
     }

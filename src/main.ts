@@ -122,7 +122,7 @@ import { TransitTool, setTransitTool, transitTool } from '@editor/transitTools';
 import type { BuildingId } from '@world/buildings/types';
 import { createDecayWatch } from '@world/buildings/decayWatch';
 import { focusCameFromKeyboard, trackFocusModality } from '@ui/chrome';
-import { roadSwatch } from '@ui/roadSwatch';
+import { requiredPhoto } from '@ui/photos';
 import { mountShell, type ShellHandle, type ShellRoadClass, type ShellSlider, type ShellStatus, type ShellZonePatch } from '@ui/v2/shell';
 import { formatCost } from '@ui/roads/money';
 import { type BuildMode, buildRuns } from '@world/roads/buildMode';
@@ -1603,15 +1603,14 @@ function wheel(e: WheelEvent, r: DOMRect): void {
 
 // -------------------------------------------------------------------- ui The interface
 
-/** Each class's picture, drawn once (`roadSwatch` paints a canvas). */
-const roadClassPictures: string[] = [];
 /** Every road class as the upgrade tool shows it: name, picture, total width in whole metres. */
 function roadClasses(): ShellRoadClass[] {
   return ROAD_TYPES.map((rt, index) => ({
     index,
     name: roadTypeName(rt),
     title: `${roadTypeName(rt)} — ${roadTypeDescription(rt)}`,
-    picture: (roadClassPictures[index] ??= roadSwatch(rt)),
+    // Its photo, taken once (`ui/photos.ts`): nothing of the interface is drawn as it opens.
+    picture: requiredPhoto('roadClass', String(index)),
     widthM: Math.round((rt.width + rt.sidewalk * 2) * METERS_PER_UNIT),
   }));
 }

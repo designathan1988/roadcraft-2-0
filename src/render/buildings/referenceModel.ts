@@ -1,4 +1,4 @@
-import { Box3, DoubleSide, Group, type Material, type Mesh, MeshBasicMaterial, type Object3D, OrthographicCamera, Scene, ShaderMaterial, Vector3, WebGLRenderTarget, WebGLRenderer } from 'three';
+import { Box3, DoubleSide, Group, type Material, type Mesh, MeshBasicMaterial, type Object3D, OrthographicCamera, Color, Scene, ShaderMaterial, Vector3, WebGLRenderTarget, type WebGLRenderer } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { UNITS_PER_METER } from '@world/units';
 import type { Point3, ReferenceSampler, Triangle } from '@world/buildings/reference';
@@ -55,8 +55,9 @@ const DEPTH_MATERIAL = new ShaderMaterial({
 
 const toSrgb = (c: number): number => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
 
-/** Reads the triangles and the colours of a model (a copy of it in metres, three's axes). */
-function captureModel(model: Object3D): ReferenceCapture {
+/** Reads the triangles and the colours of a model (a copy of it in metres, three's axes), drawn by the game's own renderer into targets of its
+ *  own. DO NOT make a renderer for it: a second WebGL context beside the game's, every texture sent again (`no-live-interface`). */
+function captureModel(model: Object3D, renderer: WebGLRenderer): ReferenceCapture {
   model.updateMatrixWorld(true);
   const triangles: Triangle[] = [];
   const v = new Vector3();
@@ -83,7 +84,10 @@ function captureModel(model: Object3D): ReferenceCapture {
   const scene = new Scene();
   scene.add(model);
   const size = box.getSize(new Vector3()), centre = box.getCenter(new Vector3());
-  const renderer = new WebGLRenderer({ antialias: false });
+  // The game's renderer left as it was: its target, clear, planes (the interior view's) and the frame's counts (`info.autoReset` is off).
+  const was = { target: renderer.getRenderTarget(), colour: renderer.getClearColor(new Color()), alpha: renderer.getClearAlpha(), planes: renderer.clippingPlanes, autoClear: renderer.autoClear, counts: { ...renderer.info.render } };
+  renderer.clippingPlanes = [];
+  renderer.autoClear = true;
   // Outward directions in three's axes: front (plan -y = three +z), right, back, left, and from above.
   const dirs: [number, number, number][] = [[0, 0, 1], [1, 0, 0], [0, 0, -1], [-1, 0, 0], [0, 1, 0]];
   interface View { cam: OrthographicCamera; W: number; H: number; rgb: Uint8Array; depth: Uint8Array; dir: [number, number, number]; far: number }
@@ -114,9 +118,11 @@ function captureModel(model: Object3D): ReferenceCapture {
     return { cam, W, H, rgb, depth, dir, far: reach * 2 };
   });
   scene.overrideMaterial = null;
-  renderer.setRenderTarget(null);
-  renderer.dispose();
-  renderer.forceContextLoss();
+  renderer.setRenderTarget(was.target);
+  renderer.setClearColor(was.colour, was.alpha);
+  renderer.clippingPlanes = was.planes;
+  renderer.autoClear = was.autoClear;
+  Object.assign(renderer.info.render, was.counts);
 
   const p = new Vector3();
   const sample: ReferenceSampler = (x, y, z, nx, ny) => {
@@ -139,7 +145,7 @@ function captureModel(model: Object3D): ReferenceCapture {
   return { triangles, sample };
 }
 
-export function createReferenceModel(scene: Scene, redraw: () => void): ReferenceModel {
+export function createReferenceModel(scene: Scene, renderer: WebGLRenderer, redraw: () => void): ReferenceModel {
   const holder = new Group();
   holder.name = 'builder-reference';
   holder.visible = false;
@@ -236,7 +242,7 @@ export function createReferenceModel(scene: Scene, redraw: () => void): Referenc
       const body = inner.clone(true);
       body.scale.set(1, 1, mirrored ? -1 : 1);
       copy.add(body);
-      return captureModel(copy);
+      return captureModel(copy, renderer);
     },
     get frame() { return target ?? { x: 0, y: 0, floor: 0, rotation: 0 }; },
     get loaded() { return info !== null; },

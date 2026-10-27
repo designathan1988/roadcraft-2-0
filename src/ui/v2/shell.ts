@@ -46,8 +46,7 @@ import { transitLineRow } from './transitLine';
 import { closeRoadKeys, openRoadKeys, roadKeysOpen } from '../roads/keysPanel';
 import { cutWallsChosen, setCutWalls } from '../roads/cutWalls';
 import { keyLabel, onRoadKeysChange, roadKey } from '../roads/keys';
-import { materialSwatch } from '../materialSwatch';
-import { planSwatch } from '../planSwatch';
+import { requiredPhoto } from '../photos';
 import './shell.css';
 import { TREE_KINDS } from '@world/trees';
 
@@ -1667,7 +1666,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
   // ------------------------------------------------------------ construction
   const picture = (id: string): string | undefined => {
     const shape = DRAW_SHAPES[id] ?? TIER_SHAPES[id];
-    return workspace.thumbnail(id) ?? (shape ? planSwatch(shape) : undefined);
+    return workspace.thumbnail(id) ?? (shape ? requiredPhoto('plan', shape) : undefined);
   };
   const ask = (ids: readonly string[]): void => {
     const wanted = ids.filter((id) => !requested.has(id) && !workspace.thumbnail(id));
@@ -1770,13 +1769,13 @@ export function mountShell(deps: ShellDeps): ShellHandle {
     }
     if (s.shelf === 'patterns') {
       const { items } = section(label);
-      // Until its picture comes (`requestThumbnails`), a pattern shows the facade glyph
+      // Its photo (`ui/photos.ts`); a pattern with none shows the facade glyph
       for (const p of FACADE_PATTERNS) items.appendChild(card(t(`creator.pattern.${p}`), state.pattern === p, () => actions.choosePattern(p), workspace.thumbnail(p), builderIconSvg('face', 30)));
       return;
     }
     if (s.shelf === 'finishes') {
       const { items } = section(t('v2.build.material'));
-      for (const f of FINISHES) items.appendChild(card(t(`building.finish.${f}`), state.material?.finish === f, () => actions.chooseFinish(f), materialSwatch(f), undefined, 'square'));
+      for (const f of FINISHES) items.appendChild(card(t(`building.finish.${f}`), state.material?.finish === f, () => actions.chooseFinish(f), requiredPhoto('finish', f), undefined, 'square'));
       const sw = el('div', 'v2-swatches');
       for (const c of SWATCHES) {
         const b = el('button', 'v2-swatch' + (state.material?.colour === c ? ' on' : ''));

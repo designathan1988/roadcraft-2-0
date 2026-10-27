@@ -8,8 +8,6 @@ import type { Plugin } from 'vite';
  *  makes and never shape it (a cache of the view's cells, the pictures drawn of its models): left out of its fingerprint with all they import.
  *  DO NOT leave out a file whose code changes what is kept. */
 const DERIVED = [
-  // The kit's models and their levels (`parts.ts`): its far pictures are taken of them at draw time, never kept (`partPictures.ts`).
-  { entry: 'src/render/buildings/parts.ts', also: [] as string[], holds: ['src/render/buildings/partPictures.ts'], define: '__BUILDING_KIT_HASH__' },
   // The conflict zones of each pair of movements (`world/conflictPoints.ts`, kept by `main.ts`).
   { entry: 'src/world/conflictPoints.ts', also: [] as string[], holds: [] as string[], define: '__CONFLICT_ZONES_HASH__' },
   // The road surfaces' tiles (`render/roadSurfaces.ts`, kept by `renderer.ts`): their inputs held round the view cell by cell (`viewCells.ts`), as made.

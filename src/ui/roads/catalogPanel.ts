@@ -5,11 +5,11 @@ import type { RoadTemplate } from '@world/roads/templates';
 import { UNITS_PER_METER } from '@world/units';
 import { language, plural, t } from '../i18n';
 import { metresText } from './crossSection';
-import { profileSwatch } from './profileSwatch';
+import { requiredPhoto } from '../photos';
 import { type DrawProfile, drawProfile, setDrawProfile } from './drawProfile';
 import { formatMoney } from './money';
 import { openProfileEditor, profileEditorOpen, closeProfileEditor } from './profileEditor';
-import { savedTemplates } from './templates';
+import { savedTemplates, templatePhoto } from './templates';
 import './roads.css';
 
 /** THE ROAD CATALOGUE in the road tool's drawer (the player's order of 2026-10-09) */
@@ -57,8 +57,6 @@ interface BuiltStrip {
   readonly saved: readonly RoadTemplate[];
   readonly loose: DrawProfile | null;
   readonly cards: readonly { readonly id: string; readonly card: HTMLElement; readonly main: HTMLButtonElement; readonly road: CatalogRoad }[];
-  /** Each shown card's plan-view picture, by profile and scale: only the cards shown now are kept. */
-  readonly swatches: ReadonlyMap<string, string>;
   host: CatalogHost;
 }
 
@@ -102,15 +100,12 @@ export function catalogStrip(host: CatalogHost): HTMLElement {
   grid.className = 'rc-cards';
   const shown = roads.filter((r) => r.category === category);
   if (loose) shown.unshift({ id: 'drawProfile', name: loose.name, category, type: loose.type, profile: loose.profile });
-  // One scale for every tile: the widest road offered.
-  const span = Math.max(...roads.map((r) => r.profile.elements.reduce((sum, e) => sum + e.width, 0)));
   if (!shown.length) {
     const empty = document.createElement('div');
     empty.className = 'rc-empty';
     empty.textContent = t(category === 'mine' ? 'catalog.mineEmpty' : 'catalog.empty');
     grid.append(empty);
   }
-  const swatches = new Map<string, string>();
   const cards: BuiltStrip['cards'][number][] = [];
   for (const road of shown) {
     const rt = profileRoad(road.profile, road.type);
@@ -127,10 +122,10 @@ export function catalogStrip(host: CatalogHost): HTMLElement {
       name: nameOf(road), lanes: plural('palette.lanes.count', lanes), way: t(oneWay ? 'catalog.oneWay' : 'catalog.twoWay'), speed: road.profile.speedKmh,
     });
     main.innerHTML = '<img class="rc-art" alt="" draggable="false"><span class="rc-name"></span><span class="rc-meta"></span>';
-    const swatchKey = `${JSON.stringify(road.profile)}|${span}`;
-    const swatch = swatches.get(swatchKey) ?? kept?.swatches.get(swatchKey) ?? profileSwatch(road.profile, span, 124, 64);
-    swatches.set(swatchKey, swatch);
-    (main.querySelector('.rc-art') as HTMLImageElement).src = swatch;
+    // Its photo, taken once (`ui/photos.ts`; the player's own roads as they were saved, `templates.ts`): nothing is drawn as the catalogue opens.
+    // A profile in hand that no card is shows its class's photo.
+    (main.querySelector('.rc-art') as HTMLImageElement).src = road.id === 'drawProfile' ? requiredPhoto('roadClass', String(road.type))
+      : road.category === 'mine' ? templatePhoto(road) : requiredPhoto('road', road.id);
     main.querySelector('.rc-name')!.textContent = nameOf(road);
     main.querySelector('.rc-meta')!.textContent = t('catalog.meta', {
       width: metresText(profileWidth(road.profile)),
@@ -146,7 +141,7 @@ export function catalogStrip(host: CatalogHost): HTMLElement {
     cards.push({ id: road.id, card, main, road });
   }
   root.append(grid);
-  const built: BuiltStrip = { root, language: language(), category, saved, loose, cards, swatches, host };
+  const built: BuiltStrip = { root, language: language(), category, saved, loose, cards, host };
   strip.built = built;
   markPicked(built, loose ? 'drawProfile' : picked?.id ?? null);
   return root;
