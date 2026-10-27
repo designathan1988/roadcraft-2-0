@@ -250,9 +250,9 @@ describe('the road tiles kept for a later session by their workers', () => {
     const budget = new WriteBudget(1024);
     // Something else holds the ceiling: the tiles wait for it, none is dropped.
     const held = await budget.take(1024);
-    const tile = (n: number): TileMeshes => [['asphalt', { positions: new Float32Array(n) } as unknown as TileMeshes[number][1]]];
+    const tile = (n: number): TileMeshes => [['asphalt', { positions: new Float32Array(n), sections: new Float32Array(0) } as unknown as TileMeshes[number][1]]];
     let kept: number[] | null = null;
-    void keepTiles([tile(300), tile(300), tile(300)], { prefix: 'p:', keys: ['a', null, 'c'] }, budget).then((k) => { kept = k; });
+    void keepTiles([tile(300), tile(300), tile(300)], { prefix: 'p:', keys: ['a', null, 'c'] }, { pieceOf: () => undefined }, new Set(), budget).then((k) => { kept = k; });
     await new Promise((done) => setTimeout(done, 0));
     expect(kept).toBeNull();
     held();
@@ -264,8 +264,8 @@ describe('the road tiles kept for a later session by their workers', () => {
 
   it('says none kept where there is no store (a desktop job process): the page keeps them', async () => {
     const { keepTiles } = await import('@render/roadTile.worker');
-    const tile: TileMeshes = [['asphalt', { positions: new Float32Array(3) } as unknown as TileMeshes[number][1]]];
-    expect(await keepTiles([tile, tile], { prefix: 'p:', keys: ['a', 'b'] })).toEqual([]);
+    const tile: TileMeshes = [['asphalt', { positions: new Float32Array(3), sections: new Float32Array(0) } as unknown as TileMeshes[number][1]]];
+    expect(await keepTiles([tile, tile], { prefix: 'p:', keys: ['a', 'b'] }, { pieceOf: () => undefined }, new Set())).toEqual([]);
   });
 
   it('leaves the page nothing to keep of a tile its worker kept: the key marked, no arrays held', async () => {

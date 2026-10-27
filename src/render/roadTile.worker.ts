@@ -2,6 +2,7 @@ import { type MeshAsk, TileMesher, type TileMeshes, tileBuffers } from './roadTi
 import { type BlockArrays, type BlockLock, blockBuffers, coarseArrays } from './mesh/roadLodPure';
 import type { JobScope } from '../jobs/jobScope';
 import { WriteBudget, derivedCacheOpen, keepDerivedQueuedMany } from '../core/derivedCache';
+import { type SlotPieces, keptForm } from './mesh/tilePieces';
 import { MeshoptSimplifier } from 'meshoptimizer';
 
 /** One worker of the roads' surface tiles (`roadTilePool.ts`): each tile of a share shaped and meshed whole */
@@ -19,7 +20,8 @@ const WRITES_MOST = 48 * 2 ** 20;
 const writes = new WriteBudget(WRITES_MOST);
 
 /** Each tile of `tiles` with a key kept in the store before its arrays leave (IndexedDB clones the value at `put`); the places of those kept. */
-export async function keepTiles(tiles: readonly TileMeshes[], keep: { readonly prefix: string; readonly keys: readonly (string | null)[] }, budget: WriteBudget = writes): Promise<number[]> {
+/** Each kept as it is kept between sessions: its roads and nodes by their ids (`tilePieces.ts`, `slots` the share's looks' owners). */
+export async function keepTiles(tiles: readonly TileMeshes[], keep: { readonly prefix: string; readonly keys: readonly (string | null)[] }, slots: SlotPieces, carrying: ReadonlySet<string>, budget: WriteBudget = writes): Promise<number[]> {
   const kept: number[] = [];
   // No store where this worker runs (a desktop job process has no IndexedDB, `jobPool.ts` PROCESS_LANES): none kept, the page keeps them. DO NOT say them kept: the write found no database and did nothing, and every tile was made again next session.
   if (!(await derivedCacheOpen())) return kept;
@@ -27,7 +29,7 @@ export async function keepTiles(tiles: readonly TileMeshes[], keep: { readonly p
     const key = keep.keys[i];
     if (!key) continue;
     try {
-      await keepDerivedQueuedMany([[keep.prefix + key, new Map(tiles[i]!)]], budget);
+      await keepDerivedQueuedMany([[keep.prefix + key, keptForm(new Map(tiles[i]!), slots, carrying)]], budget);
       kept.push(i);
     } catch (error) {
       // Not kept: the page keeps it as it did before (`roadSurfaces.ts` keep).
@@ -85,7 +87,7 @@ function handler(post: JobScope): (event: MessageEvent<Message>) => void {
       const tiles = done.tiles;
       // Kept here, where they were made, before their arrays go to the page: the page keeps nothing of them.
       if (keep) {
-        void keepTiles(tiles, keep).then((kept) => post.postMessage({ id, tiles, kept }, tileBuffers(tiles)));
+        void keepTiles(tiles, keep, mesher.slots, mesher.carrying).then((kept) => post.postMessage({ id, tiles, kept }, tileBuffers(tiles)));
         return;
       }
       post.postMessage({ id, tiles }, tileBuffers(tiles));

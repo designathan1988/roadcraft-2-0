@@ -254,6 +254,9 @@ export interface Tile {
   /** The surface's code in the road material (`mesh/roadEdges.ts` ROAD_CODE), written in its vertices' section as a block is merged
    *  (`surfaceTiles.ts`): given by the block that merges it, never by its piece (a tile is meshed, kept and handed over without it). */
   readonly code?: number;
+  /** A tile as kept between sessions (`tilePieces.ts`): the roads and nodes its sections name, kind and id each, its sections holding indices
+   *  into it in place of slots; none in a session's tile. */
+  readonly pieces?: Float64Array;
 }
 
 /** One part of a surface from its shape (`roads/pieceMesh.ts`, made here or by a worker, `roadTile.worker.ts`): its top faces, then its walls. */

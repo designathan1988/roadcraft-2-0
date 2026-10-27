@@ -41,6 +41,8 @@ export function lookOf(net: Network, id: SegmentId): RoadLook | undefined {
     // Its lines along it and its widths in the carriageway shader's table, at its slot (`roadPaint.ts`); its ends' plates' slots, for a plate's vertices.
     paint: roadPaint.set(net.doc, id, roadAlongPaint(net, ribbon), ribbon.road.width / 2, lane),
     ends: [roadPaint.nodeSlot(net.doc, segment.a), roadPaint.nodeSlot(net.doc, segment.b)],
+    id,
+    endIds: [segment.a, segment.b],
     from: trims?.a[Level.Asphalt] ?? 0,
     to: ribbon.full.length - (trims?.b[Level.Asphalt] ?? 0),
     carriageway: materials?.carriageway,

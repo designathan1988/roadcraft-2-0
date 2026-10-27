@@ -11,9 +11,9 @@ import { type CurbRamp, rampData } from '@world/rampRise';
 import { TUNNEL_BORE, TUNNEL_ROOF, isSunken, roadStructure } from '@world/structures';
 import { type RoadElevation, SURFACE_READ_REACH } from '@world/elevation';
 import { type PartKey, SurfaceInputs, TILE_REACH, byPart, cellOfPart, cellRectOfPart } from './roadSurfaceInputs';
-import { pieceOfPart } from './roadSurfaceEntries';
 import type { SceneMaterials } from './materials';
 import { roadPaint } from './roadPaint';
+import { type PieceSlots, keptForm, sessionForm, slotSurfaces } from './mesh/tilePieces';
 import { roadMarks } from './roadMarks';
 import { type PassLook, geomsOf, passDesc, passRaised, passReads, tileBundle } from './roadSurfacePass';
 import {
@@ -37,7 +37,7 @@ import {
   type SurfaceRead,
   type TileSource,
 } from './roadSurfaceReads';
-import type { SegmentId } from '@world/ids';
+import type { NodeId, SegmentId } from '@world/ids';
 import {
   disposeMesh,
   type Tile,
@@ -261,11 +261,23 @@ export function* roadSurfaceSteps(
     /** What this pass's surfaces read on the page: the network and the solved field (in a worker, `SurfaceData`). */
     const pageReads = passReads(net, elevation, terrainAt);
     const look = (id: SegmentId): RoadLook | undefined => pageReads.look(id);
+    /** This session's slots of a kept tile's roads and nodes (`sessionForm`), each road's paint written in the table as it is looked at (`lookOf`). */
+    const sessionSlots: PieceSlots = {
+      road: (id) => { look(id as SegmentId); return roadPaint.roadSlot(net.doc, id as SegmentId); },
+      node: (id) => roadPaint.nodeSlot(net.doc, id as NodeId),
+    };
+    /** Kept tiles read off the store (`reuse.stored`), each bundle given this session's slots once (the reads in flight are shared, `renderer.ts` fetchTiles). */
+    const fetchKept = (keys: readonly string[]): Promise<ReadonlyMap<string, TileBundle>> => reuse!.stored!.fetch(keys).then((map) => {
+      for (const bundle of map.values()) sessionForm(bundle as Map<string, Tile>, sessionSlots);
+      return map;
+    });
     net.crossingSurface();
     yield;
     /** The pass as its surfaces read it, plain data: the same on the page and in a worker (`roadSurfaceReads.ts`). */
     const desc: PassDesc = passDesc(net, pass, raised, passLook(materials));
     const specs = passSurfaces(desc, pageReads).map((read) => dress(read, raised, materials));
+    /** The surfaces whose tiles carry the paint's slots: kept with their roads and nodes by id (`tilePieces.ts`). */
+    const carrying = slotSurfaces(specs, farTileName);
     const groups = drawGroups(specs);
 
     // Everything a tile's build reads besides its rings and its surroundings
@@ -327,8 +339,8 @@ export function* roadSurfaceSteps(
       }
       const rect: TileRect = inputs.rectOf(key);
       const { digest: read } = inputs.reachOf(pass.id, key);
-      // The slots in the paint's table its vertices carry (`roadPaint.ts` partSlots): a part kept from another session is never drawn with its own.
-      const digest = new Digest().add(saltValue).add(roadPaint.partSlots(net, pieceOfPart(key))).addText(key).add(read);
+      // DO NOT put the paint's slots in the key: a kept tile names its roads and nodes by their ids (`tilePieces.ts`), given this session's slots as it is read.
+      const digest = new Digest().add(saltValue).addText(key).add(read);
       if (reuse) {
         const known = knownDepends?.get(key);
         const depend = known !== undefined && !reached(rect) ? known : reuse.dependsOn(rect[0] - 1, rect[1] - 1, rect[2] + 1, rect[3] + 1);
@@ -351,7 +363,7 @@ export function* roadSurfaceSteps(
     // The kept tiles this build uses, read off the store now (one transaction), never the whole store at the opening.
     if (fromStore.length && reuse?.stored) {
       let got: ReadonlyMap<string, TileBundle> | null = null;
-      reuse.stored.fetch(fromStore.map((k) => tiles[k]!.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
+      fetchKept(fromStore.map((k) => tiles[k]!.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
       while (got === null) yield 'wait';
       const read: ReadonlyMap<string, TileBundle> = got;
       for (const k of fromStore) {
@@ -464,7 +476,7 @@ export function* roadSurfaceSteps(
       const stored = reuse.stored ? unprinted.filter((t) => reuse.stored!.has(t.stored)) : [];
       if (stored.length) {
         let got: ReadonlyMap<string, TileBundle> | null = null;
-        reuse.stored!.fetch(stored.map((t) => t.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
+        fetchKept(stored.map((t) => t.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
         while (got === null) yield 'wait';
         const read: ReadonlyMap<string, TileBundle> = got;
         for (const tile of stored) { const bundle = read.get(tile.stored); if (bundle) tile.bundle = bundle; }
@@ -523,7 +535,7 @@ export function* roadSurfaceSteps(
       const stored = [...again].filter((t) => reuse.stored!.has(t.stored));
       if (stored.length) {
         let got: ReadonlyMap<string, TileBundle> | null = null;
-        reuse.stored.fetch(stored.map((t) => t.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
+        fetchKept(stored.map((t) => t.stored)).then((map) => { got = map; }, (error: unknown) => { console.warn('[roads] the stored road tiles could not be read: they are made again', error); got = new Map(); });
         while (got === null) yield 'wait';
         const read: ReadonlyMap<string, TileBundle> = got;
         for (const tile of stored) {
@@ -611,10 +623,10 @@ export function* roadSurfaceSteps(
           // Its full level, when it comes back near, copied from the kept tiles (`reuse.stored`): DO NOT cut and triangulate the block's tiles on the page again (`roadResidency.ts` makeNear).
           const levels = mesh && lock ? levelsOf(mesh) : undefined;
           if (mesh && levels && reuse?.stored) {
-            const stored = reuse.stored, material = group.options.material;
+            const material = group.options.material;
             const wanted = members.map(({ spec, list: tiles }) => ({ name: spec.options.name, code: spec.code ?? 0, keys: tiles.map((tile) => tile.stored) }));
             levels.bring = async (): Promise<BlockArrays | null> => {
-              const got = await stored.fetch(wanted.flatMap((w) => w.keys));
+              const got = await fetchKept(wanted.flatMap((w) => w.keys));
               const read: Tile[] = [];
               for (const { name, code, keys } of wanted) {
                 for (const k of keys) {
@@ -665,7 +677,8 @@ export function* roadSurfaceSteps(
     // Kept for a later session only now, every block merged
     for (const tile of fresh) {
       if (keptByWorker.has(tile)) reuse?.kept?.(tile.stored);
-      else reuse?.keep?.(tile.stored, tile.bundle!);
+      // As kept between sessions: its roads and nodes by their ids, never this session's slots (`tilePieces.ts`).
+      else reuse?.keep?.(tile.stored, keptForm(tile.bundle!, { pieceOf: (slot) => roadPaint.pieceOfSlot(net.doc, slot) }, carrying));
     }
     for (const tile of tiles) tile.bundle = null;
     // And the kept tiles read or built again for a merge: their arrays are the blocks' now (VIA-02: held for good, 50-300 MB over an editing session).

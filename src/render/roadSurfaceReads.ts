@@ -69,6 +69,9 @@ export interface RoadLook {
   readonly paint?: number | undefined;
   /** The slots of the nodes at its two ends (a and b): what a junction's plate's vertices carry (`roadMarks.ts`, a plate's marks). */
   readonly ends?: readonly [number, number] | undefined;
+  /** Its own id and the ids of the nodes at its ends: whose slots `paint` and `ends` are (a tile kept between sessions names them, `tilePieces.ts`). */
+  readonly id?: number | undefined;
+  readonly endIds?: readonly [number, number] | undefined;
   /** The carriageway between its junction mouths, arc length along the road. */
   readonly from: number;
   readonly to: number;

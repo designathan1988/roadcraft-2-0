@@ -1132,12 +1132,16 @@ export function createSceneRenderer(
       if (!tilesPrefix || storedKeys.has(key)) return;
       // The tile's arrays handed to the writer, not copied: nothing reads them once its blocks are merged (`SurfaceReuse.keep`).
       if (tileWrites) {
-        const buffers: ArrayBuffer[] = [];
+        // Each buffer once (a transfer list naming one twice is refused).
+        const buffers = new Set<ArrayBuffer>();
         for (const tile of bundle.values()) {
-          for (const a of [tile.positions, tile.normals, tile.uvs, tile.colors, tile.sections, tile.indices]) buffers.push(a.buffer as ArrayBuffer);
+          for (const a of [tile.positions, tile.normals, tile.uvs, tile.colors, tile.sections, tile.indices, tile.pieces]) if (a) buffers.add(a.buffer as ArrayBuffer);
         }
-        // DO NOT post past the ceiling: not kept, made again next time.
-        if (!tileWrites.post(tilesPrefix, [[key, bundle]], buffers, buffers.reduce((n, b) => n + b.byteLength, 0))) return;
+        // Kept whatever the writes in flight, waiting for room under the ceiling (`DerivedWriterLane.keep`). DO NOT drop it past the ceiling
+        // (`post`): where the workers keep none (a desktop job process has no store) the page kept the 10 km city's tiles, most were dropped, and
+        // every opening made them again (3,395 kept of 10,458 built, 2026-10-27).
+        const list = [...buffers];
+        void tileWrites.keep(tilesPrefix, [[key, bundle]], list, list.reduce((n, buffer) => n + buffer.byteLength, 0));
       } else writeDerivedMany(tilesPrefix, new Map([[key, bundle]]));
       noteStored(key);
     },

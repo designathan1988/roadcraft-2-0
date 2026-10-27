@@ -4,6 +4,8 @@ import { type FieldData, PointHeights, fieldOf } from '@world/roadField';
 import { type CurbRamp, rampGrid, rampRiseIn } from '@world/rampRise';
 import { type FlushData, flushShareOf } from '@world/roads/footwayRise';
 import type { Tile, TileRect } from './mesh/tileMesh';
+import { type SlotPieces, slotSurfaces } from './mesh/tilePieces';
+import { farTileName } from './roads/pieceMesh';
 import { type PassDesc, type RoadLook, type SurfaceRead, type SurfaceReads, passSurfaces } from './roadSurfaceReads';
 import type { PieceReach } from './roads/pieceGeom';
 import { pieceBundle } from './roads/pieceMesh';
@@ -78,6 +80,21 @@ export class TileMesher {
   private specs: SurfaceRead[];
   private missing: number[] = [];
   private reads: SurfaceReads;
+
+  /** Whose each slot of its looks is (`RoadLook.paint`, `ends`): a road's or a node's id, what its tiles are kept with (`tilePieces.ts` keptForm). */
+  get slots(): SlotPieces {
+    const owners = new Map<number, { readonly kind: 0 | 1; readonly id: number }>();
+    for (const [id, look] of this.ask.data.looks) {
+      if (look.paint !== undefined) owners.set(look.paint, { kind: 0, id });
+      if (look.ends && look.endIds) { owners.set(look.ends[0], { kind: 1, id: look.endIds[0] }); owners.set(look.ends[1], { kind: 1, id: look.endIds[1] }); }
+    }
+    return { pieceOf: (slot) => owners.get(slot) };
+  }
+
+  /** The surfaces whose tiles carry the paint's slots (`slotSurfaces`). */
+  get carrying(): ReadonlySet<string> {
+    return slotSurfaces(this.specs, farTileName);
+  }
 
   constructor(private readonly ask: MeshAsk) {
     this.reads = readsOf(ask.data, this.heights, this.missing);

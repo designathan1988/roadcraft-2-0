@@ -1,8 +1,6 @@
 import { Color, DataTexture, FloatType, NearestFilter, RGBAFormat } from 'three';
 import type { AlongPaint } from '@world/markings';
-import type { Network } from '@world/network';
 import type { NodeId, SegmentId } from '@world/ids';
-import { Digest } from '@core/digest';
 
 /**
  * # THE ROADS' PAINT AS THE CARRIAGEWAY'S SHADER READS IT
@@ -28,8 +26,8 @@ import { Digest } from '@core/digest';
  * Each document its own pages: the renderer's warm-up roads and the lab's layouts, documents whose ids are the same small numbers as the city's,
  * never write over the city's paint. DO NOT make a slot of an id plus a base: a tile's ids start at 2^52 (`world/tiles.ts` tileIdBase), and the
  * table such a slot asked for threw (RangeError: Invalid typed array length). A slot counted out stays its id's while the document lives (a tile
- * loaded again brings the same ids back to the same slots); what a part's vertices carry goes into its tile's key (`partSlots`), so a part kept
- * from another session is never drawn with another's.
+ * loaded again brings the same ids back to the same slots); a tile kept for another session names its roads and nodes by their ids, given that
+ * session's slots as it is read (`mesh/tilePieces.ts`).
  */
 
 /** Texels a row of the slots' table. */
@@ -52,6 +50,9 @@ interface DocSlots {
   readonly nodes: Map<number, number>;
   count: number;
   readonly pages: number[];
+  /** Whose each slot is, by slot: a road's id (kind 0) or a node's (kind 1) - a kept tile's slots told as pieces (`pieceOfSlot`). */
+  readonly kinds: number[];
+  readonly ids: number[];
 }
 
 /** A document's slot as the table holds it (`RoadPaintTable.resolverOf`). */
@@ -77,7 +78,7 @@ class RoadPaintTable {
 
   private slotsOf(doc: object): DocSlots {
     let slots = this.docs.get(doc);
-    if (!slots) this.docs.set(doc, slots = { roads: new Map(), nodes: new Map(), count: 0, pages: [] });
+    if (!slots) this.docs.set(doc, slots = { roads: new Map(), nodes: new Map(), count: 0, pages: [], kinds: [], ids: [] });
     return slots;
   }
 
@@ -86,6 +87,8 @@ class RoadPaintTable {
     if (slot === undefined) {
       slot = slots.count++;
       map.set(id, slot);
+      slots.kinds[slot] = map === slots.roads ? 0 : 1;
+      slots.ids[slot] = id;
       // Its page laid in the next free row the first time one of its slots is counted out.
       if (slot % PAGE === 0) {
         slots.pages.push(this.rows++);
@@ -105,6 +108,13 @@ class RoadPaintTable {
   nodeSlot(doc: object, id: NodeId): number {
     const slots = this.slotsOf(doc);
     return this.slotIn(slots, slots.nodes, id);
+  }
+
+  /** The road (kind 0) or node (kind 1) a document's slot was counted out for; undefined for a slot never counted out. */
+  pieceOfSlot(doc: object, slot: number): { readonly kind: 0 | 1; readonly id: number } | undefined {
+    const slots = this.slotsOf(doc);
+    const kind = slots.kinds[slot];
+    return kind === undefined ? undefined : { kind: kind as 0 | 1, id: slots.ids[slot]! };
   }
 
   /** Where a document's slots are in the table: what a block's vertices are given (`mesh/surfaceTiles.ts`). */
@@ -139,27 +149,6 @@ class RoadPaintTable {
     let changed = false;
     for (let k = 0; k < values.length; k++) if (data[at * 4 + k] !== values[k]) { data[at * 4 + k] = values[k]!; changed = true; }
     if (changed) sendTexels(texture, at, values.length / 4);
-  }
-
-  /** A digest of the slots the vertices of a piece may carry (`roadSurfaces.ts`, a tile's key): a road's, its ends' and their roads'; a node's and its
-   *  roads' and their ends'. The slots are counted out here if they were not: a part built off the page carries them before its roads are looked at. */
-  partSlots(net: Network, piece: { readonly kind: 'segment' | 'node'; readonly id: number }): number {
-    const doc = net.doc;
-    const digest = new Digest();
-    const node = (id: NodeId): void => {
-      digest.add(this.nodeSlot(doc, id));
-      for (const road of doc.node(id)?.incident ?? []) {
-        const segment = doc.segment(road);
-        digest.add(this.roadSlot(doc, road));
-        if (segment) digest.add(this.nodeSlot(doc, segment.a)).add(this.nodeSlot(doc, segment.b));
-      }
-    };
-    if (piece.kind === 'segment') {
-      const segment = doc.segment(piece.id as SegmentId);
-      digest.add(this.roadSlot(doc, piece.id as SegmentId));
-      if (segment) { node(segment.a); node(segment.b); }
-    } else node(piece.id as NodeId);
-    return digest.value();
   }
 
   /** The row of a set of lines, written the first time it is met. */
