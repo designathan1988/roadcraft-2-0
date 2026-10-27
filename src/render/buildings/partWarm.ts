@@ -1,7 +1,8 @@
 import { Color, InstancedMesh, Mesh } from 'three';
 import { FURNITURE_KINDS } from '@world/buildings/interior';
 import { COLOURED_PARTS } from './buildingMesh';
-import { type BuildingKit, PART_KINDS } from './kit';
+import type { BuildingKit } from './kit';
+import { PART_KINDS } from './partKinds';
 import { partPoseDepth } from './partPose';
 
 /** One instance of every part and piece of furniture as the buildings' layer draws them, each caster with its posed shadow (`partPose.ts` `partPoseDepth`: the renderer's stand-in takes a mesh's own depth material) */

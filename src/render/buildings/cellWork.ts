@@ -8,8 +8,8 @@ import { type CellArrays, type CellMass, type CellSelection, type KitBoxes, cell
 import type { BuildingChunk, CellJobEntry, LotGroundRecipe } from './chunk';
 import type { Building } from '@world/buildings/types';
 import type { FlagInstance } from './flagLayer';
-import { PART_KINDS } from './kit';
-import { COARSE_PARTS, DETAIL_CELL, DETAIL_PARTS } from './layerCells';
+import { COARSE_PARTS, DETAIL_PARTS, PART_KINDS } from './partKinds';
+import { DETAIL_CELL } from './partFiling';
 import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, baseFloor, massFloor, massOf, type MassingChunk } from './massing';
 import { type PartFiling, fileParts, filingBuffers, shellPieceOf } from './partFiling';
 import { levelCells } from './levelKeys';

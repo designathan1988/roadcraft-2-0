@@ -4,20 +4,23 @@ import path from 'node:path';
 import ts from 'typescript';
 import type { Plugin } from 'vite';
 
-/** The derived data kept in the player's browser (`src/core/derivedCache.ts`) */
+/** The derived data kept in the player's browser (`src/core/derivedCache.ts`). `holds`: files its maker reaches that hold, file or draw what it
+ *  makes and never shape it (a cache of the view's cells, the pictures drawn of its models): left out of its fingerprint with all they import.
+ *  DO NOT leave out a file whose code changes what is kept. */
 const DERIVED = [
-  { entry: 'src/render/buildings/parts.ts', also: [] as string[], define: '__BUILDING_KIT_HASH__' },
+  // The kit's models and their levels (`parts.ts`): its far pictures are taken of them at draw time, never kept (`partPictures.ts`).
+  { entry: 'src/render/buildings/parts.ts', also: [] as string[], holds: ['src/render/buildings/partPictures.ts'], define: '__BUILDING_KIT_HASH__' },
   // The conflict zones of each pair of movements (`world/conflictPoints.ts`, kept by `main.ts`).
-  { entry: 'src/world/conflictPoints.ts', also: [] as string[], define: '__CONFLICT_ZONES_HASH__' },
-  // The road surfaces' tiles (`render/roadSurfaces.ts`, kept by `renderer.ts`).
-  { entry: 'src/render/roadSurfaces.ts', also: [] as string[], define: '__ROAD_TILES_HASH__' },
+  { entry: 'src/world/conflictPoints.ts', also: [] as string[], holds: [] as string[], define: '__CONFLICT_ZONES_HASH__' },
+  // The road surfaces' tiles (`render/roadSurfaces.ts`, kept by `renderer.ts`): their inputs held round the view cell by cell (`viewCells.ts`), as made.
+  { entry: 'src/render/roadSurfaces.ts', also: [] as string[], holds: ['src/world/viewCells.ts'], define: '__ROAD_TILES_HASH__' },
   // A plate's ecosystem and a far plate's woods (`world/ecology.ts`, `render/farWoods.ts`, kept by `ecologyKept.ts`).
-  { entry: 'src/world/ecology.ts', also: [] as string[], define: '__ECOLOGY_HASH__' },
-  { entry: 'src/render/farWoods.ts', also: [] as string[], define: '__FAR_WOODS_HASH__' },
+  { entry: 'src/world/ecology.ts', also: [] as string[], holds: [] as string[], define: '__ECOLOGY_HASH__' },
+  { entry: 'src/render/farWoods.ts', also: [] as string[], holds: [] as string[], define: '__FAR_WOODS_HASH__' },
   // A generated city of a seed, prepared (`cityGen.worker.ts`, kept by `main.ts` cityData).
-  { entry: 'src/cityGen.worker.ts', also: [] as string[], define: '__CITY_GEN_HASH__' },
+  { entry: 'src/cityGen.worker.ts', also: [] as string[], holds: [] as string[], define: '__CITY_GEN_HASH__' },
   // A cell's masses and far level as its job makes them (`cellWork.ts`, kept by `cellPool.ts`).
-  { entry: 'src/render/buildings/cellWork.ts', also: [] as string[], define: '__CELL_WORK_HASH__' },
+  { entry: 'src/render/buildings/cellWork.ts', also: [] as string[], holds: [] as string[], define: '__CELL_WORK_HASH__' },
 ] as const;
 /** The path aliases of `tsconfig.json`. */
 const ALIASES: readonly [string, string][] = [
@@ -27,8 +30,9 @@ const ALIASES: readonly [string, string][] = [
   ['@/', 'src/'],
 ];
 
-/** Every source file `entry` runs, transitively: static imports and exports */
-export function importClosure(root: string, entry: string): string[] {
+/** Every source file `entry` runs, transitively: static imports and exports; never `holds` (`DERIVED`) nor what only they import. */
+export function importClosure(root: string, entry: string, holds: readonly string[] = []): string[] {
+  const held = new Set(holds.map((file) => path.join(root, file)));
   const resolve = (from: string, spec: string): string | null => {
     const alias = ALIASES.find(([key]) => spec.startsWith(key));
     const base = alias ? path.join(root, alias[1], spec.slice(alias[0].length))
@@ -41,7 +45,7 @@ export function importClosure(root: string, entry: string): string[] {
   };
   const seen = new Set<string>();
   const visit = (file: string): void => {
-    if (seen.has(file)) return;
+    if (seen.has(file) || held.has(file)) return;
     // A file deleted while the server runs (the watcher's event) is no longer part of any closure.
     if (!fs.existsSync(file)) return;
     seen.add(file);
@@ -70,9 +74,9 @@ function codeOf(text: string): string {
   return tokens.join(' ');
 }
 
-function derivedHash(root: string, entry: string, also: readonly string[] = []): string {
+function derivedHash(root: string, entry: string, also: readonly string[] = [], holds: readonly string[] = []): string {
   const hash = createHash('sha256');
-  for (const file of importClosure(root, entry)) {
+  for (const file of importClosure(root, entry, holds)) {
     if (!fs.existsSync(file)) continue;
     hash.update(path.relative(root, file).replace(/\\/g, '/'));
     hash.update(codeOf(fs.readFileSync(file, 'utf8')));
@@ -96,7 +100,7 @@ const CITIES_DIR = 'cities';
 export function cookPlugin(): Plugin {
   let root = process.cwd();
   let outDir = 'dist';
-  const derived =(): Map<string, string> => new Map(DERIVED.map((d) => [d.define, derivedHash(root, d.entry, d.also)]));
+  const derived =(): Map<string, string> => new Map(DERIVED.map((d) => [d.define, derivedHash(root, d.entry, d.also, d.holds)]));
   let derivedHashes = new Map<string, string>();
   let building = false;
   /** The build is a server-side bundle (the desktop's job host): nothing to copy beside it. */
@@ -128,7 +132,7 @@ export function cookPlugin(): Plugin {
     },
     configureServer(server) {
       // A change to how a derived kind is made changes its fingerprint: the server restarts with the new one
-      const watched = DERIVED.flatMap((d) => importClosure(root, d.entry));
+      const watched = DERIVED.flatMap((d) => importClosure(root, d.entry, d.holds));
       server.watcher.on('change', (file) => {
         if (!watched.some((w) => path.resolve(file).startsWith(path.resolve(w)))) return;
         const nowDerived = derived();

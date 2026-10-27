@@ -27,7 +27,7 @@ import { posePart } from './partPose';
 import { type FacadePanes, createFacadeMaterial } from './facadeLevel';
 import { CARD, CARD_ATTRIBUTE, prefilterThinParts, twoSided } from './thinParts';
 import { roomBehindGlass } from './glassRoom';
-import { FACADE_PROP_KINDS, SHADOWED_PROPS, THIN_PROPS } from './facadeProps';
+import { SHADOWED_PROPS, THIN_PROPS } from './facadeProps';
 import type { PartKind } from './chunk';
 import { LOUVRE_BOX_HALF, LOUVRE_BOX_Z0, LOUVRE_BOX_Z1, LOUVRE_FRAME, louvreMaterial } from './louvreSlats';
 import { AC_FRONT_GLSL, AC_FRONT_Z, acFarGeometry, createFacadePropGeometries } from './facadePropModels';
@@ -61,36 +61,17 @@ const tvClock = { value: 0 };
 /** Everything the buildings layer draws with, built ONCE per renderer. */
 
 export type { PartKind } from './chunk';
+import { PART_KINDS } from './partKinds';
 
-export const PART_KINDS: readonly PartKind[] = [
-  'glass',
-  'frame',
-  'concrete',
-  'door',
-  'shutter',
-  'railing',
-  'roofRailing',
-  'awning',
-  'column',
-  'glassDark',
-  'water',
-  'lamp',
-  'wash',
-  'fin',
-  'louvre',
-  'glassRail',
-  'brise',
-  ...FACADE_PROP_KINDS,
-  ...SHELL_PART_KINDS,
-];
+export { PART_KINDS } from './partKinds';
+import { PORCH_LAMP } from './partKinds';
 
 /** The lantern beside a front door: a warm lamp behind frosted glass. */
 const PORCH_LIGHT = 0xffd49a;
 /** A lit room's mean brightness over the glass */
 const ROOM_LIT_MEAN = 0.9;
 
-/** The lantern beside a front door: width, height and depth out of the wall; its gap from the door's edge. */
-export const PORCH_LAMP = { w: m(0.16), h: m(0.26), d: m(0.12), gap: m(0.4) } as const;
+export { PORCH_LAMP } from './partKinds';
 /** How far the wash of its light (the `wash` part, placed at the lantern's centre) stands out of the wall. */
 const WASH_OUT = m(0.01);
 /** Outside lights after dark. 43 % of homes leave one on all night */

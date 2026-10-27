@@ -14,7 +14,6 @@ import { ViewCells } from '@world/viewCells';
 import { JournalCursor } from '@world/derived';
 import type { BuildingMeshes } from './buildingMesh';
 import type { CellEntry } from './chunk';
-import { PART_KINDS, type PartKind } from './kit';
 
 /** THE CELLS OF THE BUILDINGS LAYER (`layer.ts`) */
 
@@ -44,11 +43,8 @@ export const STREAM_AHEAD = 8;
 export const BATCH_CELL = CELL;
 /** Side of the sub-cells a cell's parts are filed by (`partFiling.ts`). */
 export { DETAIL_CELL } from './partFiling';
-// Frozen tables, not state (`eslint-rules/no-module-state.js`).
-/** The parts drawn with the cell's shells, one batch a cell: window panes (each with its room's light) and pool water, their single level two triangles. */
-export const COARSE_PARTS: ReadonlySet<PartKind> = Object.freeze(new Set<PartKind>(['glass', 'glassDark', 'water']));
-/** Every other part, filed by sub-cell and drawn by the error on the screen (`partCells.ts`). */
-export const DETAIL_PARTS: ReadonlySet<PartKind> = Object.freeze(new Set(PART_KINDS.filter((kind) => !COARSE_PARTS.has(kind))));
+/** The parts drawn with the cell's shells and the others (`partKinds.ts`). */
+export { COARSE_PARTS, DETAIL_PARTS } from './partKinds';
 
 /** The buildings batched cell by cell, each cell its own meshes: a cell out of the view */
 /** A cell's batch and the entries it was made of (its coarse cell's: `cellRequests.ts`), by cell key. */

@@ -1,7 +1,7 @@
 import { BufferAttribute, BufferGeometry } from 'three';
 import { MeshoptSimplifier } from 'meshoptimizer';
 import { weldGeometry } from '../mesh/weld';
-import { surfaceOff } from '../propLevels';
+import { surfaceOff } from '../mesh/surfaceOff';
 
 /** THE BUILDING PARTS' SIMPLER LEVELS (`kit.ts` SIMPLIFIED): a prop welded, simplified by meshoptimizer at each error and kept only where it
  *  is measured within it. */

@@ -1,7 +1,8 @@
 import { CELL } from '@world/cells';
 import { m } from '@world/units';
 import type { CellArrays, PartBanding, PartBandings } from './cellArrays';
-import { PART_KINDS, type PartKind, type PartScreen } from './kit';
+import type { PartKind, PartScreen } from './kit';
+import { PART_KINDS } from './partKinds';
 import { POSE_FLOATS } from './partPose';
 import { LOOK_FLOATS, SHELL_PARTS, shellPartError } from './shellParts';
 

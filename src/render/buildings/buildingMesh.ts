@@ -103,7 +103,8 @@ import {
   volumeTop,
   type LotSurface,
 } from '@world/buildings/types';
-import { type BuildingKit, PART_KINDS, PORCH_LAMP, type PartKind } from './kit';
+import type { BuildingKit, PartKind } from './kit';
+import { PART_KINDS, PORCH_LAMP } from './partKinds';
 import { FACADE_FLIP, FACADE_KIND, FACADE_STREAK, STREAK_SILL } from './facadeLevel';
 import { gpuOnlyAttributes } from '../mesh/gpuOnly';
 import { facadeProps } from './facadeProps';
