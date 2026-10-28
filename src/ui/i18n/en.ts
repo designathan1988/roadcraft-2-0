@@ -90,6 +90,7 @@ export const EN: Dictionary = {
   'action.newMap': 'New map',
   'action.newWorld': 'New city (20 km × 20 km)',
   'action.newLargeWorld': 'New metropolis (large city)',
+  'action.newWideWorld': 'New 10 km city',
   'action.saveMap': 'Save map',
   'action.openMap': 'Open map',
   'action.undo': 'Undo (Ctrl+Z)',
@@ -315,6 +316,7 @@ export const EN: Dictionary = {
   'confirm.newMap': 'Start a new map? The current one has already been saved automatically.',
   'confirm.newWorld': 'Create a new city over the whole 20 km × 20 km map? The current map has already been saved automatically.',
   'confirm.newLargeWorld': 'Create a large planned city (the small city made larger, about 2.7 km across)? It opens at a district; the rest of the city fills in after the curtain.',
+  'confirm.newWideWorld': 'Create a 10 km city (the large city over a 5 km radius)? It opens at a district; the rest of the city fills in after the curtain. The current map was already saved.',
 
   // ------------------------------------------------------------------ tools
   'tool.road': 'Road',

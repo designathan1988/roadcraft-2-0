@@ -1,6 +1,6 @@
 import { CELL } from '@world/cells';
 import { m } from '@world/units';
-import { type CellArrays, type PartBanding, type PartBandings, TINT_HALVES } from './cellArrays';
+import type { CellArrays, PartBanding, PartBandings } from './cellArrays';
 import type { PartKind, PartScreen } from './kit';
 import { PART_KINDS } from './partKinds';
 import { POSE_FLOATS } from './partPose';
@@ -64,7 +64,7 @@ interface FiledBand {
   /** Each sub-cell's largest scale of an instance along each of the model's axes, then the cell's. */
   readonly scale: Float32Array;
   readonly poses: Float32Array;
-  /** Tints in half floats, `TINT_HALVES` an instance, as the sub-cells' (`cellArrays.ts` `instanceColor`). */
+  /** Tints in half floats, as the sub-cells' (`cellArrays.ts` `instanceColor`). */
   readonly colours: Uint16Array | null;
   /** The shell's parts: each one's finish, wear and ground (`shellParts.ts`). */
   readonly looks: Float32Array | null;
@@ -140,7 +140,7 @@ function copyBand(bands: Uint8Array, into: Uint8Array, band: number, count: numb
   for (let i = 0; i < count; i++) {
     if (into[bands[i]!] !== band) continue;
     for (let k = 0; k < POSE_FLOATS; k++) poses[at * POSE_FLOATS + k] = e[i * POSE_FLOATS + k]!;
-    if (colours && tint) for (let k = 0; k < TINT_HALVES; k++) colours[at * TINT_HALVES + k] = tint[i * TINT_HALVES + k]!;
+    if (colours && tint) for (let k = 0; k < 3; k++) colours[at * 3 + k] = tint[i * 3 + k]!;
     if (looks && look) for (let k = 0; k < LOOK_FLOATS; k++) looks[at * LOOK_FLOATS + k] = look[i * LOOK_FLOATS + k]!;
     at++;
   }
@@ -192,7 +192,7 @@ function fileKind(kind: PartKind, slots: readonly (CellArrays | undefined)[], sc
   for (const [band, { counts, scale }] of [...merged].sort((a, b) => a[0] - b[0])) {
     let total = 0;
     for (const c of counts) total += c;
-    const poses = new Float32Array(total * POSE_FLOATS), colours = coloured ? new Uint16Array(total * TINT_HALVES) : null;
+    const poses = new Float32Array(total * POSE_FLOATS), colours = coloured ? new Uint16Array(total * 3) : null;
     const looks = looked ? new Float32Array(total * LOOK_FLOATS) : null;
     const start = new Uint32Array(LEAVES + 1);
     const box = new Float64Array(LEAVES * 6);
@@ -206,7 +206,7 @@ function fileKind(kind: PartKind, slots: readonly (CellArrays | undefined)[], sc
       const e = p.poses, tint = p.instanceColor, look = p.looks;
       if (whole[m]! >= 0) {
         poses.set(e.subarray(0, p.count * POSE_FLOATS), at * POSE_FLOATS);
-        if (colours && tint) colours.set(tint.subarray(0, p.count * TINT_HALVES), at * TINT_HALVES);
+        if (colours && tint) colours.set(tint.subarray(0, p.count * 3), at * 3);
         if (looks && look) looks.set(look.subarray(0, p.count * LOOK_FLOATS), at * LOOK_FLOATS);
         at += p.count;
         continue;

@@ -154,7 +154,7 @@ interface ShellArrays {
 interface InstanceArrays {
   readonly count: number;
   readonly poses: Float32Array;
-  /** Each instance's tint, linear rgb in half floats (`HALF_FLOAT`), `TINT_HALVES` an instance: 8 bytes, not 12. */
+  /** Each instance's tint, linear rgb in half floats (`HALF_FLOAT`): 6 bytes, not 12. */
   readonly instanceColor?: Uint16Array;
   /** Window panes: each one's light slot (-1: none) and the room behind it. */
   readonly litSlot?: Float32Array;
@@ -583,17 +583,13 @@ function shellArrays(chunks: readonly BuildingChunk[], of: FragmentsOf): ShellAr
 
 /** 1 in half float: an instance with no tint of its own. */
 const HALF_ONE = DataUtils.toHalfFloat(1);
-/** Half floats an instance's tint takes, from where it is made to every mesh that draws it: its rgb and one left over. DO NOT draw it three wide:
- *  D3D11 has no three-component half format, and ANGLE copies every such buffer to a four-wide one on the CPU (`formatutils11.cpp`: R16G16B16_FLOAT
- *  VERTEX_CONVERT_CPU), the parts' tints at every cell come or gone under a moving camera (the move reports' "HALF x3", 2026-10-27). */
-export const TINT_HALVES = 4;
 
 /** A batch's own instance arrays from its chunks, in order: the matrices, the colours of a coloured kind */
 function partArrays(chunks: readonly BuildingChunk[], kind: PartKind, count: number, glassy: boolean, coloured: boolean, looked: boolean): {
   poses: Float32Array; instanceColor?: Uint16Array; litSlot?: Float32Array; rooms?: Uint16Array; looks?: Float32Array;
 } {
   const poses = new Float32Array(count * POSE_FLOATS);
-  const instanceColor = coloured ? new Uint16Array(count * TINT_HALVES).fill(HALF_ONE) : undefined;
+  const instanceColor = coloured ? new Uint16Array(count * 3).fill(HALF_ONE) : undefined;
   const litSlot = glassy ? new Float32Array(count) : undefined;
   const rooms = glassy ? new Uint16Array(count * ROOM_FLOATS) : undefined;
   const looks = looked ? new Float32Array(count * LOOK_FLOATS) : undefined;
@@ -602,9 +598,7 @@ function partArrays(chunks: readonly BuildingChunk[], kind: PartKind, count: num
     const batch: PartBatch = chunk.parts[kind];
     if (batch.count === 0) continue;
     poses.set(batch.poses, at * POSE_FLOATS);
-    if (instanceColor && batch.colours) {
-      for (let i = 0; i < batch.count; i++) for (let k = 0; k < 3; k++) instanceColor[(at + i) * TINT_HALVES + k] = DataUtils.toHalfFloat(batch.colours[i * 3 + k]!);
-    }
+    if (instanceColor && batch.colours) for (let k = 0; k < batch.count * 3; k++) instanceColor[at * 3 + k] = DataUtils.toHalfFloat(batch.colours[k]!);
     if (litSlot) {
       if (batch.slots) litSlot.set(batch.slots, at);
       else litSlot.fill(-1, at, at + batch.count);

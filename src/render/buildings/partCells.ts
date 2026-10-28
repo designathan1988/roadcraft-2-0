@@ -1,7 +1,7 @@
 import { Box3, type BufferGeometry, Group, InstancedInterleavedBuffer, InstancedMesh, InterleavedBufferAttribute, type InstancedBufferAttribute, type Mesh, Sphere, Vector3 } from 'three';
 import { gpuOnlyAttributes } from '../mesh/gpuOnly';
 import { gateUntilBuilt } from '../uploads';
-import { FINISH_ATTRIBUTE, TINT_HALVES } from './cellArrays';
+import { FINISH_ATTRIBUTE } from './cellArrays';
 import { GROUND_ATTRIBUTE, LOOK_FLOATS, SHELL_PARTS, shellPartError } from './shellParts';
 import { type Axes, type BuildingKit, PART_ERROR_PX, type PartKind, type PartScreen } from './kit';
 import { partLook } from './fade';
@@ -141,8 +141,8 @@ export class PartCell {
     for (const f of filing.bands) {
       const band: Band = {
         kind: f.kind, screen: kit.screen[f.kind], start: f.start, box: f.box, scale: f.scale,
-        // Tints in half floats: HALF_FLOAT where the buffer says so (r186 `WebGLAttributes.createBuffer`, an interleaved attribute by its buffer), four wide (`TINT_HALVES`).
-        poses: new InstancedInterleavedBuffer(f.poses, POSE_FLOATS), colours: f.colours ? Object.assign(new InstancedInterleavedBuffer(f.colours, TINT_HALVES), { isFloat16BufferAttribute: true }) : null,
+        // Tints in half floats: HALF_FLOAT where the buffer says so (r186 `WebGLAttributes.createBuffer`, an interleaved attribute by its buffer).
+        poses: new InstancedInterleavedBuffer(f.poses, POSE_FLOATS), colours: f.colours ? Object.assign(new InstancedInterleavedBuffer(f.colours, 3), { isFloat16BufferAttribute: true }) : null,
         looks: f.looks ? new InstancedInterleavedBuffer(f.looks, LOOK_FLOATS) : null,
         meshes: new Map(), drawn: new Map(), unseen: new Map(), held: new Uint8Array(LEAVES), casts: false, width: 0, widest: Number.NaN,
         caster: null, castLevels: new Map(),
@@ -578,7 +578,7 @@ export class PartCell {
     mesh.userData['posed'] = new Map<number, BufferGeometry>([[0, geometry]]);
     mesh.userData['first'] = at;
     mesh.customDepthMaterial = partPoseDepth(look.material);
-    if (band.colours) mesh.instanceColor = new InterleavedBufferAttribute(band.colours, TINT_HALVES, at * TINT_HALVES) as unknown as InstancedBufferAttribute;
+    if (band.colours) mesh.instanceColor = new InterleavedBufferAttribute(band.colours, 3, at * 3) as unknown as InstancedBufferAttribute;
     mesh.count = band.start[last + 1]! - at;
     const box = new Box3();
     for (let m = first; m <= last; m++) {

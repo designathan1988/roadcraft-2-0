@@ -8,6 +8,14 @@ const { setTimeout, clearTimeout, setInterval } = require('node:timers');
 const ISOLATED = require('./isolation.cjs');
 const { createProblemLog, fromPage } = require('./problems.cjs');
 
+// The game while worked on, opened from a Start menu shortcut (which carries no environment of its own, and is how computer use finds an app on
+// Windows: by its Start menu name): `--roadcraft-dev-url=<the project's server>` and `--roadcraft-no-steam`, read as `npm run desktop:dev` sets them.
+if (!app.isPackaged) {
+  for (const arg of process.argv) {
+    if (arg.startsWith('--roadcraft-dev-url=')) process.env.ROADCRAFT_DEV_URL = arg.slice('--roadcraft-dev-url='.length);
+    if (arg === '--roadcraft-no-steam') process.env.ROADCRAFT_NO_STEAM = '1';
+  }
+}
 // The player's folder named here, not by the package's name: the saves' place is what Steam Auto-Cloud is told (`scripts/package-desktop.mjs`).
 app.setPath('userData', path.join(app.getPath('appData'), 'Roadcraft'));
 // A look run's own profile (`scripts/look.mjs --electron`, ROADCRAFT_LOOK_PROFILE: an absolute folder): a first opening measured as a new player has it, nothing kept from before, the player's own folder untouched.

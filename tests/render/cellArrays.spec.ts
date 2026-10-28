@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Box3, BufferAttribute, BufferGeometry, DataUtils, InstancedBufferAttribute, InstancedMesh, MeshBasicMaterial, Sphere } from 'three';
 
 import { emitChunk, kitBoxes } from '@render/buildings/buildingMesh';
-import { SHELL_GRID_STEP, SHELL_PIECE, TINT_HALVES, cellArrays } from '@render/buildings/cellArrays';
+import { SHELL_GRID_STEP, SHELL_PIECE, cellArrays } from '@render/buildings/cellArrays';
 import { PART_KINDS, createBuildingKit } from '@render/buildings/kit';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
 import type { Building } from '@world/buildings/types';
@@ -17,22 +17,19 @@ describe('a batch as arrays', () => {
   const chunks = BLUEPRINTS.map((bp, i) => emitChunk({ ...JSON.parse(JSON.stringify(bp.body)), id: i + 1, x: (i % 7) * m(70), y: Math.floor(i / 7) * m(70), rotation: 0.3 * i } as Building, groundAt));
   const arrays = cellArrays(chunks, { parts: PART_KINDS, shells: true, furniture: true, ghost: false, dim: false }, kitBoxes(kit));
 
-  it("holds each instance's tint in four half floats, 8 bytes (no three-component half format in D3D11), the chunks' tints to a part in a thousand", () => {
+  it("holds each instance's tint in half floats, 6 bytes, the chunks' tints to a part in a thousand", () => {
     let tinted = 0;
     for (const kind of PART_KINDS) {
       const part = arrays.parts[kind];
       if (!part?.instanceColor) continue;
       expect(part.instanceColor, kind).toBeInstanceOf(Uint16Array);
-      expect(part.instanceColor.byteLength).toBe(part.count * TINT_HALVES * 2);
-      expect(TINT_HALVES).toBe(4);
+      expect(part.instanceColor.byteLength).toBe(part.count * 6);
       let at = 0;
       for (const chunk of chunks) {
         const batch = chunk.parts[kind];
-        for (let i = 0; i < batch.count; i++) {
-          for (let k = 0; k < 3; k++) {
-            const was = batch.colours ? batch.colours[i * 3 + k]! : 1;
-            expect(Math.abs(DataUtils.fromHalfFloat(part.instanceColor[(at + i) * TINT_HALVES + k]!) - was)).toBeLessThanOrEqual(Math.max(was, 1e-3) / 1000);
-          }
+        for (let k = 0; k < batch.count * 3; k++) {
+          const was = batch.colours ? batch.colours[k]! : 1;
+          expect(Math.abs(DataUtils.fromHalfFloat(part.instanceColor[at * 3 + k]!) - was)).toBeLessThanOrEqual(Math.max(was, 1e-3) / 1000);
         }
         at += batch.count;
       }

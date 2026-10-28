@@ -29,7 +29,7 @@ import {
   Box3,
 } from 'three';
 import {
-  type Bounds, COLOURED_PARTS, type CellArrays, type CellSelection, FACADE_BYTES, FACADE_FLOATS, FACADE_GRID, FINISH_ATTRIBUTE, type KitBoxes, NORMAL_SHORTS, type ShellGrid, PAINT_ATTRIBUTE, PAINT_UNIT, SHELL_MESH, SHELL_NORMAL, SHELL_SHORTS, TINT_HALVES, WEAR_STEPS, cellArrays, finishId, finishWear, octNormal, paintShort, wearByte,
+  type Bounds, COLOURED_PARTS, type CellArrays, type CellSelection, FACADE_BYTES, FACADE_FLOATS, FACADE_GRID, FINISH_ATTRIBUTE, type KitBoxes, NORMAL_SHORTS, type ShellGrid, PAINT_ATTRIBUTE, PAINT_UNIT, SHELL_MESH, SHELL_NORMAL, SHELL_SHORTS, WEAR_STEPS, cellArrays, finishId, finishWear, octNormal, paintShort, wearByte,
 } from './cellArrays';
 import {
   COVER_INSET, GRIME_REACH, GROUND_ATTRIBUTE, LOOK_FLOATS, MACRO_SCALE, NO_GROUND, SHELL_PARTS, SHELL_PART_FACES, SHELL_PART_KINDS, type ShellPartKind, macroNoiseInto, macroTone,
@@ -4952,7 +4952,7 @@ export function meshesOf(arrays: CellArrays, kit: BuildingKit, ghost: boolean, d
     if (mesh.castShadow) mesh.customDepthMaterial = partPoseDepth(material);
     mesh.receiveShadow = !ghost;
     // Tints in half floats: HALF_FLOAT where the attribute says so (r186 `WebGLAttributes.createBuffer`).
-    if (part.instanceColor) mesh.instanceColor = Object.assign(new InstancedBufferAttribute(part.instanceColor, TINT_HALVES), { isFloat16BufferAttribute: true });
+    if (part.instanceColor) mesh.instanceColor = Object.assign(new InstancedBufferAttribute(part.instanceColor, 3), { isFloat16BufferAttribute: true });
     mesh.boundingBox = boxOf(part.bounds);
     mesh.boundingSphere = sphereOf(part.bounds);
     // DO NOT let go of the kit's model it draws: it is shared by every batch of the kind; only its own instance buffers go.

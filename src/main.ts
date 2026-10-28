@@ -1832,6 +1832,7 @@ function mountInterface(): void {
     newMap,
     newWorld,
     newLargeWorld,
+    newWideWorld,
     openMap: () => void openMap(),
     saveMap,
     about: openAbout,
@@ -1997,6 +1998,12 @@ function newLargeWorld(): void {
   if (!window.confirm(t('confirm.newLargeWorld'))) return;
   // The next large city's seed, made ahead (`cityAhead`).
   void openLargeCity(nextCitySeed('large', true));
+}
+/** A 10 KM CITY: the large city's generator over a 5 km radius, its density kept (`largeCityPlan`): the size the game is made to create, open, save and play. */
+const WIDE_CITY_RADIUS = m(5_000);
+function newWideWorld(): void {
+  if (!window.confirm(t('confirm.newWideWorld'))) return;
+  void openLargeCity(nextCitySeed('large', true), WIDE_CITY_RADIUS);
 }
 /** A city being made off the page (`cityGen.worker.ts`): the curtain over the map while the worker builds it, no frame of it on the page. */
 let generatingCity = false;

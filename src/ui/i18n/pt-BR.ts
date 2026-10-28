@@ -89,6 +89,7 @@ export const PT_BR: Dictionary = {
   'action.newMap': 'Novo mapa',
   'action.newWorld': 'Nova cidade (20 km × 20 km)',
   'action.newLargeWorld': 'Nova metrópole (cidade grande)',
+  'action.newWideWorld': 'Nova cidade de 10 km',
   'action.saveMap': 'Salvar mapa',
   'action.openMap': 'Abrir mapa',
   'action.undo': 'Desfazer (Ctrl+Z)',
@@ -314,6 +315,7 @@ export const PT_BR: Dictionary = {
   'confirm.newMap': 'Criar um novo mapa? O mapa atual já foi salvo automaticamente.',
   'confirm.newWorld': 'Criar uma nova cidade no mapa inteiro de 20 km × 20 km? O mapa atual já foi salvo automaticamente.',
   'confirm.newLargeWorld': 'Criar uma cidade grande planejada (a cidade pequena em tamanho grande, cerca de 2,7 km)? Ela abre num distrito; o resto da cidade chega depois da cortina.',
+  'confirm.newWideWorld': 'Criar uma cidade de 10 km (a cidade grande num raio de 5 km)? Ela abre num distrito; o resto da cidade chega depois da cortina. O mapa atual já foi salvo.',
 
   'tool.road': 'Via',
   'tool.draw': 'Desenhar',

@@ -161,12 +161,9 @@ describe('a level never landed, reckoned in bytes', () => {
     expect(bytes.of('facade', '1,0')).toBe(6_000_000);
     const { readFileSync } = await import('node:fs');
     const layer = readFileSync('src/render/buildings/layer.ts', 'utf8');
-    // What a level asked brings to the upload queue (`CellRequests`): the same reckoning (the GPU room no longer caps the levels, MISSION.md 3a).
-    const at = layer.indexOf('new CellRequests(');
-    expect(at).toBeGreaterThan(0);
-    const reckon = layer.slice(at, at + 300);
-    expect(reckon).toMatch(/landedBytes\.of\(kind, cell\)/);
-    expect(reckon).toMatch(/Number\.isNaN\(mean\) \? massCells\.massBytes\(cell\) : mean/);
+    const cap = layer.slice(layer.indexOf('const capNow'), layer.indexOf('const capNow') + 500);
+    expect(cap).toMatch(/landedBytes\.of\(kind, key\)/);
+    expect(cap).toMatch(/Number\.isNaN\(mean\) \? massCells\.massBytes\(key\) : mean/);
   });
 });
 

@@ -382,6 +382,7 @@ export interface ShellDeps {
   newWorld(): void;
   /** A large planned city (`planCity`), opened at a district with the rest filled after the curtain. */
   newLargeWorld(): void;
+  newWideWorld(): void;
   openMap(): void;
   saveMap(): void;
   about(): void;
@@ -729,6 +730,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
         row(t('action.newMap'), () => deps.newMap(), svg('m_new', 18)),
         row(t('action.newWorld'), () => deps.newWorld(), svg('m_new', 18)),
         row(t('action.newLargeWorld'), () => deps.newLargeWorld(), svg('m_new', 18)),
+        row(t('action.newWideWorld'), () => deps.newWideWorld(), svg('m_new', 18)),
         row(t('action.openMap'), () => deps.openMap(), svg('m_open', 18)),
         row(t('action.saveMap'), () => deps.saveMap(), svg('m_save', 18)),
         el('hr'),
