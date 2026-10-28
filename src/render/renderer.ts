@@ -1610,6 +1610,8 @@ export function createSceneRenderer(
   let natureSweepState: NatureSweep | null = null;
   /** The sweep being worked towards (its key), whether plates still wait for it, and a count of the sweeps the trees were kept from. */
   let natureSweepWant = '';
+  /** The sweep's key and the numbers it was made of: made again only when one moves. */
+  const natureSweepParts = { ecology: Number.NaN, land: Number.NaN, vegetation: Number.NaN, key: '' };
   let natureSweepPending = false;
   /** The sweep the ecosystem's trees were last filed from (`fileNature`). */
   let natureFiledFrom: NatureSweep | null = null;
@@ -3635,7 +3637,13 @@ export function createSceneRenderer(
         }
         // The ecosystem's own trees.
         bringPlateLand(net.doc);
-        const natureSweepKey = `${ecologySeen.follow(terrain.parts)}:${landSerial}:${quality.vegetation}`;
+        const ecologyNow = ecologySeen.follow(terrain.parts);
+        // The key's string made only when one of its parts moved, not at every frame.
+        if (ecologyNow !== natureSweepParts.ecology || landSerial !== natureSweepParts.land || quality.vegetation !== natureSweepParts.vegetation) {
+          natureSweepParts.ecology = ecologyNow; natureSweepParts.land = landSerial; natureSweepParts.vegetation = quality.vegetation;
+          natureSweepParts.key = `${ecologyNow}:${landSerial}:${quality.vegetation}`;
+        }
+        const natureSweepKey = natureSweepParts.key;
         if (natureSweepWant !== natureSweepKey || natureSweepPending) {
           const at = performance.now();
           natureSweepWant = natureSweepKey;
