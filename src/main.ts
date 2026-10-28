@@ -1018,7 +1018,7 @@ function worldUnderScreen(px: number, py: number, heightOffset?: number): Vec2 {
 function groundHeightUnder(at: Vec2): number {
   const point = (h: number): Vec2 => view.toWorldAt(at.x, at.y, h, surface.cssW, surface.cssH);
   const below = (h: number): boolean => { const p = point(h); return scene.surfaceHeightAt(p.x, p.y) >= h; };
-  let above = Math.min(600, surfaceTop());
+  let above = Math.min(600, surfaceTopIn(rayFootprint(point, 600, -360)));
   for (let h = above - 8; h >= -360; h -= 8) {
     if (!below(h)) { above = h; continue; }
     let lo = h;
@@ -1037,12 +1037,18 @@ function sceneHeightAt(p: Vec2): number {
 const PICK_TOP = m(64);
 const PICK_STEP = m(0.8);
 
-/** DO NOT walk `doc.nodes` here on each road edit: `RoadTop` reads only the cells the edit reached. */
+/** DO NOT walk `doc.nodes` here on each road edit: `RoadTop` reads only the cells a rectangle reaches, again only where an edit reached. */
 const roadTop = new RoadTop(doc, net, (x, y) => scene.elevationAt(x, y));
-function surfaceTop(): number {
-  // The land as drawn (`SceneHandle.landTop`, read again by the renderer when it rewrites the ground)
-  const top = Math.max(scene.landTop(), roadTop.height());
+/** The highest surface over a rectangle of the map: the land as drawn (`SceneHandle.landTop`, read again by the renderer when it rewrites
+ *  the ground) and the highest road meeting it (`RoadTop.heightIn`). DO NOT ask the whole city's highest road for one ray (MISSION.md item 5). */
+function surfaceTopIn(rect: ChangeRect): number {
+  const top = Math.max(scene.landTop(), roadTop.heightIn(rect));
   return Number.isFinite(top) ? top + 12 : PICK_TOP;
+}
+/** The rectangle of the map a ray crosses between heights `hi` and `lo` (`at`: where it is at a height). */
+function rayFootprint(at: (h: number) => Vec2, hi: number, lo: number): ChangeRect {
+  const a = at(hi), b = at(lo);
+  return [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y)];
 }
 
 /** Where the ray under the cursor first meets what is drawn - a deck, or the ground - marched down from above. */
@@ -1052,7 +1058,7 @@ function firstSurfaceAt(px: number, py: number): Vec2 | null {
     const p = at(h);
     return scene.surfaceHeightAt(p.x, p.y) >= h;
   };
-  let above = Math.min(PICK_TOP, surfaceTop());
+  let above = Math.min(PICK_TOP, surfaceTopIn(rayFootprint(at, PICK_TOP, -PICK_TOP)));
   for (let h = above - PICK_STEP; h >= -PICK_TOP; h -= PICK_STEP) {
     if (!below(h)) { above = h; continue; }
     let lo = h;
@@ -2721,10 +2727,23 @@ function screenReach(): ChangeRect {
   const c = view.centre;
   return [c.x - SCREEN_REACH, c.y - SCREEN_REACH, c.x + SCREEN_REACH, c.y + SCREEN_REACH];
 }
-/** The world's rectangle the screen can show */
+/** The world's rectangle the screen can show: the ground up to the land's top, then up to the highest road standing over that ground, again
+ *  while a road higher still stands over the ground it adds (a deck seen over the screen's edge). */
 function groundOnScreen(w: number, h: number): ChangeRect {
+  const land = scene.landTop();
+  let top = Number.isFinite(land) ? land + 12 : PICK_TOP;
+  let rect = screenGround(w, h, top);
+  for (let again = 0; again < 4; again++) {
+    const higher = surfaceTopIn(rect);
+    if (higher <= top) break;
+    top = higher;
+    rect = screenGround(w, h, top);
+  }
+  return rect;
+}
+/** The world's rectangle the screen shows of the ground and of whatever stands on it up to `top`. */
+function screenGround(w: number, h: number, top: number): ChangeRect {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const top = surfaceTop();
   for (const [px, py] of [[0, 0], [w / 2, 0], [w, 0], [w, h / 2], [w, h], [w / 2, h], [0, h], [0, h / 2]] as const) {
     // The pixel's line of sight where the view has one: a ray level with or above the horizon meets no ground
     const ray = view.rayAt?.(px, py, w, h);
