@@ -24,6 +24,7 @@ import {
   ShaderChunk,
   Vector3,
   Box2,
+  Box3,
   Color,
   type CompressedTexture,
   type Material,
@@ -67,6 +68,8 @@ import { DETAIL_WORLD_SIZE } from './bake/detailRecipes';
 import { DETAIL_GLSL, detailSwitch } from './mesh/detailLayer';
 import { applyLotOverlay } from './lotOverlay';
 import { WATER_DEPTH_ATTRIBUTE, WATER_FLOW_ATTRIBUTE, createWaterSurface, type WaterLook } from './water';
+import { type WaterLevels, waterLevelFor, waterLevels } from './waterLevels';
+import { simplifierLoading } from './propLevels';
 import type { GullyDab } from '@world/gullies';
 import { type CornerGrid, type TerrainRegion, type TerrainShaper, boxRegion, sampleCorners, shapeCorners } from './terrainShaping';
 import { type NaturalPlate, type PlateShapeAnswer, type PlateShapeAsk, askPlate } from './groundShape';
@@ -95,6 +98,8 @@ const WATER_FILL = 0.45;
 const WATER_MARGIN = m(0.16);
 /** Grid resolution of the unified river surface: the universal grid's step (`world/grid.ts` GRID_STEP). */
 const WATER_CELL = m(1);
+/** Whether meshoptimizer's simplifier is loaded (`propLevels.ts`): the water's levels are made once it is (`waterLevels.ts`). */
+const waterSimplifier = simplifierLoading();
 
 
 
@@ -1503,6 +1508,39 @@ export function createTerrainSurface(anisotropy: number, origin: { readonly x: n
   waterSurface.attach(water);
   // Hidden while it holds no water (`rebuildWater` shows it)
   water.visible = false;
+  /** THE WATER'S LEVELS BY ITS SIZE ON THE SCREEN (`waterLevels.ts`), drawn by `lookFrom`; null while none are made. */
+  let waterLevelSet: WaterLevels | null = null;
+  /** The mesh as made whose levels wait for the simplifier (its WebAssembly loading): drawn as it is meanwhile. */
+  let waterUnlevelled: BufferGeometry | null = null;
+  /** The water's meshes let go: its levels, or the one it has. */
+  const dropWater = (): void => {
+    if (waterLevelSet) for (const g of waterLevelSet.geometries) g.dispose();
+    else water.geometry.dispose();
+    waterLevelSet = null;
+    waterUnlevelled = null;
+  };
+  /** The waiting mesh's levels made, once the simplifier is in: drawn from its finest. */
+  const levelWater = (): void => {
+    if (!waterUnlevelled || !waterSimplifier.loaded()) return;
+    const source = waterUnlevelled;
+    waterUnlevelled = null;
+    waterLevelSet = waterLevels(source);
+    water.geometry = waterLevelSet.geometries[0]!;
+    source.dispose();
+  };
+  /** World units a pixel spans at the water's nearest point from `camera` (`pixels` the drawing buffer's height): what its level is chosen by. */
+  const waterNear = new Box3(), waterEye = new Vector3();
+  const pixelAtWater = (camera: PerspectiveCamera | OrthographicCamera, pixels: number, finest: BufferGeometry): number => {
+    if ((camera as OrthographicCamera).isOrthographicCamera) {
+      const ortho = camera as OrthographicCamera;
+      return (ortho.top - ortho.bottom) / ortho.zoom / Math.max(1, pixels);
+    }
+    const persp = camera as PerspectiveCamera;
+    waterNear.copy(finest.boundingBox!).translate(water.position);
+    camera.getWorldPosition(waterEye);
+    const distance = Math.max(waterNear.distanceToPoint(waterEye), persp.near);
+    return (distance * 2 * Math.tan((persp.fov * Math.PI) / 360)) / (Math.max(1, pixels) * persp.zoom);
+  };
 
   let index = new TerrainIndex([], 0);
   let revision = -1;
@@ -2080,9 +2118,10 @@ export function createTerrainSurface(anisotropy: number, origin: { readonly x: n
   /** A water mesh and its shore in: drawn from now on, with the corners it was made on. */
   const waterLanded = ({ geometry, ground }: WaterMade): void => {
     sendGround(ground);
-    const previous = water.geometry;
+    dropWater();
     water.geometry = geometry;
-    previous.dispose();
+    // Its levels made now, or once the simplifier is in (`lookFrom`).
+    waterUnlevelled = geometry;
     sendLevels();
     water.geometry.computeBoundingBox();
     const box = water.geometry.boundingBox;
@@ -2094,6 +2133,7 @@ export function createTerrainSurface(anisotropy: number, origin: { readonly x: n
     waterChanges.mark([was, waterBox].flatMap((b) => (b ? [[b.minX, b.minY, b.maxX, b.maxY] as const] : [])));
     // The water moved, and with it the rivers' forests and the veredas.
     ecologyAll();
+    levelWater();
   };
   /** How near the water a moved corner can be and still leave it as it was: two water cells and two terrain cells. */
   const WATER_REACH = 2 * WATER_CELL + 2 * TERRAIN_CELL;
@@ -2605,6 +2645,12 @@ export function createTerrainSurface(anisotropy: number, origin: { readonly x: n
       ground.visible = shown;
       rim.visible = shown && lod.rimGeometry.instanceCount > 0;
       seamMesh.visible = shown && joined !== null;
+      // The water at the coarsest of its levels whose error spans under a pixel at its nearest point (`waterLevels.ts`).
+      levelWater();
+      if (waterLevelSet && water.visible) {
+        const chosen = waterLevelSet.geometries[waterLevelFor(waterLevelSet, pixelAtWater(camera, pixels, waterLevelSet.geometries[0]!))]!;
+        if (water.geometry !== chosen) water.geometry = chosen;
+      }
     },
     highest: () => levels.hi(LOD_LEVELS - 1, 0, 0),
     onLevels: null,
@@ -2627,7 +2673,7 @@ export function createTerrainSurface(anisotropy: number, origin: { readonly x: n
       shore.dispose();
       shoreLevel.dispose();
       paintArray.dispose();
-      water.geometry.dispose();
+      dropWater();
       waterSurface.dispose();
       groundTexture.dispose();
       // What any texture still held goes with it.

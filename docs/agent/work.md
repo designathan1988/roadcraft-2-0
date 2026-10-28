@@ -41,5 +41,7 @@ The reading that wrote the mission is done (249 of 249 documents, `reading.md`, 
 
 - 3b A ROAD JUST BUILT: BLOCKED (skill cycle 36, roadStandIn.ts 123, roadProgramStandIns.ts 56 read whole; nothing changed). roadStandIn draws the commit's new roads as the far level's pieces in two flat mean tones at every distance until the world's build lands (renderer.ts:3777, "over 2 s"): a form by load state. Its own near form is the built surfaces, made by worldSteps waiting on job workers whose answers come between frames, so the commit's frame cannot hold them; the fix is the road surfaces made on the page for the commit's segments, which is item 5's work, not this file. Taking the stand-in away leaves the road invisible (worse). roadProgramStandIns is hidden (programs compiled ahead): no form on screen.
 
+- 3b TERRAIN DONE (skill cycle 37, terrainLod.ts 439, terrainLevels.ts 206 read whole; 724a5213, pub 5152066e): the CDLOD root was 256 cells, its four quarters (512 ground, 256 rim triangles) the coarsest a 200-cell plate could be at any distance; LOD_LEVELS 6 adds a 512-cell root whose first quarter covers the plate in one patch (128 triangles), chosen by its error in pixels as every level is. The terrainLod spec that asserted the old coarsest (four patches) now asserts the new rule (one patch, as a 256-cell plate), failing undone - to be told to the owner.
+
 ## Next
-MISSION.md item 3b, next category: terrain (far tiles by size), water; then items 4-9 and the End. Left open: the paused simulation's wake (2e, above).
+MISSION.md item 3b, next category: water; then items 4-9 and the End. Left open: the paused simulation's wake (2e, above).
