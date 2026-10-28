@@ -656,7 +656,14 @@ export function createFlatAtlas(anisotropy: number): TerrainSurface {
   const terrainCursor = new JournalCursor(['terrain']);
   const paintCursor = new JournalCursor(['paint']);
   let seenPaint = -1;
+  /** The document, its diary and the diary's last entry the last `sync` read, with the nature and relief it held: every revision sync reads is
+   *  the serial of a kind in that diary (`RoadDoc` revisions, `ChangeJournal.serialOf`), so with no entry written since, the same again does
+   *  nothing (update and updatePaint ask it at every frame). */
+  const synced = { doc: null as TerrainSource | null, changes: null as unknown, entry: -1, nature: null as unknown, relief: null as unknown };
   const sync = (doc: TerrainSource): void => {
+    if (synced.doc === doc && synced.changes === doc.changes && synced.entry === doc.changes.version && synced.nature === doc.nature
+      && synced.relief === doc.terrainRelief) return;
+    synced.doc = doc; synced.changes = doc.changes; synced.entry = doc.changes.version; synced.nature = doc.nature; synced.relief = doc.terrainRelief;
     lastDoc = doc;
     for (const p of plates.values()) {
       p.source.changes = doc.changes;
