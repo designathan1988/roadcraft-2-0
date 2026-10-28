@@ -173,6 +173,11 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   let serial = 0, wholeAt = 0;
   /** The cells of the last `prefetch` (DO NOT look again at every cell of a view that stands: thousands a frame). */
   let prefetched = '';
+  /** The cell ranges `askCells` covered, each with `askSerial` then: a cell once asked is filed or stays asked until its answer files it, so the
+   *  same ranges ask nothing more until a cell leaves `asking` unfiled (a stale answer, a failed job) or the filing is let go whole, which move
+   *  `askSerial`. DO NOT look up every cell of the canyon light's and the occluders' windows at every frame: 1,600 cells a 2 km window. */
+  const askedRanges = new Map<string, number>();
+  let askSerial = 0;
   let buildings: BuildingStore | null = null;
   /** Buildings a job answered for with no floor known of them yet (the cells' jobs not come there): filed once their floor is known, or
    *  worked out here a few a frame (`settleFootless`), those of a cell a question reaches at once. DO NOT work out their floors in the
@@ -313,6 +318,7 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         whole = false;
         wholeAt = serial;
         prefetched = '';
+        askSerial++;
       } else {
         for (const id of pending) {
           filing.remove(id);
@@ -339,6 +345,11 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   function askCells(rects: readonly Rect[]): void {
     const town = buildings;
     if (!offPage || !town || whole) return;
+    const range = rects.map((r) => `${Math.floor(r[0] / CELL)},${Math.floor(r[1] / CELL)},${Math.floor(r[2] / CELL)},${Math.floor(r[3] / CELL)}`).join('|');
+    if (askedRanges.get(range) === askSerial) return;
+    // A handful of windows asked a frame (the canyon light's, the occluders'): the ones of a view left behind let go.
+    if (askedRanges.size >= 16) askedRanges.clear();
+    askedRanges.set(range, askSerial);
     {
       // The cells to ask, by the block of `PREFETCH_BLOCK` cells they stand in: one job a block.
       const blocks = new Map<number, number[]>();
@@ -390,7 +401,7 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
             }
             for (const key of cells) { filled.add(key); arrived.push(cellRect(key)); }
             offPage.arrived?.();
-          }
+          } else askSerial++;
           if (!asking.size) changedAt.clear();
         };
         const at: [number, number] = [(sx / cells.length + 0.5) * CELL, (sy / cells.length + 0.5) * CELL];
@@ -402,6 +413,7 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         offPage.ask(ids, town, at, [rx0, ry0, rx1, ry1]).then(landed, (error: unknown) => {
           console.error('[buildings] a block of the camera\'s solids could not be worked out off the page; filled when asked', error);
           for (const key of cells) asking.delete(key);
+          askSerial++;
           if (!asking.size) changedAt.clear();
         });
       }
