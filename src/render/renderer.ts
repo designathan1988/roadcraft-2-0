@@ -63,7 +63,7 @@ import { createEnvironment, sunShadowChunks } from './environment';
 import type { Movers, SunCascades } from './sunCascades';
 import { createMaterials, type SceneMaterials } from './materials';
 import { PERSPECTIVE_FOV, createIsoRig } from './isoViewport';
-import { liveTargets, renderTargetsBytes } from './targetBytes';
+import { liveTargetCount, liveTargets, renderTargetsBytes } from './targetBytes';
 import { deviceGpuCap, gpuLedger, readGpuDevice } from './gpuLedger';
 import { screenSizer } from './screenSize';
 import { WEAK_MACHINE } from '@core/weakMachine';
@@ -2835,15 +2835,16 @@ export function createSceneRenderer(
   };
 
   let post: PostChain = createPostChain(renderer, scene, rig.camera, quality, tier, depthFirst);
-  /** The chain's targets that hold memory on the GPU now: those bound at least once (three makes a target's framebuffer at its first `setRenderTarget`, r186 `WebGLTextures.setupRenderTarget`; a disposed one loses it). DO NOT charge the ledger for targets never drawn into (the clouds' with no cloud placed, the bloom's mips by day): ~40 MB at 1440p taken from the buildings' detail for nothing (RND-19). */
-  const livePostTargets = (): ReturnType<PostChain['targets']>[number][] => liveTargets(post.targets(), renderer.properties);
+  /** The ledger charged for the chain's targets that hold memory on the GPU now: those bound at least once (three makes a target's framebuffer at its first `setRenderTarget`, r186 `WebGLTextures.setupRenderTarget`; a disposed one loses it). DO NOT charge the ledger for targets never drawn into (the clouds' with no cloud placed, the bloom's mips by day): ~40 MB at 1440p taken from the buildings' detail for nothing (RND-19). */
   /** How many were live when the ledger was last told: told again when that changes (a target drawn into for the first time, the bloom at nightfall). */
   let targetsTold = -1;
   const tellTargets = (): void => {
-    const live = livePostTargets();
-    if (live.length === targetsTold) return;
-    targetsTold = live.length;
-    gpuLedger.set('render targets', 'render targets', renderTargetsBytes(live));
+    // Counted with no list made (each frame); the live list made only when the count moved.
+    const targets = post.targets();
+    const count = liveTargetCount(targets, renderer.properties);
+    if (count === targetsTold) return;
+    targetsTold = count;
+    gpuLedger.set('render targets', 'render targets', renderTargetsBytes(liveTargets(targets, renderer.properties)));
   };
   renderer.setPixelRatio(Math.min(WEAK_MACHINE.pixelRatio ?? (window.devicePixelRatio || 1), quality.pixelRatio));
 
@@ -3262,7 +3263,8 @@ export function createSceneRenderer(
     gpu: gpuTimer,
     get stats(): RenderStats {
       return {
-        builtTriangles: builtTriangles + buildings.triangles,
+        // Counted only when read (a walk of the buildings' cells): DO NOT count it for a reader of the timings (a road drag, each frame).
+        get builtTriangles() { return builtTriangles + buildings.triangles; },
         drawnTriangles: frameDrawn.triangles,
         drawCalls: frameDrawn.calls,
         quality: tier,

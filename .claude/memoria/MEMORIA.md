@@ -40,3 +40,4 @@ One line per memory file in this folder. New learnings go in a new file here (fr
 - [Jogo fechado até a arquitetura acabar](no-game-until-architecture-done.md) — ordem do dono: não abrir o jogo até refazer toda a arquitetura no código; só tsc/eslint/specs
 - [Desfazer edição de teste antes de recarregar](test-edit-undo-before-reload.md) — Ctrl+Z no mesmo script; a janela recarrega a cada mudança em src e salva no pagehide
 - [Interface nunca gerada ao vivo](ui-never-generated-live.md) — menus mostram fotos prontas (PNG no projeto); nada de render/canvas na UI; regra de lint bloqueia
+- [Typecheck depois do spec](typecheck-after-spec.md) — vitest roda spec com erro de tipo; rodar npm run typecheck depois de escrever o spec, antes do commit
