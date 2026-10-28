@@ -107,7 +107,7 @@ import { partWarmMeshes } from './buildings/partWarm';
 import { advanceWind, setWindWeather, sways } from './wind';
 import { holdStill, updateMoving } from './stillTree';
 import { castCastersInto, castShadowKey } from './shadowCasters';
-import { type KeptFrustum, screenHalf, setShadowSun } from './cellInstances';
+import { type KeptFrustum, cullTogether, screenHalf, setShadowSun } from './cellInstances';
 import { createRain } from './rain';
 import { createLightning } from './lightning';
 import { windVector } from '@world/weather';
@@ -3814,13 +3814,16 @@ export function createSceneRenderer(
         lookProps(props, view);
         utilities?.look(view, performance.now() + POLE_FRAME_MS);
       }
-      furniture.cull(crowdFrustum, crowdProjection);
-      signs.cull(crowdFrustum, crowdProjection);
-      barriers.cull(crowdFrustum, crowdProjection);
-      transit.cull(crowdFrustum, crowdProjection);
-      for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.cull(crowdFrustum, crowdProjection);
-      elementLayer?.cull(crowdFrustum, crowdProjection);
-      gardens?.cull(crowdFrustum, crowdProjection);
+      // Every layer kept cell by cell culled by ONE walk of the view (`cellInstances.ts` cullTogether), each laying its levels after it.
+      cullTogether(() => {
+        furniture.cull(crowdFrustum, crowdProjection);
+        signs.cull(crowdFrustum, crowdProjection);
+        barriers.cull(crowdFrustum, crowdProjection);
+        transit.cull(crowdFrustum, crowdProjection);
+        for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.cull(crowdFrustum, crowdProjection);
+        elementLayer?.cull(crowdFrustum, crowdProjection);
+        gardens?.cull(crowdFrustum, crowdProjection);
+      });
       transit.update(sim.trains, terrain.renderedHeightAt);
       frustumGroundBox(crowdFrustum, VEHICLE_REACH, VEHICLE_LOW, VEHICLE_HIGH, vehicleBox);
       agents.sync(sim, net, alpha, detailed, rig.viewport.zoom, {

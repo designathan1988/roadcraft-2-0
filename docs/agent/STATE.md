@@ -1,64 +1,43 @@
 # Work state (injected at every session start and compaction by `.claude/hooks/workstate.cjs`)
-KEEP THIS FILE UNDER 9,000 CHARACTERS: Claude Code cuts a hook's output past 10,000 to a 2 KB preview, and the state is lost at the
-compaction (it happened on 2026-10-27: only the first lines reached the session). What is finished or old goes to `docs/agent/history.md`.
+KEEP THIS FILE UNDER 9,000 CHARACTERS AND TRUE. It is what comes back after a compaction: a stale line here is a lie told to the next
+context (2026-10-28: it still named the reverted code-graph mission as current). Rewrite it at once when a task starts, ends or changes.
+What is finished or old goes to `docs/agent/history.md`.
 
-## ABOVE EVERYTHING (the owner, 2026-10-27)
-- NO MEASURING: no bench, runtime layer, stall runs, far sheets; find and fix problems ONLY by reading the code and the static code graph;
-  verify ONLY with tsc (`npm run typecheck`), eslint and the spec of the point. The game is opened only when the owner asks.
-- Work alone, no subagents; never ask the owner, decide; commit each verified item (git-gate: create `.claude/coordinator-commit.unlock`
-  in its own command before `git add/commit`, delete it after). Chat in Brazilian Portuguese; everything in the project in English.
-- An optimization changes nothing visible and removes nothing. THE OWNER'S GAME WINDOW IS OPEN and reloads on every edit under `src/`:
-  a broken edit breaks the game in front of the owner at once.
+## ABOVE EVERYTHING (the owner)
+- NO MEASURING: no bench, probes, stall runs, sheets; find and fix problems ONLY by reading the code; verify ONLY with tsc
+  (`npm run typecheck`), eslint and the spec of the point. The game is opened only when the owner asks.
+- Work alone, NO subagents; never ask the owner, decide; commit each verified item (the git and acceptance gates refuse
+  only subagents, by the hook's `agent_id`: the main session commits with no unlock file). Chat in Brazilian Portuguese; everything in the project in English.
+- An optimization changes nothing visible and removes nothing.
 
-## REVERTED (the owner, 2026-10-27 night): "volte para o estado anterior à criação do banco de dados"
-The game's code (src, tests, scripts, eslint.config.js) is back to 7c4de70f, the last commit before the code graph's database (ca2bcf8e)
-and everything after it: the phases -1/0/1, the stall tooling, the frame contracts (still scene, upload queue, solids, RoadTop...). The owner:
-the game was worse in everything (graphics, functions, slower opening, new roads not showing). Kept: CLAUDE.md (compact instructions),
-.claude (hooks), docs, reports. The history keeps every reverted commit (git log) if any piece is wanted back. Nothing else to do until the
-owner gives a new order.
+## WHERE THE GAME IS
+The game's code (src, tests, scripts, eslint.config.js, package, desktop) equals 7c4de70f (src at a21b2fc2), restored by 7d424a23 and
+published to roadcraft-2-0 (publish cbda5016). The code-graph mission and everything after ca2bcf8e are reverted (history.md).
 
-## THE OWNER'S LATEST ORDERS (2026-10-27 night, newest first)
-- "Pesquisa na internet e corrija o problema do compact": the context lost at compaction. Done from the official docs: this file under the
-  hooks' 10,000-character cap (`workstate.cjs` never cuts silently); `CLAUDE.md` "# Compact instructions" (keep the owner's orders verbatim,
-  the mission, what is broken or uncommitted); the coordinator checklist given whole once a session and after each compaction, one line on
-  other prompts (`.claude/hooks/coordinator-checklist.cjs`, SessionStart added in `.claude/settings.local.json`).
-- "Veja tudo que você quebrou e fez errado; faça direito": audit every change of this mission for breakage by reading the code.
-- "Não dá para criar vias, elas não aparecem": see BROKEN below.
+## TASKS, IN ORDER (the owner's words are in `docs/agent/orders.md`)
+0. NOW: the deep analysis of the game's optimization by the code (order of 2026-10-28 01:50). Its notebook `docs/agent/work.md` is
+   printed whole at every session start and compaction (`.claude/hooks/notebook.cjs`): continue from its "Next".
+1. DONE (b42f2003 and the notebook hook): the context lost at compaction (orders of 2026-10-28 02:00-02:20). Findings:
+   - This session already runs on the 1M window: it compacted 9 times, each at ~968k tokens (compactMetadata.preTokens in the
+     transcript). A bigger window does not exist; `/autocompact` only makes it compact sooner.
+   - What comes back from disk after a compaction (https://code.claude.com/docs/en/context-window#what-survives-compaction): the
+     project-root CLAUDE.md, the plan written in plan mode, up to five recently changed files read again, invoked skill bodies, and the
+     output of SessionStart hooks matching `compact`. Everything else is a summary.
+   - The docs' prescription for long work (https://code.claude.com/docs/en/best-practices#keep-cost-and-context-down): one task per
+     session, `/clear` between unrelated tasks, the task written to a file and a fresh session started from it.
+   - What went wrong on 2026-10-28 02:21: the hooks handed back THIS file stale (a reverted mission as current) and another session's
+     coordinator checklist (agents, roads SCOPE) through `.claude/settings.local.json`. Fixed: this file rewritten true, the checklist's
+     hooks removed from the local settings.
+   - The analysis is done in a fresh session (the owner, 2026-10-28), started from the notebook.
+
+## AFTER A COMPACTION, IN THIS ORDER
+1. The owner's orders printed above (`orders.cjs`, word for word, newest first): obey the newest.
+2. "WHERE THE WORK STOOD" printed above (`resume.cjs`, from the conversation on disk).
+3. `docs/agent/work.md` whole, and continue from its "Next".
+
+## OPEN ISSUES (not confirmed fixed)
+- The far buildings' wall gap is ~10% darker than the original (107,101,89 vs 119,105,88).
+- Not mine, untracked: `scripts/*.tmp.mjs`, `play.mjs`, `inGameMarks.mjs`, `stalls_trace.py`, `tools/claude-gates/`, `research_notes/`.
 
 Entry point and method: `docs/agent/README.md`. Rules: `docs/agent/memory/`. Branch: `otimizacao-geometria`. History: `docs/agent/history.md`.
-
-## CURRENT MISSION: the frame contracts by the code graph (the owner, 2026-10-27 night)
-`node scripts/codegraph/rules.mjs [--list] [--ceil]` checks what `src/main.ts:frame` reaches: c an upload outside the queue
-(`uploads.ts` drainUploads/drainWrites/drainWarm), d a scene walk or recompile, e a loop over a whole-map collection, f a material made or
-needsUpdate outside the compile gate, g a read that waits for the GPU. Goal: all five at ZERO (exceptions only in
-`scripts/codegraph/exceptions.json`: effects' fixed small uploads, the instruments), each fix citing its chain and file:line, `--ceil`,
-commit per item, the rules' output printed in the chat at the start and the end.
-- Start: c 68, d 79, e 15, f 32, g 1 (`reports/codegraph/rules-start.txt`).
-- Now (c2be8794): c 0, d 0, e 5, f 0, g 0; ceilings {c 0, d 0, e 5, f 0, g 0}.
-- Left in e (whole-map passes run when the diary cannot say what changed): renderer `plantAll` (doc.trees), `trafficMapOf`
-  (SimClient.load sends the map whole to the sim), `PlacedProduct.allKeys` / `BarrierProduct.allKeys` (the Derived spine's whole path;
-  their chain went through RoadTop, check `--list` for the one left), `SurfaceInputs.rebuildAll`, `TileIndex.fileAll`, economy `priceAll`.
-- Done in e: ragdoll solids by cell (`world/solids.ts`), the lots overlay always round the view (`LotTool.overlay` needs a view),
-  the highest road over the screen's ground only (`RoadTop.heightIn`, `main.ts` surfaceTop).
-- Done in c: the upload queue in `uploads.ts`: `sendRange`/`sendSpan`/`sendWhole` (what arrived, `UPLOAD_BYTES` a frame), `sendThisFrame`
-  (the frame's own state, counted first), `sendCopy` (copies; `thisFrame` for a batch's packed indices), `drainWrites` once a frame before
-  the draw (`renderer.ts`); new textures handed to `queueUpload`; palettes: `sendPalettes` before the drain, `renderPalettes` after. Specs
-  that read what was sent call `tests/render/support/drained.ts` first.
-- Done in d: the scene is a still tree (`stillTree.ts` holdStill(scene)); whatever moves as an object calls `updateMatrix()` where it moves.
-
-## BROKEN / TO WATCH (the owner reported, 2026-10-27 night: "new roads do not show")
-- Found by reading: `GpuBatchedMesh.compact` sends its packed indices later (bbbfadf7); a growth right after a packing
-  (`setGeometrySize`, the far road batches `networkFarRoads.ts` / `farBlockBatches.ts`, `shellBatch.ts`) copied the index buffer before
-  they were in it and the old buffer took them away: batches drawn with no triangles. Fixed (56f77c1a, 7aeaf0d9: the unsent indices move
-  to the fresh buffer). Also found and fixed: the queue held what arrived behind the frame's own state, one array a frame (3b20d820),
-  and capped writes to arrays already drawn (c2be8794: every write now sent before the draw, drained again right before post.render).
-  NOT confirmed in the game. If roads still do not show, read next: the road paint tables (`roadPaint.ts` sendTexels
-  / dataTable now queued), the queue's order (`drainWrites`), the still scene (`stillTree.ts`).
-- Specs failing that the mission did not touch (files unchanged): buildingsVisibleSame, cellAffinity, interiorSolids, surfaceReads x2,
-  editor/cityTiles, ui/decimals (main.ts toFixed), scale/census/sceneCensus.
-- Uncommitted, not mine to commit now: `.claude/settings.json` (owner), `scripts/lib/flightRecorder.mjs`, `scripts/stalls*.mjs` (the
-  cancelled stall mission's tools).
-
-## Notes
-- The speed mission's phases (-1 and 0 done, 1 in progress) and the stall mission are in `docs/agent/history.md`; both are paused.
-- Push procedure: `docs/agent/memory/push-roadcraft-2-0.md` (not asked in this mission).
+Push procedure: `docs/agent/memory/push-roadcraft-2-0.md`.

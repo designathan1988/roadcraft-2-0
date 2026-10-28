@@ -345,3 +345,39 @@ shown to the owner before any fix), D fixes one cause at a time, each proven by 
     tiles arrive) and `hitch:draw/Render` (three's render, 624 ms in slow frames).
 - Phases 2-4: not started.
 
+
+
+## Moved from STATE.md on 2026-10-28 (stale: the code-graph mission was reverted with 7d424a23)
+
+## CURRENT MISSION: the frame contracts by the code graph (the owner, 2026-10-27 night)
+`node scripts/codegraph/rules.mjs [--list] [--ceil]` checks what `src/main.ts:frame` reaches: c an upload outside the queue
+(`uploads.ts` drainUploads/drainWrites/drainWarm), d a scene walk or recompile, e a loop over a whole-map collection, f a material made or
+needsUpdate outside the compile gate, g a read that waits for the GPU. Goal: all five at ZERO (exceptions only in
+`scripts/codegraph/exceptions.json`: effects' fixed small uploads, the instruments), each fix citing its chain and file:line, `--ceil`,
+commit per item, the rules' output printed in the chat at the start and the end.
+- Start: c 68, d 79, e 15, f 32, g 1 (`reports/codegraph/rules-start.txt`).
+- Now (c2be8794): c 0, d 0, e 5, f 0, g 0; ceilings {c 0, d 0, e 5, f 0, g 0}.
+- Left in e (whole-map passes run when the diary cannot say what changed): renderer `plantAll` (doc.trees), `trafficMapOf`
+  (SimClient.load sends the map whole to the sim), `PlacedProduct.allKeys` / `BarrierProduct.allKeys` (the Derived spine's whole path;
+  their chain went through RoadTop, check `--list` for the one left), `SurfaceInputs.rebuildAll`, `TileIndex.fileAll`, economy `priceAll`.
+- Done in e: ragdoll solids by cell (`world/solids.ts`), the lots overlay always round the view (`LotTool.overlay` needs a view),
+  the highest road over the screen's ground only (`RoadTop.heightIn`, `main.ts` surfaceTop).
+- Done in c: the upload queue in `uploads.ts`: `sendRange`/`sendSpan`/`sendWhole` (what arrived, `UPLOAD_BYTES` a frame), `sendThisFrame`
+  (the frame's own state, counted first), `sendCopy` (copies; `thisFrame` for a batch's packed indices), `drainWrites` once a frame before
+  the draw (`renderer.ts`); new textures handed to `queueUpload`; palettes: `sendPalettes` before the drain, `renderPalettes` after. Specs
+  that read what was sent call `tests/render/support/drained.ts` first.
+- Done in d: the scene is a still tree (`stillTree.ts` holdStill(scene)); whatever moves as an object calls `updateMatrix()` where it moves.
+
+## BROKEN / TO WATCH (the owner reported, 2026-10-27 night: "new roads do not show")
+- Found by reading: `GpuBatchedMesh.compact` sends its packed indices later (bbbfadf7); a growth right after a packing
+  (`setGeometrySize`, the far road batches `networkFarRoads.ts` / `farBlockBatches.ts`, `shellBatch.ts`) copied the index buffer before
+  they were in it and the old buffer took them away: batches drawn with no triangles. Fixed (56f77c1a, 7aeaf0d9: the unsent indices move
+  to the fresh buffer). Also found and fixed: the queue held what arrived behind the frame's own state, one array a frame (3b20d820),
+  and capped writes to arrays already drawn (c2be8794: every write now sent before the draw, drained again right before post.render).
+  NOT confirmed in the game. If roads still do not show, read next: the road paint tables (`roadPaint.ts` sendTexels
+  / dataTable now queued), the queue's order (`drainWrites`), the still scene (`stillTree.ts`).
+- Specs failing that the mission did not touch (files unchanged): buildingsVisibleSame, cellAffinity, interiorSolids, surfaceReads x2,
+  editor/cityTiles, ui/decimals (main.ts toFixed), scale/census/sceneCensus.
+- Uncommitted, not mine to commit now: `.claude/settings.json` (owner), `scripts/lib/flightRecorder.mjs`, `scripts/stalls*.mjs` (the
+  cancelled stall mission's tools).
+

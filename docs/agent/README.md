@@ -5,6 +5,10 @@ session knows what to do, where the work stands, and how the owner wants it done
 user's own Claude files (the owner's order, 2026-10-27: "TUDO DEVE FICAR REGISTRADO DENTRO DO PROJETO").
 
 ## Read first, in this order
+0. `docs/agent/orders.md`: the owner's orders word for word, newest last, written by `.claude/hooks/orders.cjs` at every prompt and printed
+   (newest first) at every session start and compaction. They stand above any summary of the conversation.
+0b. `docs/agent/work.md`: the task in hand's notebook, written at every step (read, found, next); `.claude/hooks/resume.cjs` prints
+   after a compaction where the work stood, read from the conversation on disk.
 1. `docs/agent/STATE.md`: where the work stands (and `docs/agent/BACKLOG.md`: what was found on the way, to do after the task in hand) - the standing orders, the root causes found, what is done, what is next.
 2. This file's rules below.
 3. `docs/agent/memory/*.md`: one file per rule or fact, each with its why and how to apply (index below).

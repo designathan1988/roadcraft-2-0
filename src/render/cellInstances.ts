@@ -491,6 +491,157 @@ interface CellNode {
   readonly wide: Float32Array | null;
 }
 
+/** Integer cell coordinates back from `cellKey`. */
+const cellOfKey = (key: number): readonly [number, number] => [Math.floor(key / 0x2000000) - 0x1000000, (key % 0x2000000) - 0x1000000];
+
+/** A layer as the shared walk drives it (`cullTogether`): its leaves, and its own test of one of them. */
+interface Culler {
+  readonly leaves: ReadonlyMap<number, CellNode>;
+  /** Culled by the walk in progress: its frame's view taken (`cull`), its leaves visited by the shared walk, its levels laid at its end. */
+  pending: boolean;
+  /** The margin its things are tested with (`createCellInstances`). */
+  readonly margin: number;
+  /** Its own test of one of its leaves against the planes of `mask` still unsettled (`visit`): exact for any mask that holds its own. */
+  visitLeaf(leaf: CellNode, mask: number): void;
+  /** Its levels laid from the walk just made (`reconcile`). */
+  finish(): void;
+}
+
+/** A node of the shared tree: bounds of every layer's leaves under it (grown, never shrunk until it is made again); a leaf lists them. */
+interface SharedNode {
+  x: number; y: number; z: number; r: number;
+  readonly children: (SharedNode | null)[] | null;
+  readonly entries: { readonly owner: Culler; readonly leaf: CellNode }[] | null;
+}
+
+/**
+ * ONE WALK OF THE VIEW FOR EVERY LAYER (`cullTogether`): the 50 m cells of every layer kept thing by thing filed in one tree, the view's
+ * frustum tested once a node for all of them, each layer's own leaves then tested by the layer as its own walk did. DO NOT walk the view
+ * again for each layer: furniture, signs, barriers, transit, five plant layers, elements and gardens each walked their own tree from its
+ * roots at every frame of a move, the same nodes against the same planes (`docs/agent/optimization-solution.md`, step 1).
+ * The shared nodes hold every layer's leaves, grown by the widest margin culled: a node they settle inside or outside settles every
+ * layer's (each layer's spheres lie in the shared ones, `growInto`; a margin's sphere moved half of it from the sun and grown by half holds
+ * every smaller margin's), and a plane they leave unsettled is tested again by the layer at its leaf: what each layer draws is what its own
+ * walk drew, in the same order (one tree shape, `LEVELS` and `CELL`, roots in key order).
+ */
+const shared = {
+  roots: new Map<number, SharedNode>(),
+  order: [] as SharedNode[],
+  leaves: new Map<number, SharedNode>(),
+  owners: new Set<Culler>(),
+  /** A layer let leaves go (`refile`, `dispose`): the tree made again from every layer's leaves before the next shared walk. */
+  stale: false,
+};
+const sharedNode = (leaf: boolean): SharedNode => ({ x: 0, y: 0, z: 0, r: -1, children: leaf ? null : [null, null, null, null], entries: leaf ? [] : null });
+const sharedLeafAt = (ix: number, iz: number): SharedNode => {
+  const key = cellKey(ix, iz);
+  const leaf = shared.leaves.get(key);
+  if (leaf) return leaf;
+  const rootKey = cellKey(ix >> LEVELS, iz >> LEVELS);
+  let node = shared.roots.get(rootKey);
+  if (!node) {
+    shared.roots.set(rootKey, node = sharedNode(false));
+    shared.order = [...shared.roots.keys()].sort((a, b) => a - b).map((k) => shared.roots.get(k)!);
+  }
+  for (let level = LEVELS; level > 0; level--) {
+    const quadrant = ((ix >> (level - 1)) & 1) | (((iz >> (level - 1)) & 1) << 1);
+    const children: (SharedNode | null)[] = node.children!;
+    node = children[quadrant] ??= sharedNode(level === 1);
+  }
+  shared.leaves.set(key, node);
+  return node;
+};
+/** A layer's leaf at (ix, iz) filed in the shared tree. */
+const sharedEnter = (owner: Culler, ix: number, iz: number, leaf: CellNode): void => {
+  sharedLeafAt(ix, iz).entries!.push({ owner, leaf });
+};
+/** The shared leaf at (ix, iz) and its ancestors grown to hold a layer's leaf there. */
+const sharedGrow = (ix: number, iz: number, leaf: CellNode): void => {
+  if (leaf.r < 0) return;
+  let node = shared.roots.get(cellKey(ix >> LEVELS, iz >> LEVELS))!;
+  growInto(node, leaf.x, leaf.y, leaf.z, leaf.r);
+  for (let level = LEVELS; level > 0; level--) {
+    node = node.children![((ix >> (level - 1)) & 1) | (((iz >> (level - 1)) & 1) << 1)]!;
+    growInto(node, leaf.x, leaf.y, leaf.z, leaf.r);
+  }
+};
+const rebuildShared = (): void => {
+  shared.roots.clear();
+  shared.leaves.clear();
+  shared.order = [];
+  for (const owner of shared.owners) {
+    for (const [key, leaf] of owner.leaves) {
+      if (leaf.r < 0) continue;
+      const [ix, iz] = cellOfKey(key);
+      sharedEnter(owner, ix, iz, leaf);
+      sharedGrow(ix, iz, leaf);
+    }
+  }
+  shared.stale = false;
+};
+
+/** The walk in progress (`cullTogether`): the view every layer culls by, the layers that joined it in their order, and its margin's reach. */
+interface Together { frustum: Frustum | null; view: Matrix4 | null; readonly queued: Culler[] }
+const walking = { together: null as Together | null };
+const sharedWalk = { frustum: null as Frustum | null, keep: null as Box3 | null, rx: 0, ry: 0, rz: 0, rr: 0 };
+const sharedProbe = new Sphere();
+const sharedVisit = (node: SharedNode, mask: number): void => {
+  if (node.r < 0) return;
+  let inner = mask;
+  if (mask !== 0) {
+    inner = planeMask(sharedWalk.frustum!, node.x + sharedWalk.rx, node.y + sharedWalk.ry, node.z + sharedWalk.rz, node.r + PAD + sharedWalk.rr, mask);
+    if (inner < 0) {
+      // Off the frame but under a cascade: each layer's leaves tested against it by the layer (`visit`).
+      if (!sharedWalk.keep) return;
+      sharedProbe.center.set(node.x, node.y, node.z);
+      sharedProbe.radius = node.r + PAD;
+      if (!sharedWalk.keep.intersectsSphere(sharedProbe)) return;
+      inner = ALL_PLANES;
+    }
+  }
+  const children = node.children;
+  if (children) {
+    for (let c = 0; c < children.length; c++) { const child = children[c]; if (child) sharedVisit(child, inner); }
+    return;
+  }
+  const entries = node.entries!;
+  for (let e = 0; e < entries.length; e++) { const entry = entries[e]!; if (entry.owner.pending) entry.owner.visitLeaf(entry.leaf, inner); }
+};
+
+/**
+ * The layers' culls made in `cull` walked as one: each layer's `cull` called inside takes the frame's view and waits; the view is walked
+ * once for all of them at the end (`sharedVisit`), then each lays its levels in the order it was called. A layer culled by another view
+ * inside, or outside any `cullTogether`, walks its own tree as before.
+ */
+export function cullTogether(cull: () => void): void {
+  if (walking.together) throw new Error('cullTogether: already inside one');
+  const walk: Together = { frustum: null, view: null, queued: [] };
+  walking.together = walk;
+  try {
+    cull();
+    walking.together = null;
+    if (walk.queued.length === 0) return;
+    if (shared.stale) rebuildShared();
+    const frustum = walk.frustum!;
+    let margin = 0;
+    for (const owner of walk.queued) margin = Math.max(margin, owner.margin);
+    sharedWalk.frustum = frustum;
+    sharedWalk.keep = (frustum as KeptFrustum).keep ?? null;
+    // The widest margin's reach (`createCellInstances` cull): it holds every layer's.
+    if (shadowSun.known && margin > 0) {
+      sharedWalk.rx = -shadowSun.x * margin / 2; sharedWalk.ry = -shadowSun.y * margin / 2; sharedWalk.rz = -shadowSun.z * margin / 2;
+      sharedWalk.rr = margin / 2;
+    } else { sharedWalk.rx = sharedWalk.ry = sharedWalk.rz = 0; sharedWalk.rr = margin; }
+    for (const root of shared.order) sharedVisit(root, ALL_PLANES);
+  } finally {
+    walking.together = null;
+    sharedWalk.frustum = null;
+    sharedWalk.keep = null;
+    for (const owner of walk.queued) owner.pending = false;
+  }
+  for (const owner of walk.queued) owner.finish();
+}
+
 export function createCellInstances(kindSpecs: readonly KindSpec[], format: SlotFormat, margin: number): CellInstances {
   const stride = format.stride;
   if (stride < 5 || stride > 8) throw new Error(`createCellInstances: a pose of ${stride} floats (5 to 8 fit two vec4s)`);
@@ -531,6 +682,9 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
   const roots = new Map<number, CellNode>();
   let rootOrder: CellNode[] = [];
   const leaves = new Map<number, CellNode>();
+  /** This layer in the shared walk (`cullTogether`): its leaves filed in the shared tree as they are made (`leafAt`). */
+  const culler: Culler = { leaves, pending: false, margin, visitLeaf: (leaf, mask) => visit(leaf, mask), finish: () => finish() };
+  shared.owners.add(culler);
   /** Leaves grown since the last `update`: their ancestors grown, their slots put in order, once at its end. */
   const grown = new Set<number>();
   const emptyNode = (leaf: boolean): CellNode => ({
@@ -556,6 +710,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
       node = children[quadrant] ??= emptyNode(level === 1);
     }
     leaves.set(key, node);
+    sharedEnter(culler, ix, iz, node);
     return node;
   };
   const growNode = (node: CellNode, x: number, y: number, z: number, r: number): void => growInto(node, x, y, z, r);
@@ -576,12 +731,14 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
     for (const key of grown) {
       const leaf = leaves.get(key)!;
       for (const k of kinds) if (sorted[k.index]) { const picks = k.picks; leaf.slots![k.index]!.sort((a, b) => picks[a]! - picks[b]! || a - b); }
-      const ix = Math.floor(key / 0x2000000) - 0x1000000, iz = (key % 0x2000000) - 0x1000000;
+      const [ix, iz] = cellOfKey(key);
       let node = roots.get(cellKey(ix >> LEVELS, iz >> LEVELS))!;
       for (let level = LEVELS; level > 0; level--) {
         growNode(node, leaf.x, leaf.y, leaf.z, leaf.r);
         node = node.children![((ix >> (level - 1)) & 1) | (((iz >> (level - 1)) & 1) << 1)]!;
       }
+      // The shared tree's nodes over it too (`cullTogether`), unless it is made again before the next walk.
+      if (!shared.stale) sharedGrow(ix, iz, leaf);
     }
     grown.clear();
   };
@@ -614,6 +771,8 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
     for (const kind of kinds) for (let i = 0; i < kind.used; i++) if (kind.spheres[i * 4 + 3] !== -Infinity) file(kind, i);
     // The leaves no slot came back to, and the roots left with none, let go.
     for (const [key, leaf] of leaves) if (leaf.r < 0) leaves.delete(key);
+    // The shared tree held the leaves let go and the bounds of what moved: made again before its next walk.
+    shared.stale = true;
     let rootsLeft = false;
     for (const [key, root] of roots) if (pruned(root)) { roots.delete(key); rootsLeft = true; }
     if (rootsLeft) rootOrder = [...roots.keys()].sort((a, b) => a - b).map((k) => roots.get(k)!);
@@ -1164,7 +1323,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
   /** The meshes made, listed again only when one is made (`makeMesh`; VEG-11: read each frame for the gardens). */
   let meshList: InstancedMesh[] | null = null;
   const meshes = (): InstancedMesh[] => meshList ??= kinds.flatMap((k) => k.meshes.flatMap((s) => (s.mesh ? [s.mesh] : [])));
-  return {
+  const handle: CellInstances = {
     get meshes() { return meshes(); },
     get orderStats() { return orderStats; },
     get triangles() {
@@ -1238,6 +1397,35 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
       }
     },
     cull(frustum, view) {
+      // Joined the walk in progress already (`cullTogether`): its view taken once.
+      if (culler.pending) return;
+      if (!prepare(frustum, view)) return;
+      // Inside `cullTogether` for its view: walked with every other layer at its end, then laid (`finish`).
+      const walk = walking.together;
+      if (walk && (walk.frustum === null || (walk.frustum === frustum && walk.view === view))) {
+        walk.frustum = frustum;
+        walk.view = view;
+        walk.queued.push(culler);
+        culler.pending = true;
+        return;
+      }
+      for (const root of rootOrder) visit(root, ALL_PLANES);
+      finish();
+    },
+    dispose() {
+      shared.owners.delete(culler);
+      shared.stale = true;
+      for (const k of kinds) for (const s of k.meshes) { s.uncast?.(); s.uncast = null; dropCopies(s); }
+      for (const mesh of meshes()) {
+        mesh.dispose();
+        letGo(mesh.geometry);
+      }
+    },
+  };
+  return handle;
+
+  /** The frame's view taken (`cull`): the kinds to cull marked, the view's numbers set for `visit`; false when no kind is culled. */
+  function prepare(frustum: Frustum, view: Matrix4): boolean {
       // The sun moved (a step of the cascades' sun): the margins point elsewhere, every kind culled again.
       const sunMoved = shadowSun.known !== culledSun.known || shadowSun.x !== culledSun.x || shadowSun.y !== culledSun.y || shadowSun.z !== culledSun.z;
       if (!culledFor || !culledFor.equals(view) || culledHalf !== screen.half || (sunMoved && margin > 0)) {
@@ -1278,7 +1466,7 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
         }
         k.spec.levels?.view?.(view, culledHalf);
       }
-      if (!any) return;
+      if (!any) return false;
       const e = view.elements;
       perUnitAtOne = Math.hypot(e[1]!, e[5]!, e[9]!) * culledHalf;
       w0 = e[3]!; w1 = e[7]!; w2 = e[11]!; w3 = e[15]!;
@@ -1296,7 +1484,11 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
         reachX = -shadowSun.x * margin / 2; reachY = -shadowSun.y * margin / 2; reachZ = -shadowSun.z * margin / 2;
         reachR = margin / 2;
       } else { reachX = reachY = reachZ = 0; reachR = margin; }
-      for (const root of rootOrder) visit(root, ALL_PLANES);
+      return true;
+  }
+
+  /** The levels laid from the walk just made (its own, or the shared one's, `cullTogether`). */
+  function finish(): void {
       cullFrustum = null;
       nearBox = keepBox;
       keepBox = null;
@@ -1312,13 +1504,5 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
         }
       }
       nearBox = null;
-    },
-    dispose() {
-      for (const k of kinds) for (const s of k.meshes) { s.uncast?.(); s.uncast = null; dropCopies(s); }
-      for (const mesh of meshes()) {
-        mesh.dispose();
-        letGo(mesh.geometry);
-      }
-    },
-  };
+  }
 }
