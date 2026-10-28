@@ -85,6 +85,19 @@ must be built. No measuring, no probes, no tests: the code is the evidence. Keep
   no allow rule lifts it: https://code.claude.com/docs/en/permission-modes). Fixed: `git-gate.cjs` and `acceptance-lock.cjs` refuse only
   a subagent (`agent_id` in the hook input: https://code.claude.com/docs/en/hooks); the main session commits with no unlock file.
 
+## The goal (the owner, 2026-10-28): build section 4 of the solution, steps 0-6, in order; photos once at the end
+- Step 0 DONE: acc7debf (published b978da9b): the layers' shared walk, the solution document, the spec.
+- Step 1 (buildings) DONE: read partCells.ts whole (choose, runsOf, levelAt, perMetre, castInto, shadowLevel, setFaded, make) and
+  layer.ts cullDetails/castInto. Finding: `PartCell.choose` is a level choice for EVERY sub-cell, not a frustum cull (three culls the
+  run meshes, https://threejs.org/docs/#api/en/core/Object3D.frustumCulled); runs merge across sub-cells by level (partCells.ts
+  runsOf), so choosing only the sub-cells in view would change merged runs' levels: visible. Done instead, exactly: `choose` notes
+  every bar it compares a metre's pixels with (each level's error, the bars, the picture, the shells' far program, the new hold's
+  bars) as an eye distance; the distance to a box is 1-Lipschitz in the eye, so while the eye stays nearer than the nearest bar
+  (`slack`) with the same scale, texel and pictures, no level can turn: the walk of bands x 64 sub-cells is skipped. `castInto` is
+  per band with its level cached by texel (no per-sub-cell walk): left as it is.
+  Spec: partCells.spec "a cell chosen again only where a level can turn": grown town, detail and facade level, 400-view flights,
+  pictures taken mid-flight and from the start: every shown run equal to a twin choosing at each view. Mutations: slack x4 fails;
+  a skip turned into a throw fails (the flight does skip).
+
 ## Next
-1. Commit step 1 (needs the gate unlock: refused to me by the auto-mode classifier).
-2. The buildings' part levels on the shared walk / by change (`partCells.ts` choose, `castInto`), then step 2 (multi-draw).
+1. Step 2: multi-draw (one draw per kind x level x pass; partCells.ts stops making a mesh per run).

@@ -235,3 +235,76 @@ describe("the shell's parts of a grown town's cells", () => {
     });
   }
 });
+
+describe('a cell chosen again only where a level can turn', () => {
+  const town = grownTown();
+  const boxes = kitBoxes(kit);
+  const detailParts = PART_KINDS.filter((p) => DETAIL_PARTS.has(p));
+  /** What a cell draws: each shown run's kind, place in its band, level (its posed copy's model), count, material and program. The runs hidden
+   *  are not drawn; when their meshes are given back counts the cell's choices (`evictStale`), which the slack makes fewer. */
+  const picture = (cell: PartCell): string[] => cell.group.children.filter((o): o is InstancedMesh => o instanceof InstancedMesh && o.userData['shadowOnly'] !== true && o.visible)
+    .map((mesh) => {
+      const kind = mesh.name.slice('building-'.length) as (typeof PART_KINDS)[number];
+      const material = Array.isArray(mesh.material) ? mesh.material.map((m) => m.uuid).join('+') : mesh.material.uuid;
+      return `${mesh.name}@${String(mesh.userData['first'])}:${mesh.visible ? 'shown' : 'hidden'}:${levelOf(kit.screen[kind].levels, mesh)}:${mesh.count}:${material}:${String(mesh.userData['far'])}:${mesh.renderOrder}`;
+    }).sort();
+
+  /** The kit's pictures taken or not (a renderer takes them, `takeWaitingPictures`; none here, as `partPictures.spec.ts`). */
+  const taken = (on: boolean): void => { for (const p of kit.pictures.of.values()) p.ready = () => on; };
+  for (const far of [false, true]) {
+    it(`draws at every view of a flight what a choice made at each view draws (${far ? 'facade level' : 'detail'})`, () => {
+      let compared = 0, turned = 0;
+      // Not taken at first, taken half way through the flight (the levels waiting for them choose again), then taken from the start.
+      for (const pictures of ['later', 'taken'] as const) {
+      taken(pictures === 'taken');
+      const byCell = new Map<string, Map<string, BuildingChunk[]>>();
+      for (const b of town) {
+        const cell = keyAt(b.x, b.y, BATCH_CELL), sub = keyAt(b.x, b.y, DETAIL_CELL);
+        let subs = byCell.get(cell);
+        if (!subs) byCell.set(cell, subs = new Map());
+        const chunk = emitChunk(b, groundAt, undefined, groundAt, undefined, far);
+        const list = subs.get(sub);
+        if (list) list.push(chunk);
+        else subs.set(sub, [chunk]);
+      }
+      for (const [key, subs] of byCell) {
+        const details = [...subs].map(([sub, chunks]) => [sub, cellArrays(chunks, { parts: detailParts, shells: false, furniture: false, ghost: false, dim: false }, boxes)] as const);
+        const filing = fileParts(key, details, partBandings(kit.screen));
+        // The cell as the game draws it, and its twin choosing at every view that differs, as before the slack.
+        const cell = new PartCell(key, filing, kit), twin = new PartCell(key, filing, kit);
+        const comma = key.indexOf(',');
+        const cx = (Number(key.slice(0, comma)) + 0.5) * BATCH_CELL, cy = (Number(key.slice(comma + 1)) + 0.5) * BATCH_CELL;
+        // A flight: steps of a few centimetres to tens of metres towards and away from the cell, jumps, a view from above, the shadows' texel changing.
+        let eye: PartView = view(cx + 900, cy - 400, 120, 0.3);
+        let last: PartView | null = null;
+        const rng = { s: 7 }, next = (): number => ((rng.s = (rng.s * 16807) % 2147483647) / 2147483647);
+        for (let step = 0; step < 400; step++) {
+          if (pictures === 'later' && step === 200) taken(true);
+          if (step % 97 === 50) eye = { ...view(cx, cy, 600), orthoPx: 0.5 + next() * 4 };
+          else if (step % 61 === 0) eye = view(cx + (next() - 0.5) * 2000, cy + (next() - 0.5) * 2000, 2 + next() * 300, next() < 0.5 ? 0.3 : 1);
+          else {
+            const pull = next() < 0.6 ? 0.04 : -0.03, size = next() < 0.5 ? next() * 0.5 : next() * 30;
+            eye = { ...eye, orthoPx: null, x: eye.x + (cx - eye.x) * pull + (next() - 0.5) * size, y: eye.y + (cy - eye.y) * pull + (next() - 0.5) * size, z: Math.max(1.5, eye.z + (next() - 0.5) * size * 0.3) };
+          }
+          cell.choose(eye);
+          if (!last || last.x !== eye.x || last.y !== eye.y || last.z !== eye.z || last.pxAtMetre !== eye.pxAtMetre || last.orthoPx !== eye.orthoPx || last.shadowTexel !== eye.shadowTexel) twin.forget();
+          const before = picture(twin);
+          twin.choose(eye);
+          const want = picture(twin);
+          if (want.join() !== before.join()) turned++;
+          expect(picture(cell), `${key} step ${step} (${pictures})`).toEqual(want);
+          compared++;
+          last = eye;
+        }
+        cell.dispose();
+        twin.dispose();
+        if (pictures === 'later') taken(false);
+      }
+      }
+      taken(false);
+      expect(compared).toBeGreaterThan(0);
+      // The flight turned levels (the comparison is not of a still picture).
+      expect(turned).toBeGreaterThan(10);
+    });
+  }
+});
