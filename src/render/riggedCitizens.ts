@@ -140,9 +140,16 @@ export function citizenLevelFor(errors: readonly number[], zoom: number): number
   return citizenBandAt(zoom) === 0 ? 0 : citizenLevelOf(errors, BODY_EXTENT * zoom);
 }
 
-/** The level of one figure whose 1.9 m (`BODY_EXTENT`) stands `pixels` canvas pixels tall on the screen, `ratio` of them a CSS pixel, at `zoom`. */
+/** CSS pixels a body stands tall at the zoom that shows faces (`citizenBandAt` 0): a figure at least this tall keeps its whole body and face. */
+const FACE_PIXELS = BODY_EXTENT * perM(20);
+
+/** The level of one figure whose 1.9 m (`BODY_EXTENT`) stands `pixels` canvas pixels tall on the screen, `ratio` of them a CSS pixel, at `zoom`:
+ *  by its own size alone. While the view shows faces, the whole body (and its face) for the figures standing as tall as a body at that zoom.
+ *  DO NOT give every figure level 0 by the view's zoom: a street view drew the figures far down the street, a pixel or two tall, at their
+ *  whole body and face (the F7 audit, MISSION.md 3b: one form by the figure's own size). */
 export function citizenLevelOfFigure(errors: readonly number[], pixels: number, ratio: number, zoom: number): number {
-  return citizenBandAt(zoom) === 0 ? 0 : citizenLevelOf(errors, pixels / ratio);
+  const css = pixels / ratio;
+  return citizenBandAt(zoom) === 0 && css >= FACE_PIXELS ? 0 : citizenLevelOf(errors, css);
 }
 
 /** Who a figure drawn by `drawClip` is and with whom: the casting context without the place. */
