@@ -19,8 +19,8 @@ import { framesPoseInto, newPose } from '@sim/pose';
 import { solidsOf } from '@world/solids';
 import { floorHeight } from '@world/buildings/foundation';
 import { roofHeightAt, roofRise, volumeCorners, volumeElevation, worldToLocal } from '@world/buildings/geometry';
-import { elementRing } from '@world/buildings/elements';
-import type { Building, BuildingId } from '@world/buildings/types';
+import { elementRing, onGround } from '@world/buildings/elements';
+import type { Building, BuildingId, ElementKind } from '@world/buildings/types';
 import { POLE_ARM_DROP, POLE_ARM_SPAN, POLE_HEIGHT, POLE_LAMP_REACH, POLE_PRIMARY } from '@world/utilities';
 import { TUNED_UNIT, m } from '@world/units';
 import type { AgentMeshes } from './agents';
@@ -90,6 +90,15 @@ export interface PlayEffects {
   flingOccupants(list: readonly Occupant[]): void;
   forgetRuin(id: number): void;
   dispose(): void;
+}
+
+/** The parts of a lot that block a body at their trunk or post, by their radius. */
+const POST_ELEMENTS: Readonly<Partial<Record<ElementKind, number>>> = { tree: m(0.25), lamp: m(0.12) };
+
+/** A post, a trunk or a piece of furniture of radius `r` standing at (x, y) on the ground at `ground`, as a body meets it: a pole or a trunk stands tall, street furniture is low. */
+function postWall(x: number, y: number, r: number, ground: number): RagdollWall {
+  const ring = Array.from({ length: 8 }, (_, i) => ({ x: x + Math.cos(i * Math.PI / 4) * r, y: y + Math.sin(i * Math.PI / 4) * r }));
+  return { ring, top: ground + (r < m(0.2) ? m(6) : r < m(0.35) ? m(4) : m(0.9)) };
 }
 
 /** A tracer's life, s, and how many can be in the air at once (the oldest is taken again past it). */
@@ -243,6 +252,12 @@ export function createPlayEffects(ctx: PlayEffectsContext): PlayEffects {
         }
         for (const e of b.elements ?? []) {
           if ((e.kind === 'wall' || e.kind === 'fence' || e.kind === 'hedge') && e.z <= 0.01) out.push({ ring: elementRing(b, e), top: floor + e.h });
+          // Its lot's trees and lamps block at their trunk or post (`POST_ELEMENTS`), on the ground under them.
+          const post = POST_ELEMENTS[e.kind];
+          if (post === undefined || !onGround(e)) continue;
+          const ring = elementRing(b, e);
+          const cx = (ring[0]!.x + ring[2]!.x) / 2, cy = (ring[0]!.y + ring[2]!.y) / 2;
+          out.push(postWall(cx, cy, post, ctx.renderedHeightAt(cx, cy)));
         }
       }
       // Everything else standing there (the player, 2026-10-06: a body goes through nothing)
@@ -251,9 +266,7 @@ export function createPlayEffects(ctx: PlayEffectsContext): PlayEffects {
         for (const s of solidsOf(doc).near(x, y, reach)) {
           const ground = ctx.renderedHeightAt(s.kind === 'disc' ? s.c.x : s.a.x, s.kind === 'disc' ? s.c.y : s.a.y);
           if (s.kind === 'disc') {
-            const ring = Array.from({ length: 8 }, (_, i) => ({ x: s.c.x + Math.cos(i * Math.PI / 4) * s.r, y: s.c.y + Math.sin(i * Math.PI / 4) * s.r }));
-            // A pole or a trunk stands tall; street furniture is low.
-            out.push({ ring, top: ground + (s.r < m(0.2) ? m(6) : s.r < m(0.35) ? m(4) : m(0.9)) });
+            out.push(postWall(s.c.x, s.c.y, s.r, ground));
           } else {
             const dx = s.b.x - s.a.x, dy = s.b.y - s.a.y, l = Math.hypot(dx, dy) || 1;
             const nx = (-dy / l) * s.r, ny = (dx / l) * s.r, tx = (dx / l) * s.r, ty = (dy / l) * s.r;
