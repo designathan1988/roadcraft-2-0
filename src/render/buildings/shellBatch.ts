@@ -232,7 +232,8 @@ export class ShellBatch {
   /** Room in a batch for a geometry and an instance: its live geometries packed into storage a quarter more than they and the new one hold (the drawn pieces kept, the holes of cells let go gone: `GpuBatchedMesh.compact`; doubling left up to half the reserved space empty, tens of MB of arrays, measured 2026-10-20). */
   private ensure(batch: Batch, vertices: number, indices: number): void {
     const mesh = batch.mesh;
-    if (vertices > mesh.unusedVertexCount || indices > mesh.unusedIndexCount) {
+    // Room at the end or where a cell let go stood (`GpuBatchedMesh.fits`): DO NOT grow or pack the batch while that room stands empty.
+    if (!mesh.fits(vertices, indices)) {
       const used = mesh.usedCounts();
       const storedVertices = batch.vertices - mesh.unusedVertexCount, storedIndices = batch.indices - mesh.unusedIndexCount;
       // Packed only when the holes are worth it (a quarter of what lives): packing reads the indices back from the GPU, growing does not.

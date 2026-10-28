@@ -1,4 +1,4 @@
-import { BatchedMesh, type BufferAttribute, BufferGeometry, type Camera, GLBufferAttribute, type Group, type Intersection, type InterleavedBufferAttribute, type Material, type Raycaster, type Scene, type WebGLRenderer } from 'three';
+import { BatchedMesh, type BufferAttribute, BufferGeometry, type Camera, DataTexture, GLBufferAttribute, type Group, type Intersection, type InterleavedBufferAttribute, type Material, Matrix4, type Raycaster, RedIntegerFormat, type Scene, UnsignedIntType, type WebGLRenderer } from 'three';
 
 /** A BATCHED MESH WHOSE BUFFERS LIVE ON THE GPU ONLY */
 // three's BatchedMesh keeps every attribute and its index as arrays of the batch's whole size and sends the ranges it writes from
@@ -32,7 +32,69 @@ interface Inner {
   _visibilityChanged: boolean;
   _validateGeometry(geometry: BufferGeometry): void;
   _instanceInfo: { visible: boolean; active: boolean }[];
+  _maxInstanceCount: number;
+  /** The draw list three's listing writes and its draw reads (r186 `onBeforeRender`, `WebGLRenderer` setProgram and renderBufferDirect). */
+  _indirectTexture: DataTexture;
+  _multiDrawStarts: Int32Array;
+  _multiDrawCounts: Int32Array;
+  _multiDrawCount: number;
+  _multiDrawBytesPerElement: number;
 }
+
+/** One camera's draw list (`GpuBatchedMesh.onBeforeRender`): what three's listing wrote for it, and what it was listed for. */
+interface DrawList {
+  readonly texture: DataTexture;
+  readonly starts: Int32Array;
+  readonly counts: Int32Array;
+  /** The instance capacity it was made for (three's `_maxInstanceCount`). */
+  readonly capacity: number;
+  count: number;
+  bytes: number;
+  /** The batch's version it was listed at (`listVersion`); -1: listed with instances hidden for the camera, made again at its next draw. */
+  version: number;
+  /** The camera's projection and view times the batch's world matrix it was listed with, and the material's two settings the listing reads. */
+  readonly view: Float64Array;
+  transparent: boolean;
+  wireframe: boolean;
+}
+
+/** A range of storage a deleted geometry left free: its first vertex or index, and how many. */
+type Free = [start: number, count: number];
+
+/** The first range of `free` holding `count`: its start, taken (the rest of the range left free); -1 when none does. */
+function takeFree(free: Free[], count: number): number {
+  if (count <= 0) return -1;
+  for (let i = 0; i < free.length; i++) {
+    const range = free[i]!;
+    if (range[1] < count) continue;
+    const start = range[0];
+    if (range[1] === count) free.splice(i, 1);
+    else { range[0] += count; range[1] -= count; }
+    return start;
+  }
+  return -1;
+}
+
+/** Whether a range of `free` holds `count`. */
+function holdsFree(free: readonly Free[], count: number): boolean {
+  return count > 0 && free.some((range) => range[1] >= count);
+}
+
+/** `count` from `start` given back to `free`, kept by start and joined with the ranges it touches. */
+function giveFree(free: Free[], start: number, count: number): void {
+  if (count <= 0) return;
+  let i = 0;
+  while (i < free.length && free[i]![0] < start) i++;
+  free.splice(i, 0, [start, count]);
+  const next = free[i + 1];
+  if (next && start + count === next[0]) { free[i]![1] += next[1]; free.splice(i + 1, 1); }
+  const before = free[i - 1];
+  if (before && before[0] + before[1] === start) { before[1] += free[i]![1]; free.splice(i, 1); }
+}
+
+/** Cameras a batch keeps a list for (the colour pass, the sun's cascades, a few passes more); past them the least recently drawn let go. */
+const MOST_LISTS = 8;
+const listView = new Matrix4();
 
 /** The context the batches write with, given by the renderer (`renderer.ts`); none in tests, where a batch keeps three's arrays. */
 let context: WebGL2RenderingContext | null = null;
@@ -85,25 +147,97 @@ export class GpuBatchedMesh extends BatchedMesh {
     super(maxInstanceCount, maxVertexCount, maxIndexCount, material);
   }
 
-  /** three's listing of the multi-draw (frustum, visibility), with the instances hidden from this camera left out of it. */
+  /** Each camera's draw list, least recently drawn first (`onBeforeRender`). */
+  private readonly lists = new Map<Camera, DrawList>();
+  /** Counts the changes of what the listing reads (instances, their visibility and matrices, geometries and their places): three flags each with `_visibilityChanged`. */
+  private listVersion = 0;
+
+  /**
+   * THE MULTI-DRAW LIST, ONE A CAMERA, MADE AGAIN ONLY WHEN IT CHANGES: three's listing (frustum, visibility; r186 `onBeforeRender`) writes
+   * the draw arrays and the indirect texture of the camera it is drawn from, and ends with the texture sent again (`needsUpdate`). Each
+   * camera (the colour pass, each sun cascade) gets its own arrays and texture, listed again only when the batch changed or the camera's
+   * view did; otherwise its list is drawn as it stands and nothing is sent. DO NOT share one list between the cameras: each pass of a frame
+   * listed every instance again and sent its texture, ~400 a second with the view still (`lab-reports/move-*.md`, 2026-10-27).
+   * The instances hidden from the colour camera (`colourHidden`) are left out of its list alone, made again at its next draw.
+   */
   override onBeforeRender(renderer: WebGLRenderer, scene: Scene | null, camera: Camera, geometry: BufferGeometry, material: Material, group: Group | null): void {
+    const inner = this.inner;
+    if (inner._visibilityChanged) this.listVersion++;
+    const list = this.listFor(camera);
+    inner._indirectTexture = list.texture;
+    inner._multiDrawStarts = list.starts;
+    inner._multiDrawCounts = list.counts;
     const hide = this.colourHidden;
+    const hiding = hide !== null && hide.camera === camera && hide.ids.length > 0;
+    listView.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).multiply(this.matrixWorld);
+    const view = listView.elements;
+    const wireframe = (material as Material & { wireframe?: boolean }).wireframe === true;
+    let same = !hiding && list.version === this.listVersion && list.transparent === material.transparent && list.wireframe === wireframe
+      && !(camera as Camera & { isArrayCamera?: boolean }).isArrayCamera;
+    for (let i = 0; same && i < 16; i++) if (list.view[i] !== view[i]) same = false;
+    if (same) {
+      inner._multiDrawCount = list.count;
+      inner._multiDrawBytesPerElement = list.bytes;
+      return;
+    }
+    // Listed whatever three's own settings would skip (culling and sorting off: it lists only on a change of visibility).
+    inner._visibilityChanged = true;
     // three passes no scene when it lists the draws for a shadow (r186 `BatchedMesh.onBeforeShadow`).
-    const list = (): void => super.onBeforeRender(renderer, scene as Scene, camera, geometry, material, group as Group);
-    if (hide === null || hide.camera !== camera || hide.ids.length === 0) { list(); return; }
-    const info = this.inner._instanceInfo, flipped = this.flipped;
-    for (const id of hide.ids) {
-      const one = info[id];
-      if (one?.visible && one.active) { one.visible = false; flipped.push(id); }
+    const listing = (): void => super.onBeforeRender(renderer, scene as Scene, camera, geometry, material, group as Group);
+    if (!hiding || hide === null) listing();
+    else {
+      const info = inner._instanceInfo, flipped = this.flipped;
+      for (const id of hide.ids) {
+        const one = info[id];
+        if (one?.visible && one.active) { one.visible = false; flipped.push(id); }
+      }
+      try {
+        listing();
+      } finally {
+        for (const id of flipped) info[id]!.visible = true;
+        flipped.length = 0;
+      }
     }
-    try {
-      list();
-    } finally {
-      for (const id of flipped) info[id]!.visible = true;
-      flipped.length = 0;
-      // The next listing (another camera: a shadow cascade) made whole again, whatever three's own culling settings.
-      this.inner._visibilityChanged = true;
+    list.count = inner._multiDrawCount;
+    list.bytes = inner._multiDrawBytesPerElement;
+    list.version = hiding ? -1 : this.listVersion;
+    list.view.set(view);
+    list.transparent = material.transparent;
+    list.wireframe = wireframe;
+  }
+
+  /** The camera's list, the most recently drawn now; made (as three makes its own, r186 `_initIndirectTexture`) when it has none or its capacity is gone. */
+  private listFor(camera: Camera): DrawList {
+    const inner = this.inner;
+    const capacity = inner._maxInstanceCount;
+    let list = this.lists.get(camera);
+    if (list) this.lists.delete(camera);
+    if (!list || list.capacity !== capacity) {
+      if (list) list.texture.dispose();
+      // three's own list (made at its construction or by `setInstanceCount`) is never drawn: each draw is listed for its camera here first.
+      const own = inner._indirectTexture;
+      if (![...this.lists.values()].some((one) => one.texture === own)) own.dispose();
+      const size = Math.ceil(Math.sqrt(capacity));
+      list = {
+        texture: new DataTexture(new Uint32Array(size * size), size, size, RedIntegerFormat, UnsignedIntType),
+        starts: new Int32Array(capacity), counts: new Int32Array(capacity), capacity,
+        count: 0, bytes: 1, version: -1, view: new Float64Array(16), transparent: false, wireframe: false,
+      };
     }
+    this.lists.set(camera, list);
+    if (this.lists.size > MOST_LISTS) {
+      const [oldest, gone] = this.lists.entries().next().value!;
+      this.lists.delete(oldest);
+      gone.texture.dispose();
+    }
+    return list;
+  }
+
+  /** An instance moved: every list made again (three's `setMatrixAt` flags nothing, its listing culls by the matrices). */
+  override setMatrixAt(instanceId: number, matrix: Matrix4): this {
+    super.setMatrixAt(instanceId, matrix);
+    this.inner._visibilityChanged = true;
+    return this;
   }
 
   private get inner(): Inner {
@@ -236,9 +370,56 @@ export class GpuBatchedMesh extends BatchedMesh {
     return geometryId;
   }
 
+  /**
+   * THE ROOM A DELETED GEOMETRY LEFT, TAKEN BY THE NEXT ONE THAT FITS: three adds every geometry past the last one ever stored (r186
+   * `addGeometry`: `_nextVertexStart`, `_nextIndexStart`) and leaves a deleted one's range reserved for nobody. DO NOT append them all: a
+   * moving camera lets cells go and takes others all the time, and each new one moved the end on, the batch grown or packed again at every
+   * few cells (`shellBatch.ts` ensure: a new store and every live geometry copied) while the room the gone cells left stood empty.
+   * Vertices and indices apart, each range kept by its start and joined with its neighbours; packing (`compact`) leaves none.
+   */
+  private readonly freeVertices: Free[] = [];
+  private readonly freeIndices: Free[] = [];
+
+  /** Whether a geometry of `vertices` and `indices` fits as it stands: at the end, or in the room a deleted one left (`addGeometry`). */
+  fits(vertices: number, indices: number): boolean {
+    return (vertices <= this.unusedVertexCount || holdsFree(this.freeVertices, vertices))
+      && (indices <= this.unusedIndexCount || holdsFree(this.freeIndices, indices));
+  }
+
+  override addGeometry(geometry: BufferGeometry, reservedVertexCount = -1, reservedIndexCount = -1): number {
+    const inner = this.inner;
+    const vertices = reservedVertexCount === -1 ? geometry.getAttribute('position').count : reservedVertexCount;
+    const index = geometry.getIndex();
+    const indices = index === null ? 0 : reservedIndexCount === -1 ? index.count : reservedIndexCount;
+    const vertexAt = takeFree(this.freeVertices, vertices);
+    const indexAt = index === null ? -1 : takeFree(this.freeIndices, indices);
+    if (vertexAt < 0 && indexAt < 0) return super.addGeometry(geometry, reservedVertexCount, reservedIndexCount);
+    // three places it at its next starts: pointed at the free room for the call, the ends put back after it (a range taken from the end moves it on).
+    const vertexEnd = inner._nextVertexStart, indexEnd = inner._nextIndexStart;
+    if (vertexAt >= 0) inner._nextVertexStart = vertexAt;
+    if (indexAt >= 0) inner._nextIndexStart = indexAt;
+    try {
+      return super.addGeometry(geometry, reservedVertexCount, reservedIndexCount);
+    } catch (error) {
+      if (vertexAt >= 0) giveFree(this.freeVertices, vertexAt, vertices);
+      if (indexAt >= 0) giveFree(this.freeIndices, indexAt, indices);
+      throw error;
+    } finally {
+      if (vertexAt >= 0) inner._nextVertexStart = vertexEnd;
+      if (indexAt >= 0) inner._nextIndexStart = indexEnd;
+    }
+  }
+
   override deleteGeometry(geometryId: number): this {
+    const info = this.inner._geometryInfo[geometryId];
     this.localIndex.delete(geometryId);
-    return super.deleteGeometry(geometryId);
+    super.deleteGeometry(geometryId);
+    // Its room free for the next geometry that fits (three's delete threw if it was not a live one).
+    if (info) {
+      giveFree(this.freeVertices, info.vertexStart, info.reservedVertexCount);
+      if (info.indexStart >= 0) giveFree(this.freeIndices, info.indexStart, info.reservedIndexCount);
+    }
+    return this;
   }
 
   override setGeometrySize(maxVertexCount: number, maxIndexCount: number): void {
@@ -246,6 +427,7 @@ export class GpuBatchedMesh extends BatchedMesh {
     const inner = this.inner;
     if (!gl || !inner._geometryInitialized) {
       super.setGeometrySize(maxVertexCount, maxIndexCount);
+      this.freeWithin(maxVertexCount, maxIndexCount);
       return;
     }
     const active = inner._geometryInfo.filter((info) => info.active);
@@ -272,6 +454,18 @@ export class GpuBatchedMesh extends BatchedMesh {
     gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
     this.geometry = fresh;
     this.letGo(old);
+    this.freeWithin(maxVertexCount, maxIndexCount);
+  }
+
+  /** The free room past a smaller storage gone with it. */
+  private freeWithin(maxVertexCount: number, maxIndexCount: number): void {
+    for (const [free, most] of [[this.freeVertices, maxVertexCount], [this.freeIndices, maxIndexCount]] as const) {
+      for (let i = free.length - 1; i >= 0; i--) {
+        const range = free[i]!;
+        if (range[0] >= most) free.splice(i, 1);
+        else if (range[0] + range[1] > most) range[1] = most - range[0];
+      }
+    }
   }
 
   /** The vertices and indices the live geometries reserve: what the batch holds once its holes are packed (`compact`). three counts its
@@ -354,8 +548,19 @@ export class GpuBatchedMesh extends BatchedMesh {
     inner._nextVertexStart = nextVertex;
     inner._nextIndexStart = nextIndex;
     inner._visibilityChanged = true;
+    // Packed: no room left between the geometries.
+    this.freeVertices.length = 0;
+    this.freeIndices.length = 0;
     this.geometry = fresh;
     this.letGo(old);
+  }
+
+  /** three's own packing (the batch on its arrays, `compact` without a context): no room left between the geometries. */
+  override optimize(): this {
+    super.optimize();
+    this.freeVertices.length = 0;
+    this.freeIndices.length = 0;
+    return this;
   }
 
   /** A geometry's buffers deleted (three deletes those it registered when the geometry is disposed; deleting one twice is harmless). */
@@ -397,6 +602,9 @@ export class GpuBatchedMesh extends BatchedMesh {
     // A copy lets go of its own textures only: the buffers are its source's.
     if (this.sharing) this.geometry = new BufferGeometry();
     super.dispose();
+    // Every camera's list (three let go the one it held last).
+    for (const list of this.lists.values()) list.texture.dispose();
+    this.lists.clear();
     if (this.gl) {
       for (const buffer of this.made) this.gl.deleteBuffer(buffer);
       this.made.clear();

@@ -180,7 +180,8 @@ export class FarBlockBatches {
   /** Room for a geometry and an instance, as the shell batches make it (`shellBatch.ts` ensure): packed when the holes are a quarter of what lives. */
   private ensure(batch: Batch, vertices: number, indices: number): void {
     const mesh = batch.mesh;
-    if (vertices > mesh.unusedVertexCount || indices > mesh.unusedIndexCount) {
+    // Room at the end or where a block let go stood (`GpuBatchedMesh.fits`).
+    if (!mesh.fits(vertices, indices)) {
       const used = mesh.usedCounts();
       const storedVertices = batch.vertices - mesh.unusedVertexCount, storedIndices = batch.indices - mesh.unusedIndexCount;
       const pack = storedVertices - used.vertices > used.vertices / 4 || storedIndices - used.indices > used.indices / 4;
