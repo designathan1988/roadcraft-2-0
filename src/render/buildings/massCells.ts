@@ -33,6 +33,9 @@ const FINE_PIXELS = 0.5;
 const PAIR_REACH = 2;
 /** A cell drawn near stays near down to this share of `NEAR_PIXELS`. */
 const HYSTERESIS = 0.85;
+/** A far cell whose masses would come near at this many times the pixels they span now (and this many times the reach) is AHEAD: its level made
+ *  before the view brings it near, hidden till then, so it never swaps from its masses in view (MISSION.md 3a; Cesium's `loadSiblings`). */
+const AHEAD = 1.5;
 const DETAIL_REACH = m(1_400); // cells within 1.4 km draw the detail level itself, whatever their pixels: the player asks for no LOD there (2026-10-20)
 /** A metre's pixels under which the 1.4 km reach forces no detail: a cell there spans too few pixels for any of it to be seen (the whole map at once, ~0.1 px a metre), and building it held the opening of a large city behind tens of seconds of work no pixel showed. */
 const DETAIL_REACH_VISIBLE = 0.5;
@@ -185,6 +188,10 @@ export interface MassCells {
   pair(key: string): boolean;
   /** The cells drawn near now (what the streaming of the detail reads, `layer.ts` `landCells`). */
   nearKeys(): Iterable<string>;
+  /** The far cells the view is about to bring near (`AHEAD`), at the last `choose`: their level made ahead and kept hidden (`layer.ts` landCells). */
+  aheadKeys(): Iterable<string>;
+  /** Whether a cell ahead would come near at its full detail (L0) rather than its facade level (L1). */
+  aheadFine(key: string): boolean;
   /** Whether a cell's detail is shown (`layer.ts` streaming): a near cell keeps its mass shown until its detail lands */
   setDetailed(key: string, detailed: boolean): void;
   /** The highest point of any cell's masses (the shadow's reach over the view, `renderer.ts`); -Infinity with none. */
@@ -317,6 +324,9 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
   /** DO NOT walk every cell of the town each frame to choose */
   const nearKeys = new Set<string>();
   const detailed = new Set<string>();
+  /** The far cells about to come near (`AHEAD`), made again at each `choose`, and those of them that would come at full detail. */
+  const aheadKeys = new Set<string>();
+  const aheadFineKeys = new Set<string>();
   /** Held back by the frame's budget (`hold`). */
   let heldFar: ReadonlySet<string> = new Set(), heldCoarse: ReadonlySet<string> = new Set();
   /** How far a cell's box reaches past its square (a building over its edge), the most of any: the eye's search is grown by it. */
@@ -938,7 +948,25 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
         }
         cell.pair = pair;
         if (near !== cell.near || (near && fine) !== cell.fine) setNear(key, cell, near, fine);
+        if (!near) ahead(key, cell);
       };
+      /** A far cell the view is about to bring near: its masses would span the pixels a near cell's span at `AHEAD` times their pixels now, or it
+       *  is within `AHEAD` times the detail's reach, within `AHEAD` times the reach, and meets the view kept. Never makes a cell near. */
+      const ahead = (key: string, cell: Cell): void => {
+        if (cell.near || cell.covered || cell.massless || heldFar.has(key) || allNear === true || (allNear !== false && allNear.has(key))) return;
+        measure(eyeX, eyeY, eyeZ, pxAtMetre, orthoPx, cell.x0, cell.y0, cell.x1, cell.y1, cell.top);
+        const { perMetre, allowed, across } = seen;
+        const soon = (FAR_ERROR * perMetre * AHEAD >= allowed || (across <= DETAIL_REACH * AHEAD && perMetre >= DETAIL_REACH_VISIBLE / AHEAD && (seen.scale ?? 1) <= 1))
+          && across <= reach * AHEAD && inView(view, cell, VIEW_KEEP);
+        if (!soon) return;
+        aheadKeys.add(key);
+        // The level it comes near with: the one `decide` would give it at its pixels now. DO NOT scale this by `AHEAD`: a cell crossing the
+        // masses' bar (FAR_ERROR spanning `allowed`) comes near at its facade level (FACADE_ERROR spans less than half of that), and its
+        // detail is made with it later by `pair`; a detail asked ahead was a level the cell never showed on arrival.
+        if (FACADE_ERROR * perMetre >= (allowed / NEAR_PIXELS) * FINE_PIXELS) aheadFineKeys.add(key);
+      };
+      aheadKeys.clear();
+      aheadFineKeys.clear();
       // Those near now may go far; those named stay near.
       for (const key of [...nearKeys]) decide(key, cells.get(key)!);
       if (allNear !== true && allNear !== false) for (const key of allNear) { const cell = cells.get(key); if (cell && !cell.near) decide(key, cell); }
@@ -949,8 +977,12 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
           : Math.min(reach, (FAR_ERROR * pxAtMetre) / nearPixels);
       if (within <= 0) return;
       const r = within + overhang;
-      const i0 = Math.floor((eyeX - r) / cellSize), i1 = Math.floor((eyeX + r) / cellSize);
-      const j0 = Math.floor((eyeY - r) / cellSize), j1 = Math.floor((eyeY + r) / cellSize);
+      // The far cells looked for ahead too: within `AHEAD` times the farthest a near cell may be (those past `within` only marked ahead, never made near).
+      const ra = within * AHEAD + overhang;
+      const ni0 = Math.floor((eyeX - r) / cellSize), ni1 = Math.floor((eyeX + r) / cellSize);
+      const nj0 = Math.floor((eyeY - r) / cellSize), nj1 = Math.floor((eyeY + r) / cellSize);
+      const i0 = Math.floor((eyeX - ra) / cellSize), i1 = Math.floor((eyeX + ra) / cellSize);
+      const j0 = Math.floor((eyeY - ra) / cellSize), j1 = Math.floor((eyeY + ra) / cellSize);
       const span = (i1 - i0 + 1) * (j1 - j0 + 1);
       // Past the town's own cells (a view of the whole map): its cells, no more.
       if (!Number.isFinite(span) || span > cells.size) {
@@ -961,7 +993,10 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
         for (let j = j0; j <= j1; j++) {
           const key = keyOf(i, j);
           const cell = cells.get(key);
-          if (cell && !cell.near) decide(key, cell);
+          if (!cell || cell.near) continue;
+          // Within the farthest a near cell may be (the square looked in before): decided as before; past it, looked at for ahead alone.
+          if (i >= ni0 && i <= ni1 && j >= nj0 && j <= nj1) decide(key, cell);
+          else ahead(key, cell);
         }
       }
     },
@@ -1072,6 +1107,12 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
     nearKeys() {
       return nearKeys;
     },
+    aheadKeys() {
+      return aheadKeys;
+    },
+    aheadFine(key) {
+      return aheadFineKeys.has(key);
+    },
     setDetailed(key, on) {
       if (on !== detailed.has(key)) changed();
       if (on) detailed.add(key); else detailed.delete(key);
@@ -1136,6 +1177,8 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       standingTriangles = 0;
       nearKeys.clear();
       detailed.clear();
+      aheadKeys.clear();
+      aheadFineKeys.clear();
     },
   };
 }

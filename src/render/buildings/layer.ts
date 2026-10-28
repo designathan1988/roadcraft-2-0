@@ -433,11 +433,15 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   };
   const pool = new CellPool(() => kitBoxes(kit), (entry) => refFor(entry), true, kit.finishTone);
   pool.warm();
-  /** A cell's level landed: uploaded if the view still wants it at that level (its error on the screen, `MassCells.choose`). DO NOT refuse it for the room or a triangle budget: the form of a building is the view's alone (MISSION.md 3a). */
+  /** The far cells whose level was asked ahead (`landCells`) and not taken yet, with the kind asked: let go once no longer ahead or near. */
+  const aheadAsked = new Map<string, BatchKind>();
+  /** A cell's level landed: uploaded if the view still wants it at that level (its error on the screen, `MassCells.choose`), or asked ahead of
+   *  it at that level (`aheadAsked`: DO NOT refuse it for being far, it was asked for that; refused, it was asked again every frame). DO NOT
+   *  refuse it for the room or a triangle budget: the form of a building is the view's alone (MISSION.md 3a). */
   const admit = (kind: BatchKind, cell: string, bytes: number): boolean => {
     resident.landed(kind, cell, bytes);
     landedBytes.set(kind, cell, bytes);
-    if (forcedNear.has(cell) || !eye) return true;
+    if (forcedNear.has(cell) || !eye || aheadAsked.get(cell) === kind) return true;
     return massCells.near(cell) && (massCells.fine(cell) ? 'cell' : 'facade') === kind;
   };
   /** A landing's upload ranked by the pixels the masses standing for it leave out (`uploads.ts`). */
@@ -556,6 +560,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     : { cells: facades, parts: facadeParts, stored: facadeStored, partRoot };
   /** A cell's level landed shown; its parts drawn from the next `cullDetails`, at the levels the eye allows. */
   const show = (kind: BatchKind, key: string, landed: Parameters<typeof patchCell>[1]): void => {
+    aheadAsked.delete(key);
     // The cell's walls go into the multi-draw batch of their material before its group is put in the scene.
     if (landed?.batch) shellBatch.add(kind, key, landed.batch);
     patchCell(key, landed, shownAt(kind));
@@ -640,6 +645,28 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
         }
       }
       if (done) { pendingCells.delete(cell); cellEntries.delete(cell); editedCells.delete(cell); }
+    }
+    // THE LEVELS MADE AHEAD (MISSION.md 3a): once the view's own cells are made, the far cells it is about to bring near (`MassCells.aheadKeys`)
+    // asked at the level they will come at, within the room (a prefetch, never a form) and kept hidden (`levelShown` is null for a far cell): a
+    // cell coming near finds its level made, and never swaps from its masses in view.
+    if (eye && pendingCells.size === 0 && !hiddenNow) {
+      for (const cell of massCells.aheadKeys()) {
+        const list = townCells.get(cell);
+        if (!list?.length) continue;
+        const kind: BatchKind = massCells.aheadFine(cell) ? 'cell' : 'facade';
+        const entries = entriesFor(cell, list);
+        const known = (kind === 'cell' ? cells : facades).get(cell);
+        if (known && sameEntries(known.entries, entries)) continue;
+        if (!requests.isAsked(kind, cell)) {
+          if (requests.asking >= STREAM_AHEAD) break;
+          const mean = landedBytes.of(kind, cell);
+          if (resident.total + (Number.isNaN(mean) ? massCells.massBytes(cell) : mean) > room()) break;
+        }
+        // Marked before it is asked: where no worker runs, the level lands inside `want`, and `admit` reads the mark.
+        aheadAsked.set(cell, kind);
+        const got = requests.want(kind, cell, entries, env, true);
+        if (got) { requests.take(kind, cell); show(kind, cell, got); changed = true; }
+      }
     }
     // Nothing near to make: the far buildings' flags (the workers take them after the cells and masses).
     if (pendingCells.size === 0 && backlog.length) {
@@ -989,6 +1016,9 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       keepToBudget();
       const now = new Set<string>(massCells.nearKeys());
       for (const key of forcedNear) now.add(key);
+      // The cells made ahead kept with them (hidden: `levelShown` is null for a far cell); the asks of those no longer ahead let go.
+      for (const key of massCells.aheadKeys()) now.add(key);
+      for (const [cell, kind] of aheadAsked) if (!now.has(cell)) { requests.drop(kind, cell); aheadAsked.delete(cell); }
       // The cells the eye left behind: their detail let go, their masses standing for them (the town's own boxes), made again on return by `landCells`, which asks every near cell lacking its level. DO NOT keep the whole town's detail in memory because the camera once passed there: the bytes of a large city's cells are its opening's and its roaming's cost, not its size's.
       if (!hiddenNow && stored) {
         const away = new Set<string>();
