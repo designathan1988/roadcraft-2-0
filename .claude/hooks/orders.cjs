@@ -28,10 +28,15 @@ process.stdin.on('end', () => {
   else print();
 });
 
+/** What reaches UserPromptSubmit without being the owner's typing: the app's notices, task results, hook feedback, command caveats. */
+const NOT_THE_OWNER = [/^\[Cross-session delivery notice\]/, /^<task-notification>/, /^<side-sessions-event>/, /^<ci-monitor-event>/,
+  /^Stop hook feedback/, /^<command-(name|message|args)>/, /^<local-command-(stdout|stderr|caveat)>/, /^Caveat: The messages below/];
+
 /** One prompt of the owner's, appended as typed. */
 function record(input) {
   const prompt = typeof input.prompt === 'string' ? input.prompt.trim() : '';
   if (!prompt) return;
+  if (NOT_THE_OWNER.some((pattern) => pattern.test(prompt))) return;
   const at = new Date().toISOString().replace('T', ' ').slice(0, 19);
   if (!fs.existsSync(file)) {
     fs.writeFileSync(file, '# The owner\'s orders, word for word (written by .claude/hooks/orders.cjs at every prompt; newest last)\n');

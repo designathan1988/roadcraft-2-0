@@ -15,13 +15,9 @@ The game's code (src, tests, scripts, eslint.config.js, package, desktop) equals
 published to roadcraft-2-0 (publish cbda5016). The code-graph mission and everything after ca2bcf8e are reverted (history.md).
 
 ## TASKS, IN ORDER (the owner's words are in `docs/agent/orders.md`)
-0. NOW: the owner's goal of 2026-10-28: build `docs/agent/optimization-solution.md` section 4, steps 0-6, in order, each committed and
-   published with tsc and its spec; no questions, no subagents, no measuring, the game opened once at the end for photos compared with
-   7c4de70f (`imageCompare.ts`). Progress and next step: `docs/agent/work.md`. Done: step 0 (acc7debf), step 1 (bd376121). Steps 2, 3, 4, 6 not
-   done, each with its proof in the code (work.md); step 5 = the far wall's cover share given its material back. Left: the photos.
-   READ FIRST: the plan's section 5 (`optimization-solution.md`) lists what was decided earlier and must be kept or still done: one form
-   per view for everything (the buildings still capped by budgets, `layer.ts` 303-318), clouds and fog out, the drag causes found with
-   gestures, heavy models and run-time textures, the whole-map work left, the base built for the whole map, no fake and no compensation.
+0. NOW: `docs/agent/MISSION.md` (the owner, 2026-10-28; printed whole above by `mission.cjs`), items 1-6 in order, then its End.
+   Progress: `docs/agent/work.md`. The former goal (the solution's steps 0-6) ended: steps 0 (acc7debf), 1 (bd376121) and the far
+   wall's cover material (f25d3285) done; steps 2, 3, 4, 6 proven not possible on three r186 + WebGL (`history.md`); step 5 withdrawn.
 1. DONE (b42f2003 and the notebook hook): the context lost at compaction (orders of 2026-10-28 02:00-02:20). Findings:
    - This session already runs on the 1M window: it compacted 9 times, each at ~968k tokens (compactMetadata.preTokens in the
      transcript). A bigger window does not exist; `/autocompact` only makes it compact sooner.
