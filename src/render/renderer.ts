@@ -102,7 +102,7 @@ import { createGardenCells, type GardenCells } from './gardens';
 import { lookProps, propView } from './propCells';
 import { solidFootprints, storedBounds } from '@world/buildings/geometry';
 import { RoadDoc } from '@world/doc';
-import { compileAhead, drainCompiles, drainUploads, drainWarm, gateUntilBuilt, shadowStandIn, warmPending } from './uploads';
+import { compileAhead, drainCompiles, drainUploads, drainWarm, gateUntilBuilt, shadowStandIn, shadowStandIns, warmPending } from './uploads';
 import { partWarmMeshes } from './buildings/partWarm';
 import { advanceWind, setWindWeather, sways } from './wind';
 import { holdStill, updateMoving } from './stillTree';
@@ -2618,12 +2618,57 @@ export function createSceneRenderer(
     onAssetsReady();
   }
 
+  /** Stand-ins of what comes into the scene after the opening (a layer's meshes made as cells land, a broken building's pieces, the tools'
+   *  previews): the programs they are drawn with, built from them. `depth`: shadow depth materials of their own, compiled as shadows. */
+  interface WarmSet { readonly group: Group; readonly depth: readonly Object3D[]; dispose(): void }
+  /** `set` compiled on its own (lit, and its casters into the shadow), let go once built: a set the opening's catalogue did not take in. */
+  const compileWarmSet = (set: WarmSet): void => {
+    const shadows = shadowStandIns(set.group);
+    void compileAhead(shadows, true).then(() => shadows.clear());
+    for (const depth of set.depth) void compileAhead(depth, true);
+    void compileAhead(set.group).then(() => set.dispose());
+  };
+  /** THE OPENING'S STAND-INS: every warm set in the scene, hidden, while the opening's catalogue is compiled (`programs.compile` walks the
+   *  scene, hidden things too, and casts every caster in it), let go once it is built. DO NOT ask them only after the first frame drawn: a
+   *  part, a sign or a road first drawn in a camera move before its stand-in was built had its program built in that frame (3-34 programs a
+   *  move, the page stopped up to 1 s, `lab-reports/move-*.md`, 2026-10-27). */
+  const openingWarm = (): void => {
+    const sets = [
+      roadShadersWarm === 'no' ? roadWarmSet() : null,
+      blastShadersWarm ? null : blastWarmSet(),
+      previewShadersWarm ? null : previewWarmSet(),
+    ].filter((set): set is WarmSet => set !== null);
+    roadShadersWarm = 'started';
+    blastShadersWarm = true;
+    previewShadersWarm = true;
+    const holder = new Group();
+    holder.name = 'opening-warm';
+    holder.visible = false;
+    for (const set of sets) {
+      holder.add(set.group);
+      for (const depth of set.depth) void compileAhead(depth, true);
+    }
+    scene.add(holder);
+    const ready = programs.ready;
+    void ready.finally(() => {
+      scene.remove(holder);
+      holder.clear();
+      for (const set of sets) set.dispose();
+    });
+  };
+
   /** The road shaders compiled before the first road is drawn. */
   let roadShadersWarm: 'no' | 'started' = 'no';
   /** @rebuild Once; every later frame returns at its first check. */
   const warmRoadShaders = (): void => {
     if (roadShadersWarm !== 'no') return;
     roadShadersWarm = 'started';
+    const set = roadWarmSet();
+    if (set) compileWarmSet(set);
+  };
+  /** The roads' meshes of each class, a junction, a crossing and a pole span, and the street furniture's, the long grass's and the signs'
+   *  meshes as their layers draw them; null where it could not be built (said). */
+  const roadWarmSet = (): WarmSet | null => {
     try {
       const doc = new RoadDoc();
       const centre = doc.addNode({ x: 0, y: 0 });
@@ -2645,19 +2690,12 @@ export function createSceneRenderer(
         buildUtilities(warmNet, poleGroundAt(warmElevation, flat), sceneryKit),
       ];
       for (const part of parts) group.add(part.group);
-      // And the street furniture's, the long grass's and the signs' meshes as their layers draw them, with their shadows
-      const placedShadows = new Group();
-      for (const mesh of [...furniture.warm(), ...signs.warm()]) {
-        group.add(mesh);
-        const standIn = shadowStandIn(mesh);
-        if (standIn) placedShadows.add(standIn);
-      }
-      void compileAhead(placedShadows, true).then(() => placedShadows.clear());
-      void compileAhead(group).then(() => {
-        for (const part of parts) part.dispose();
-      });
+      // And the street furniture's, the long grass's and the signs' meshes as their layers draw them (their shadows cast from them).
+      for (const mesh of [...furniture.warm(), ...signs.warm()]) group.add(mesh);
+      return { group, depth: [], dispose: () => { group.clear(); for (const part of parts) part.dispose(); } };
     } catch (error) {
       console.warn('road shader warm-up skipped', error);
+      return null;
     }
   };
 
@@ -2667,6 +2705,12 @@ export function createSceneRenderer(
   const warmBlastShaders = (): void => {
     if (blastShadersWarm) return;
     blastShadersWarm = true;
+    const set = blastWarmSet();
+    if (set) compileWarmSet(set);
+  };
+  /** A broken building's pieces (every material of the kit on a triangle) and every part and piece of furniture as the buildings' layer
+   *  draws them, instanced, each caster with its posed shadow (`partWarmMeshes`). */
+  const blastWarmSet = (): WarmSet | null => {
     const kit = buildings.kit;
     const tiny = new BufferGeometry();
     tiny.setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
@@ -2681,22 +2725,11 @@ export function createSceneRenderer(
       mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
       group.add(mesh);
     }
-    // In the scene for its lights, but never drawn
+    for (const mesh of partWarmMeshes(kit)) group.add(mesh);
+    // In the scene for its lights while it compiles, never drawn.
     group.visible = false;
     scene.add(group);
-    void compileAhead(group).then(() => { scene.remove(group); tiny.dispose(); });
-    // And every part as the layer draws it, instanced, with its shadow (`partWarmMeshes`)
-    const parts = new Group();
-    const partShadows = new Group();
-    for (const mesh of partWarmMeshes(kit)) {
-      parts.add(mesh);
-      const standIn = shadowStandIn(mesh);
-      if (standIn) partShadows.add(standIn);
-    }
-    parts.visible = false;
-    scene.add(parts);
-    void compileAhead(parts).then(() => { scene.remove(parts); parts.clear(); });
-    void compileAhead(partShadows, true).then(() => partShadows.clear());
+    return { group, depth: [], dispose: () => { scene.remove(group); group.clear(); tiny.dispose(); } };
   };
 
   /** The tools' previews compiled ahead, as the roads' and the blows' are */
@@ -2705,6 +2738,11 @@ export function createSceneRenderer(
   const warmPreviewShaders = (): void => {
     if (previewShadersWarm) return;
     previewShadersWarm = true;
+    const set = previewWarmSet();
+    if (set) compileWarmSet(set);
+  };
+  /** A blueprint building as a ghost, as grown and faded, the gardens' plants and their shadows, the train and metro tracks. */
+  const previewWarmSet = (): WarmSet | null => {
     try {
       const group = new Group();
       const done: (() => void)[] = [];
@@ -2727,7 +2765,6 @@ export function createSceneRenderer(
       // The gardens' plants and their shadows, the first lots painted grow them.
       const plants = plantSamples(sceneryKit);
       group.add(plants.group);
-      void compileAhead(plants.depth, true);
       done.push(() => plants.dispose());
       for (const mode of ['train', 'metro'] as const) {
         const track = buildTrackPreview([{ x: 0, y: 0 }, { x: m(60), y: 0 }], mode, () => 0);
@@ -2735,9 +2772,10 @@ export function createSceneRenderer(
         done.push(() => track.dispose());
       }
       // The lots need no program of their own: the ground's materials draw them (`lotOverlay.ts`).
-      void compileAhead(group).then(() => { for (const finish of done) finish(); });
+      return { group, depth: [plants.depth], dispose: () => { group.clear(); for (const finish of done) finish(); } };
     } catch (error) {
       console.warn('preview shader warm-up skipped', error);
+      return null;
     }
   };
 
@@ -4143,6 +4181,8 @@ export function createSceneRenderer(
         if (openingPrograms === 'no' && (whole || drawablesIn)) {
           openingPrograms = 'asked';
           performance.mark('reveal:whole');
+          // What comes after the opening compiled with it (`openingWarm`), its stand-ins in the scene before the catalogue walks it.
+          if (roadShadersWarm === 'no' || !blastShadersWarm || !previewShadersWarm) openingWarm();
           programs.compile(scene);
           const ready = programs.ready;
           void ready.then(() => { if (programs.ready === ready) { openingPrograms = 'built'; performance.mark('reveal:programs'); onAssetsReady(); } });

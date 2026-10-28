@@ -2,7 +2,7 @@ import {
   MeshDepthMaterial,
   ShaderChunk,
   Vector2,
-  type Material,
+  Material,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { m, perM } from '@world/units';
@@ -179,6 +179,10 @@ export function applyPartSway(material: Material, tall: number, amplitude: numbe
 function installStructureSway(material: Material, uniforms: Record<string, { value: unknown }>, declarations: string, foot: string,
   tall: number, amplitude: number, variant: 'structure' | 'part'): void {
   markSway(material);
+  // three's own key is the patch's source (r186 `Material.customProgramCacheKey` returns `onBeforeCompile.toString()`): the patch before
+  // this one, read now. DO NOT read it after the wrap: every wrapped material then keys by this wrapper's source alone, and a signal's
+  // housing and its lenses (their own glow patch) shared one program, each drawn with whichever was built first.
+  const source = material.customProgramCacheKey === Material.prototype.customProgramCacheKey ? material.onBeforeCompile.toString() : null;
   const previous = material.onBeforeCompile.bind(material);
   material.onBeforeCompile = (shader, renderer) => {
     previous(shader, renderer);
@@ -205,5 +209,5 @@ function installStructureSway(material: Material, uniforms: Record<string, { val
   };
   // DO NOT key the program by whose it is (VEG-14: a program per signal part of the same code, as `applyWind` was): by the patch (its foot, `variant`), after whatever keyed it before.
   const before = material.customProgramCacheKey.bind(material);
-  material.customProgramCacheKey = () => `${before()}-sway-${variant}`;
+  material.customProgramCacheKey = () => `${source ?? before()}-sway-${variant}`;
 }
