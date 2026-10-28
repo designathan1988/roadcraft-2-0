@@ -23,7 +23,7 @@ import { m } from '@world/units';
 import { ViewCells, type CellKey } from '@world/viewCells';
 import { HYSTERESIS, batchMesh, createCellInstances, releaseBatchMesh, screenHalf, warmMesh, type CellInstances, type KindLevels, type KindMesh, type KindSpec, type Pack } from './cellInstances';
 import { NEAR_SQUARE, YAW_POSE, nearCode } from './instanceRuns';
-import { createFarBands, showLadder, type Banded, type FarLadder, type FarRung } from './farLadders';
+import { createFarBands, showLadder, sortLadder, sortedRung, unsorted, type Banded, type FarLadder, type FarRung, type LadderSort, type RungBuffers } from './farLadders';
 import { gpuOnlyAttributes } from './mesh/gpuOnly';
 import { PICTURE_PX, type PlantImpostors } from './plantImpostors';
 import { castBySize } from './shadowCasters';
@@ -190,6 +190,8 @@ interface FarBlock {
   readonly growing: boolean;
   waiting: number;
   readonly gpu: number;
+  /** Its laddered kinds' things kept on the CPU to sort them into their rungs (`farLadders.ts` LadderSort), bytes. */
+  readonly kept: number;
   /** The ladders of its kinds whose simplified models were not made when it was (their band drawn by the whole model): made again once they are. */
   readonly unsimplified: readonly KindLevels[];
 }
@@ -354,6 +356,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
     const meshes: InstancedMesh[] = [], uncast: (() => void)[] = [];
     const fading: { mesh: InstancedMesh; beyond: number }[] = [];
     let arrays = 0, waiting = 0;
+    /** The laddered kinds' things kept on the CPU for their sorts, and their rungs' buffers on the GPU (`sortedRung`), bytes. */
+    let kept = 0, gpu = 0;
     const stride = YAW_POSE.stride;
     const own = (mesh: InstancedMesh, buffers: Record<string, BufferAttribute | InterleavedBuffer>, again: () => Record<string, Float32Array>): void => {
       gpuOnlyAttributes(mesh, buffers, again);
@@ -451,42 +455,59 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         return { poses: Float32Array.from(p.data.subarray(0, p.count * stride)), ...(tints ? { tints } : {}) };
       };
       const filled = fill(packs);
-      const poses = new InstancedInterleavedBuffer(filled.poses!, stride);
-      const tints = filled.tints ? new InstancedBufferAttribute(filled.tints, 3) : null;
       const levels = kindSpec.levels;
+      const isLaddered = levels !== undefined && laddered(kindSpec);
+      // A laddered kind's things kept on the CPU, sorted into each rung's own buffers (`farLadders.ts` sortLadder): no buffer of them all.
+      const poses = isLaddered ? null : new InstancedInterleavedBuffer(filled.poses!, stride);
+      const tints = !isLaddered && filled.tints ? new InstancedBufferAttribute(filled.tints, 3) : null;
       // Its simplified models drawn only once made (a batch holds its model's attributes as they were, `cellInstances.ts` posedGeometry).
       const midMade = levels?.mid !== undefined && (levels.midReady?.() ?? true);
       if (levels?.mid !== undefined && !midMade && laddered(kindSpec)) unsimplified.push(levels);
-      const batch = (body: KindMesh, casts: boolean, shadowAlone = false, band: Banded | null = null): InstancedMesh => {
+      /** A batch on the kind's poses, or on a sorted rung's own (`on`): drawing its count, every one it holds in the cascades. */
+      const batch = (body: KindMesh, casts: boolean, shadowAlone = false, band: Banded | null = null, on: RungBuffers | null = null): InstancedMesh => {
         if (!body.geometry.boundingSphere) body.geometry.computeBoundingSphere();
         const s = body.geometry.boundingSphere!;
         const { sphere, largest } = boundsOf([{ pack, radius: s.radius, centre: s.center.length() }]);
         // A rung's batch made casting as it casts between the passes (`castBySize`: its maker's `casts`), as its programs are compiled ahead
         // (`warm`); the others as their store's mesh (`streetFurnitureLayer.ts` warm).
         const drawn: KindMesh = band ? { ...body, castShadow: casts, material: band.material, depth: band.depth } : body;
-        const mesh = batchMesh({ ...drawn, name: `${body.name}-far-cells` }, body.geometry, poses, tints, pack.count, sphere, YAW_POSE);
-        const count = pack.count;
-        // A shadow alone: none of it drawn in the colour pass (`castBySize` counts), every one in the cascades.
-        uncast.push(castBySize({ mesh, casts, radius: () => largest, ...(shadowAlone ? { counts: { colour: () => 0, shadow: () => count } } : {}) }));
+        const mesh = batchMesh({ ...drawn, name: `${body.name}-far-cells` }, body.geometry, on ? on.poses : poses!, on ? on.tints : tints, on ? 0 : pack.count, sphere, YAW_POSE);
+        const count = pack.count, rung = on?.rung;
+        // A shadow alone: none of it drawn in the colour pass (`castBySize` counts), every one in the cascades; a sorted rung, the things it holds.
+        const counts = rung ? { colour: () => (shadowAlone ? 0 : rung.count), shadow: () => rung.count } : shadowAlone ? { colour: () => 0, shadow: () => count } : null;
+        uncast.push(castBySize({ mesh, casts, radius: () => largest, ...(counts ? { counts } : {}) }));
         meshes.push(mesh);
         return mesh;
       };
       const nears = kindSpec.meshes.filter((s) => !s.far && !s.mid && !s.cards);
-      if (!levels || !laddered(kindSpec)) {
+      if (!levels || !isLaddered) {
         const made = nears.map((body) => batch(body, body.castShadow));
         if (levels?.fadesAt !== undefined) for (const mesh of made) fading.push({ mesh, beyond: levels.fadesAt });
-        if (made[0]) own(made[0], tints ? { poses, tints } : { poses }, () => fill(make().packs));
+        if (made[0]) own(made[0], tints ? { poses: poses!, tints } : { poses: poses! }, () => fill(make().packs));
         continue;
       }
+      const sort: LadderSort = { poses: filled.poses!, tints: filled.tints ?? null, scales: Float32Array.from({ length: pack.count }, (_, i) => pack.scales[i]!),
+        stride, reach: levels.reach, rungs: [], at: unsorted() };
+      kept += sort.poses.byteLength + (sort.tints?.byteLength ?? 0) + sort.scales.byteLength;
+      // The ladder on the GPU once any rung of it was first sent (`own`'s count, a ladder for a buffer): one that never holds a thing sends nothing.
+      waiting++;
+      let ladderSent = false;
+      const sent = (): void => { if (!ladderSent) { ladderSent = true; onUploaded(); } };
+      /** A rung's own buffers and its meshes on them (`farLadders.ts` sortedRung), counted on the GPU at their whole size. */
+      const rungOf = (band: Vector4, shadowAlone: boolean, bodies: readonly KindMesh[], made: (body: KindMesh, on: RungBuffers) => InstancedMesh): InstancedMesh[] => {
+        gpu += pack.count * (stride + (sort.tints ? 3 : 0)) * 4;
+        return sortedRung(sort, band, shadowAlone, (on) => bodies.map((body) => made(body, on)), sent);
+      };
       const rungs: FarRung[] = [];
       for (const r of rungsOf(kindSpec, midMade)) {
-        const made = r.bodies.map((body) => batch(r.drawn(body), r.casts(body), r.shadowAlone, r.band));
+        const made = rungOf(r.band.band, r.shadowAlone, r.bodies, (body, on) => batch(r.drawn(body), r.casts(body), r.shadowAlone, r.band, on));
         if (!r.shadowAlone) rungs.push({ meshes: made, band: r.band.band, floor: r.floor, floorUnpictured: r.floorUnpictured });
       }
       const least = levels.least ?? 0, castsNear = levels.shadowNear === true;
       const farBodies = kindSpec.meshes.filter((s) => s.far);
+      const pictureBand = new Vector4(least, levels.far, 0, 0);
       const pictureRung: FarRung | null = farBodies.length
-        ? { meshes: farBodies.map((body) => batch(body, body.castShadow && !castsNear)), band: new Vector4(least, levels.far, 0, 0), floor: least, floorUnpictured: least }
+        ? { meshes: rungOf(pictureBand, false, farBodies, (body, on) => batch(body, body.castShadow && !castsNear, false, null, on)), band: pictureBand, floor: least, floorUnpictured: least }
         : null;
       const feet = new Box3();
       let most = 0, fewest = Infinity;
@@ -495,16 +516,16 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         most = Math.max(most, pack.scales[i]!);
         fewest = Math.min(fewest, pack.scales[i]!);
       }
-      for (const r of [...rungs, ...(pictureRung ? [pictureRung] : [])]) for (const mesh of r.meshes) mesh.visible = false;
-      ladders.push({ levels, feet, largest: 2 * levels.reach * most, smallest: 2 * levels.reach * fewest, rungs, pictures: pictureRung });
-      own(rungs[0]!.meshes[0] ?? pictureRung!.meshes[0]!, tints ? { poses, tints } : { poses }, () => fill(make().packs));
+      // Hidden until sorted: a rung holds nothing before its first sort (`show`).
+      for (const rung of sort.rungs) for (const mesh of rung.meshes) mesh.visible = false;
+      ladders.push({ levels, feet, largest: 2 * levels.reach * most, smallest: 2 * levels.reach * fewest, rungs, pictures: pictureRung, sort });
     }
     const holder = new Group(), pictured = new Group();
     holder.name = `${spec.name}-far-block`;
     pictured.name = `${spec.name}-far-pictures`;
     holder.add(pictured);
     for (const mesh of meshes) (mesh.material === spec.pictures?.material ? pictured : holder).add(mesh);
-    return { block: { group: holder, pictured, ladders, fading, meshes, uncast, growing, waiting, gpu: arrays, unsimplified }, arrays };
+    return { block: { group: holder, pictured, ladders, fading, meshes, uncast, growing, waiting, gpu: arrays + gpu, kept, unsimplified }, arrays: arrays + kept };
   };
 
   const far = [FarClass.wide, FarClass.small].map((cls) => {
@@ -516,7 +537,7 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         const made = batches(cls, key, rect, placementFor(cellsOf, key, rect), () => {
           // Every array of the block on the GPU: what it holds is the GPU's now.
           if (!block || --block.waiting > 0) return;
-          cellsOf.account(key, FAR_OVERHEAD * block.meshes.length + FAR_OVERHEAD, block.gpu);
+          cellsOf.account(key, FAR_OVERHEAD * block.meshes.length + FAR_OVERHEAD + block.kept, block.gpu);
         });
         block = made.block;
         farGroup.add(block.group);
@@ -713,7 +734,8 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         for (const [key, block] of heldFar[cls]!) {
           block.group.visible = wanted.has(key);
           block.pictured.visible = pictured;
-          if (block.group.visible) for (const ladder of block.ladders) showLadder(ladder, view.view, view.perUnitAtOne, square, PROP_CELL);
+          // Each ladder's rungs shown where a thing may be in their band, then its things sorted into them (`farLadders.ts`).
+          if (block.group.visible) for (const ladder of block.ladders) { showLadder(ladder, view.view, view.perUnitAtOne, square, PROP_CELL); sortLadder(ladder, view.view, view.perUnitAtOne); }
           // A batch its material fades out whole from here: none of it drawn (its sphere's nearest depth, never more than its distance, past it).
           if (block.group.visible) for (const f of block.fading) f.mesh.visible = !fadedOut(f.mesh, f.beyond, view.view);
         }
