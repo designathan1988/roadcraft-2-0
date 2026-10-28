@@ -202,7 +202,7 @@ export function miscItems(add: Add): void {
   for (const p of piecesOf(held.group)) add({ group: 'People: held props', name: p.label.replace(/^held-/, ''), origin: 'kit', source: 'src/render/people/heldProps.ts', build: 'instanced', pieces: [p], countKey: 'people:held' });
   const transit = createTransit();
   for (const p of piecesOf(transit.group)) add({ group: 'Transit', name: p.label, origin: 'kit', source: 'src/render/transit.ts', build: 'instanced', pieces: [p], countKey: 'transit:trains', notes: ['the trains\' cars; tracks and stations come from the test city'] });
-  add({ group: 'Sky', name: 'sky', variation: 'dome', origin: 'kit', source: 'src/render/environment.ts:149', build: 'individual', pieces: [{ label: 'sphere 32x16', geometry: new SphereGeometry(1, 32, 16), material: null }], countKey: 'one', notes: ['drawn by the sky shader; its copy for the reflection probe the same; the clouds have no mesh (drawn in the post chain)'] });
+  add({ group: 'Sky', name: 'sky', variation: 'dome', origin: 'kit', source: 'src/render/environment.ts:149', build: 'individual', pieces: [{ label: 'sphere 32x16', geometry: new SphereGeometry(1, 32, 16), material: null }], countKey: 'one', notes: ['drawn by the sky shader; its copy for the reflection probe the same'] });
 }
 
 /** The effects with geometry, each as its layer makes it; the blob shadows once a car and once a person. */

@@ -7,7 +7,7 @@ import { type PartStore, type SaveEntry, type SaveWriter, gunzip, storeWriter } 
 import { GLOBAL_MAGIC, MANIFEST_MAGIC, REGION_CODEC, readValueFrame, squareFrame, valueFrame, wearFrame } from './regionFrames';
 import { JSON_CODEC, type SquareCodec, readWears, withWear } from './tileCodec';
 import {
-  GLOBAL_KINDS, KEYED, KEYED_NAMES, type KeyedName, LAYER_NAMES, LISTS, LIST_NAMES, type LayerName, type ListName,
+  GLOBAL_KINDS, KEYED, KEYED_NAMES, type KeyedName, LAYER_NAMES, LISTS, LIST_NAMES, type LayerName, type ListName, RETIRED_LISTS, type RetiredName,
   NOWHERE, SAVE_TILE, freshKeyed, freshLists, meets, placeInOrder, squareAt, squareRect,
 } from './saveLayers';
 import { type SavedFields, type SavedLayout, type SavedTables, type SquaresRead, type TiledManifest, type TiledSession, decodeSquares, isObject } from './squaresDecode';
@@ -56,7 +56,8 @@ function isTiledManifest(value: unknown, version: 5 | 6 | 7 | 8 = 5): value is T
   if (!isObject(value) || value['version'] !== version || typeof value['savedAt'] !== 'number') return false;
   const squares = value['squares'], globals = value['globals'];
   if (!isObject(squares) || !Array.isArray(globals)) return false;
-  return Object.entries(squares).every(([name, list]) => (LAYER_NAMES as readonly string[]).includes(name)
+  // An old save's squares of a list the game no longer has (`RETIRED_LISTS`) are part of it: the map still opens.
+  return Object.entries(squares).every(([name, list]) => ((LAYER_NAMES as readonly string[]).includes(name) || (RETIRED_LISTS as readonly string[]).includes(name))
     && Array.isArray(list) && list.every((s) => typeof s === 'string'))
     && globals.every((part) => (GLOBAL_PARTS as readonly unknown[]).includes(part));
 }
@@ -95,6 +96,8 @@ export class TiledSaves {
   private storedGlobals = new Set<GlobalPart>();
   /** The keys of a map stored before this format: removed in the transaction that writes it by tiles. */
   private oldKeys: readonly string[] = [];
+  /** The keys of the squares of the lists the game no longer has (`RETIRED_LISTS`) in the map read: removed in the next save's transaction. */
+  private retired: readonly string[] = [];
   /** Saves one after another: a save under way finishes before the next reads the map. */
   private queue: Promise<unknown> = Promise.resolve();
   private readonly writer: SaveWriter;
@@ -103,7 +106,7 @@ export class TiledSaves {
     this.writer = store.writer ?? storeWriter(store);
   }
 
-  private blobKey(layer: LayerName, square: string): string { return `${this.key}:R8:${layer}:${square}`; }
+  private blobKey(layer: LayerName | RetiredName, square: string): string { return `${this.key}:R8:${layer}:${square}`; }
   private wearKey(square: string): string { return `${this.key}:RW8:${square}`; }
   private globalKey(part: GlobalPart): string { return `${this.key}:RG8:${part}`; }
   /** The regions' manifest (version 8). The manifests before it (`:regions7`, version 7; `:regions`, version 6; `:tiles`, version 5 in JSON; `:manifest`, version 3) are never written here: an older build still opens the map they hold. */
@@ -153,6 +156,7 @@ export class TiledSaves {
     this.globals = new Set();
     this.storedGlobals = new Set(layout.globals);
     this.oldKeys = layout.old ?? [];
+    this.retired = layout.retired ?? [];
     // A map stored in a format before this one: written whole, in this one, at the next save.
     if (layout.old) { this.everything(doc); return; }
     for (const name of KEYED_NAMES) this.keyed[name].stored = new Set(layout.squares[name] ?? []);
@@ -332,6 +336,10 @@ export class TiledSaves {
     const put: SaveEntry[] = [];
     // DO NOT remove the map saved before the tiles: it is the player's, and an older build reads only it.
     const remove: string[] = [];
+    // The squares of the lists the game no longer has, from the map read: taken away with this save.
+    const retired = this.retired;
+    this.retired = [];
+    remove.push(...retired);
     // Taken now; put back if the write fails (with whatever came meanwhile).
     const takenKeyed = new Map<KeyedName, { readonly dirty: Set<string>; readonly wear: Set<string> }>();
     const takenLists = new Map<ListName, Set<string>>();
@@ -432,6 +440,7 @@ export class TiledSaves {
       for (const [name, taken] of takenLists) for (const square of taken) this.lists[name].dirty.add(square);
       for (const part of globals) this.globals.add(part);
       this.oldKeys = oldKeys;
+      this.retired = retired;
       return false;
     }
     for (const name of KEYED_NAMES) this.keyed[name].stored = nextStored.get(name)!;
@@ -469,7 +478,7 @@ export class TiledSaves {
   /** The keys a manifest's squares, wears and parts are held under. */
   private keysOf(manifest: TiledManifest, keys: SquareKeys): string[] {
     const out: string[] = [];
-    for (const name of LAYER_NAMES) for (const square of manifest.squares[name] ?? []) out.push(keys.blob(name, square));
+    for (const name of [...LAYER_NAMES, ...RETIRED_LISTS]) for (const square of manifest.squares[name] ?? []) out.push(keys.blob(name, square));
     for (const square of manifest.squares.buildings ?? []) out.push(keys.wear(square));
     for (const part of manifest.globals) out.push(keys.global(part));
     return out;
@@ -493,7 +502,9 @@ export class TiledSaves {
     const session = canQueueJobs() ? await decodedOffPage(read) : await decodeSquares(read);
     // What the read's parts took off the page (`TiledSession.timing`): the squares decompressed and read, the tables joined.
     performance.mark('save:parsed', { detail: session?.timing ?? null });
-    return session;
+    // In this format, the squares of the lists the game no longer has: never read, removed by the next save (a format before keeps them, `old`).
+    const retired = old ? [] : RETIRED_LISTS.flatMap((name) => (manifest.squares[name] ?? []).map((square) => keys.blob(name, square)));
+    return session && retired.length ? { ...session, layout: { ...session.layout, retired } } : session;
   }
 
   /** The keys of a map stored in the format before the tiles. */
@@ -559,6 +570,7 @@ export class TiledSaves {
     this.globals = new Set(GLOBAL_PARTS);
     this.storedGlobals = new Set();
     this.oldKeys = [];
+    this.retired = [];
   }
 
   /** The map's tiles removed: the map is saved whole again (`Persistence.saveSession`). */
@@ -588,7 +600,7 @@ export class TiledSaves {
 
 /** Where a format keeps a map by squares. */
 interface SquareKeys {
-  blob(layer: LayerName, square: string): string;
+  blob(layer: LayerName | RetiredName, square: string): string;
   wear(square: string): string;
   global(part: GlobalPart): string;
 }

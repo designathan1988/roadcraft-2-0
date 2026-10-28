@@ -74,15 +74,6 @@ export function setPoleToolMode(next: PoleToolMode): void {
   poleMode = next;
 }
 
-/** The fog brush (Paisagem > Terreno > Neblina): laying fog, or taking it away. Not kept between sessions. */
-let fogErasing = false;
-export function fogErase(): boolean {
-  return fogErasing;
-}
-export function setFogErase(next: boolean): void {
-  fogErasing = next;
-}
-
 /** The tree brush (Landscape > Terrain > Trees, `world/trees.ts`) */
 export const TREE_MODES = ['plant', 'one', 'cut'] as const;
 export type TreeMode = (typeof TREE_MODES)[number];
@@ -131,64 +122,6 @@ export function setElementBrush(change: Partial<ElementBrush>): void {
 }
 export function setElementKind(next: ElementKind): void {
   elementKindNow = next;
-}
-
-/** The cloud tool (Paisagem > Terreno > Nuvens): what a click does. Not kept between sessions. */
-export const CLOUD_MODES = ['add', 'move', 'edit', 'remove'] as const;
-export type CloudMode = (typeof CLOUD_MODES)[number];
-let cloudModeNow: CloudMode = 'add';
-export function cloudMode(): CloudMode {
-  return cloudModeNow;
-}
-export function setCloudMode(next: CloudMode): void {
-  cloudModeNow = next;
-}
-/** The next cloud's size (m), base height (m) and density (%). Kept between sessions. */
-export interface CloudBrush {
-  readonly size: number;
-  readonly height: number;
-  readonly density: number;
-}
-const CLOUD_BRUSH_KEY = 'roadcraft.cloudBrush';
-let cloudBrushNow: CloudBrush = (() => {
-  const fallback: CloudBrush = { size: 150, height: 180, density: 80 };
-  try {
-    const saved = JSON.parse(localStorage.getItem(CLOUD_BRUSH_KEY) ?? 'null') as Partial<CloudBrush> | null;
-    if (!saved) return fallback;
-    const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-    return { size: n(saved.size, fallback.size), height: n(saved.height, fallback.height), density: n(saved.density, fallback.density) };
-  } catch { return fallback; }
-})();
-export function cloudBrush(): CloudBrush {
-  return cloudBrushNow;
-}
-export function setCloudBrush(next: Partial<CloudBrush>): void {
-  cloudBrushNow = { ...cloudBrushNow, ...next };
-  try { localStorage.setItem(CLOUD_BRUSH_KEY, JSON.stringify(cloudBrushNow)); } catch { /* not kept */ }
-}
-
-/** The fog brush's settings: strength (%), height (m), speed (m/s). Kept between sessions. */
-export interface FogBrush {
-  readonly strength: number;
-  readonly height: number;
-  readonly speed: number;
-}
-const FOG_BRUSH_KEY = 'roadcraft.fogBrush';
-let fogBrushNow: FogBrush = (() => {
-  const fallback: FogBrush = { strength: 40, height: 24, speed: 6 };
-  try {
-    const saved = JSON.parse(localStorage.getItem(FOG_BRUSH_KEY) ?? 'null') as Partial<FogBrush> | null;
-    if (!saved) return fallback;
-    const n = (v: unknown, d: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-    return { strength: n(saved.strength, fallback.strength), height: n(saved.height, fallback.height), speed: n(saved.speed, fallback.speed) };
-  } catch { return fallback; }
-})();
-export function fogBrush(): FogBrush {
-  return fogBrushNow;
-}
-export function setFogBrush(next: Partial<FogBrush>): void {
-  fogBrushNow = { ...fogBrushNow, ...next };
-  try { localStorage.setItem(FOG_BRUSH_KEY, JSON.stringify(fogBrushNow)); } catch { /* not kept */ }
 }
 
 const PAINT_KEY = 'roadcraft.paintKind';

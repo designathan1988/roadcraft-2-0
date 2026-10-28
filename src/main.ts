@@ -58,10 +58,8 @@ import {
   planPoleRun,
   type PoleRunPlan,
 } from '@editor/poles';
-import { blockGridChoice, createPoleChoices, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
+import { blockGridChoice, createPoleChoices, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleToolMode, roadWidth, streetscapeKind, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
 import { TERRAIN_MIN_MS, TerrainBrush, type DabSettings } from '@editor/terrainBrush';
-import { CLOUD_SPAN, scatterClouds } from '@world/clouds';
-import { CloudTool } from '@editor/cloudTool';
 import { playThunder } from '@ui/thunder';
 import { blockGridLines, commitBlockGrid } from '@editor/blocks';
 import { m, stepsIn } from '@world/units';
@@ -156,7 +154,6 @@ import { bulbClearing } from '@world/junction/bulb';
 import { createToolMachine, isTool, type Tool } from '@editor/toolMachine';
 import { createGameKeys } from '@editor/gameKeys';
 import { RoadTop } from '@editor/roadTop';
-import { editRandom } from '@editor/editStream';
 import { cpuPopulationShare } from '@sim/populationGovernor';
 import { WEAK_MACHINE } from '@core/weakMachine';
 
@@ -400,7 +397,7 @@ function worldBounds() {
 
 // ------------------------------------------------------------------ state The tool in hand, the pause
 /** The terrain brush: a land stamp (`TerrainMode`), or painting the ground (`terrainPaint.ts`). */
-type BrushMode = TerrainMode | 'paint' | 'fog' | 'cloud' | 'elements' | 'gully' | 'trees' | 'weather' | Landform;
+type BrushMode = TerrainMode | 'paint' | 'elements' | 'gully' | 'trees' | 'weather' | Landform;
 /** The landforms: a shape and its ROCK in one tool */
 type Landform = 'mesa' | 'canyon' | 'escarpment' | 'sugarloaf';
 const LANDFORMS: Readonly<Record<Landform, { readonly mode: 'raise' | 'lower'; readonly rock: GeologyKind; readonly hardness: number; readonly profile?: 'dome' }>> = {
@@ -466,8 +463,6 @@ const tools = createToolMachine(game.tool, {
 });
 /** The gully brush's strength, % (Paisagem > Relevo > Ravinas). */
 let gullyStrength = 60;
-/** How many clouds "spread over the sky" lays, and how much they vary, %. */
-const cloudScatter = { count: 8, variation: 40 };
 
 function sessionSettings(): SavedSettings {
   const centre = view.centre;
@@ -621,7 +616,6 @@ const terrainBrush = new TerrainBrush({
 });
 /** The brush in hand, as one dab reads it (`editor/terrainBrush.ts` `DabSettings`). */
 function dabSettings(): DabSettings {
-  const fog = fogBrush();
   return {
     mode: game.terrainMode,
     radius: game.terrainRadius,
@@ -631,7 +625,6 @@ function dabSettings(): DabSettings {
     element: { mode: elementMode(), kind: elementKind(), brush: elementBrush(elementKind()) },
     tree: { mode: treeMode(), kind: treeKind(), brush: treeBrush() },
     gully: { strength: gullyStrength, erase: gullyErase() },
-    fog: { strength: fog.strength, height: fog.height, speed: fog.speed, erase: fogErase() },
     paint: paintKind(),
   };
 }
@@ -1118,8 +1111,6 @@ function currentGesture(): string | null {
   if (barrier) return barrier;
   const bulldozing = bulldozer.gesture();
   if (bulldozing) return bulldozing;
-  const cloud = cloudTool.gesture();
-  if (cloud) return cloud;
   return lotTool.gesture();
 }
 function syncGesture(): void {
@@ -1182,23 +1173,6 @@ function cancelMove(): void {
 }
 
 
-// THE CLOUD TOOL (Paisagem > Terreno > Nuvens)
-/** A step the clouds' tool opened and its gesture has not closed yet. */
-let cloudStepOpen = false;
-const cloudTool = new CloudTool({
-  doc,
-  mode: () => cloudMode(),
-  brush: () => cloudBrush(),
-  drift: () => scene.cloudDrift(),
-  rayAt: (px, py, height) => view.toWorldAt(px, py, height, surface.cssW, surface.cssH),
-  record: () => { history.begin(doc); cloudStepOpen = true; },
-  changed: () => {
-    updateHistoryButtons();
-    persistence.saveSessionSoon(doc, sessionSettings);
-    requestDraw();
-  },
-  hint: (key) => flashHint(key),
-});
 /** Ends the brush stroke (`TerrainBrush.end`), warning when the land's stamps near their cap. */
 function endTerrainStroke(): void {
   const wasPainting = terrainBrush.end();
@@ -1326,9 +1300,8 @@ function pointerDown(e: PointerEvent, r: DOMRect): void {
       break;
 
     case 'terrain':
-      if (game.terrainMode === 'cloud') cloudTool.down(e.pointerId, e.clientX - r.left, e.clientY - r.top);
       // The weather tool: a click calls a lightning bolt down there.
-      else if (game.terrainMode === 'weather') scene.strikeAt(world.x, world.y);
+      if (game.terrainMode === 'weather') scene.strikeAt(world.x, world.y);
       else terrainBrush.begin(e.pointerId, world);
       break;
 
@@ -1506,11 +1479,6 @@ function pointerMove(e: PointerEvent, r: DOMRect, path: PointerSample[] | undefi
     terrainBrush.paint(world);
     return;
   }
-  if (cloudTool.pointer === e.pointerId) {
-    const rect = canvas.getBoundingClientRect();
-    cloudTool.move(e.clientX - rect.left, e.clientY - rect.top);
-    return;
-  }
 
   // The hover preview uses the same height-aware connection rule as the commit.
   const hovered = findAnchor(doc, net, world, view.zoom, undefined,
@@ -1541,9 +1509,6 @@ function endPointer(e: PointerEvent): void {
     return;
   }
   if (terrainBrush.pointer === e.pointerId) endTerrainStroke();
-  cloudTool.up(e.pointerId);
-  // Its step closed with the gesture (EDT-10, as the terrain's stroke).
-  if (cloudStepOpen) { cloudStepOpen = false; history.end(doc); updateHistoryButtons(); }
   if (game.tool === 'building') buildings.pointerUp(cancelled || wasPinching);
   bulldozer.up(e.pointerId, !cancelled && !wasPinching);
   lotTool.up(e.pointerId, !cancelled && !wasPinching);
@@ -1680,7 +1645,7 @@ function setZone(patch: ShellZonePatch): void {
 }
 
 /** Every brush of the terrain tool, in the order of its number keys. */
-const BRUSH_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'fog', 'cloud', 'elements', 'gully', 'trees', 'weather'];
+const BRUSH_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'elements', 'gully', 'trees', 'weather'];
 function setTerrainMode(next: BrushMode): void {
   gameState.set('terrainMode', next, 'terrain brush');
   // Each tool its own hardness: a chapada's cliff is not the hill's slope.
@@ -1701,7 +1666,7 @@ function setTerrainStrength(value: number): void {
   requestDraw();
 }
 
-/** A slider of the map's own settings (the fog over the map, the weather, the gullies of the land) */
+/** A slider of the map's own settings (the weather, the gullies of the land) */
 function mapSlider(min: number, max: number, step: number, get: () => number, set: (v: number) => void): ShellSlider {
   let recorded = false;
   return {
@@ -1724,42 +1689,6 @@ const brushSlider = (min: number, max: number, step: number, get: () => number, 
 scene.onStrike((_x, _y, distance) => playThunder(distance / UNITS_PER_METER, doc.weather.thunder));
 const weatherSlider = (key: keyof typeof doc.weather, min: number, max: number, step: number, scale: number): ShellSlider =>
   mapSlider(min, max, step, () => Math.round(doc.weather[key] * scale * 10) / 10, (v) => doc.setWeather({ [key]: v / scale }));
-
-// The sky the player sets: the mist over everything, and (from before every cloud was the map's) the cloud cover.
-const ATMOSPHERE_KEY = 'roadcraft.atmosphere.v5';
-const atmosphere = { atmoClouds: 40, atmoCloudBase: 180, atmoCloudThickness: 150, atmoFog: 0, atmoFogHeight: 60 };
-try {
-  const kept = JSON.parse(localStorage.getItem(ATMOSPHERE_KEY) ?? 'null') as Record<string, number> | null;
-  if (kept) {
-    for (const key of Object.keys(atmosphere) as (keyof typeof atmosphere)[]) {
-      const value = kept[key];
-      if (value !== undefined && Number.isFinite(value)) atmosphere[key] = value;
-    }
-  }
-} catch { /* storage blocked: the defaults */ }
-function applyAtmosphere(redraw = true): void {
-  scene.setAtmosphere({
-    clouds: atmosphere.atmoClouds / 100,
-    cloudBase: atmosphere.atmoCloudBase * UNITS_PER_METER,
-    cloudThickness: atmosphere.atmoCloudThickness * UNITS_PER_METER,
-    fog: atmosphere.atmoFog / 100,
-    fogHeight: atmosphere.atmoFogHeight * UNITS_PER_METER,
-  });
-  try { localStorage.setItem(ATMOSPHERE_KEY, JSON.stringify(atmosphere)); } catch { /* not kept */ }
-  // Not at boot: the frame loop is not set up yet then.
-  if (redraw) requestDraw();
-}
-// The sky made no clouds of its own any more (every cloud is the map's, to move or take away)
-if (atmosphere.atmoClouds > 0) {
-  if (doc.clouds.length === 0) {
-    doc.addClouds(scatterClouds(Math.round((atmosphere.atmoClouds / 100) * 12), {
-      size: Math.max(40, atmosphere.atmoCloudThickness * UNITS_PER_METER), height: atmosphere.atmoCloudBase * UNITS_PER_METER, density: 0.8,
-    }, 0.3, CLOUD_SPAN / 2, [], editRandom(doc, 0, 0)));
-    persistence.saveSessionSoon(doc, sessionSettings);
-  }
-  atmosphere.atmoClouds = 0;
-}
-applyAtmosphere(false);
 
 /** Every slider the interface shows, by name: its range and how the game reads and takes it. */
 const SLIDERS: Readonly<Record<string, ShellSlider>> = {
@@ -1796,20 +1725,6 @@ const SLIDERS: Readonly<Record<string, ShellSlider>> = {
   elSpacing: brushSlider(0, 20, 0.1, () => elementBrush().spacing, (v) => setElementBrush({ spacing: v })),
   elStrength: brushSlider(5, 100, 5, () => elementBrush().strength, (v) => setElementBrush({ strength: v })),
   elIntensity: brushSlider(0, 100, 5, () => elementBrush().intensity, (v) => setElementBrush({ intensity: v })),
-  // The cloud tool: the next cloud's size, base and density, and how many "spread over the sky" lays.
-  cloudSize: brushSlider(30, 600, 10, () => cloudBrush().size, (v) => setCloudBrush({ size: v })),
-  cloudHeight: brushSlider(40, 900, 10, () => cloudBrush().height, (v) => setCloudBrush({ height: v })),
-  cloudDensity: brushSlider(10, 100, 5, () => cloudBrush().density, (v) => setCloudBrush({ density: v })),
-  cloudCount: { min: 1, max: 24, step: 1, get: () => cloudScatter.count, set: (v) => { cloudScatter.count = v; } },
-  cloudVariation: { min: 0, max: 80, step: 5, get: () => cloudScatter.variation, set: (v) => { cloudScatter.variation = v; } },
-  // The fog brush: each bank keeps the thickness, height and drift it was laid with (`world/fogPaint.ts`).
-  fogStrength: brushSlider(5, 100, 5, () => fogBrush().strength, (v) => setFogBrush({ strength: v })),
-  fogHeight: brushSlider(2, 160, 2, () => fogBrush().height, (v) => setFogBrush({ height: v })),
-  fogSpeed: brushSlider(0, 24, 0.5, () => fogBrush().speed, (v) => setFogBrush({ speed: v })),
-  // The map's: every bank's thickness at once, and the mist over everything.
-  fogMapDensity: mapSlider(0, 200, 10, () => Math.round(doc.fogSettings.density * 100), (v) => doc.setFogSettings({ density: v / 100 })),
-  atmoFog: { min: 0, max: 100, step: 5, get: () => atmosphere.atmoFog, set: (v) => { atmosphere.atmoFog = v; applyAtmosphere(); } },
-  atmoFogHeight: { min: 5, max: 200, step: 5, get: () => atmosphere.atmoFogHeight, set: (v) => { atmosphere.atmoFogHeight = v; applyAtmosphere(); } },
   // The simulation: cars and people on foot as shares (%) of what the city's own density asks (`SimWorld.followCity`).
   trafficIntensity: { min: 0, max: MAX_INTENSITY * 100, step: 10, get: () => Math.round(sim.trafficIntensity * 100),
     set: (v) => { sim.trafficIntensity = v / 100; persistence.saveSettingsSoon(sessionSettings); } },
@@ -1848,22 +1763,10 @@ function wholeMapEdit(confirmKey: string | null, edit: () => void): void {
 const MAP_ACTIONS: Readonly<Record<string, () => void>> = {
   clearTerrain: () => wholeMapEdit('confirm.clearTerrain', () => doc.clearTerrain()),
   clearGullies: () => { if (doc.gullyDabs.length > 0) wholeMapEdit('confirm.clearGullies', () => doc.clearGullies()); },
-  clearFog: () => { if (doc.fogDabs.length > 0) wholeMapEdit('confirm.clearFog', () => doc.clearFog()); },
   clearTrees: () => {
     if (doc.trees.length > 0 || doc.treeClearings.length > 0) wholeMapEdit('confirm.clearTrees', () => doc.clearTrees());
   },
   clearElements: () => { if (doc.elements.length > 0) wholeMapEdit('confirm.clearElements', () => doc.clearElements()); },
-  clearClouds: () => {
-    if (doc.clouds.length > 0) wholeMapEdit('confirm.clearClouds', () => { for (const cloud of [...doc.clouds]) doc.removeCloud(cloud.id); });
-  },
-  // Spread clouds over the sky: as many as asked, about the tool's size, height and density, varied
-  scatterClouds: () => wholeMapEdit(null, () => {
-    const brush = cloudBrush();
-    const laid = scatterClouds(cloudScatter.count, {
-      size: brush.size * UNITS_PER_METER, height: brush.height * UNITS_PER_METER, density: brush.density / 100,
-    }, cloudScatter.variation / 100, CLOUD_SPAN / 2, doc.clouds, editRandom(doc, 0, 0));
-    if (doc.addClouds(laid) < cloudScatter.count) flashHint('hint.cloud.full');
-  }),
 };
 
 /** Puts a tool in hand: what it does to the game (gestures dropped, the selection let go, the Builder switched on or off). */
@@ -2528,7 +2431,7 @@ function listenHint(listen: (text: string, flash: boolean) => void): void {
 if (bootFailed) flashHint('hint.bootFailed');
 
 /** The terrain brush's operations in the number row's order (1 = raise). */
-const TERRAIN_KEY_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'fog', 'cloud', 'elements', 'gully', 'trees', 'weather'];
+const TERRAIN_KEY_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'elements', 'gully', 'trees', 'weather'];
 /** Every key the game answers (`editor/gameKeys.ts`): one command a key. */
 const gameKeys = createGameKeys({
   tool: () => game.tool,
@@ -2800,7 +2703,7 @@ function frame(now: number): void {
   // Keep animating while anything is moving; otherwise settle.
   const simMoving = !game.paused && simShowsMotion();
   if (!pageHidden() && (measure.on || !effects.onDemand || simMoving || roadTool.draft || mover.dragging || cameraHand.active || cameraHand.coasting || cameraMotion.moving || scene.busy())) requestDraw();
-  // Only the clouds moving (they drift, form and fade), or the clock alone: a slower frame.
+  // Only the elements' smoke or the weather moving, or the clock alone: a slower frame.
   else if (!pageHidden() && (!game.paused || scene.drifting())) frameClock.drift();
 }
 
@@ -2964,7 +2867,7 @@ const CHANGE_SHOWN = 8000;
 const CHANGE_COLOURS: Record<ChangeKind, string> = {
   roads: '#ffd23f', traffic: '#fca311', clearings: '#95d5b2', terrain: '#c8823c', paint: '#9be564', buildings: '#ff8fab', zones: '#7bdff2', lots: '#b2f7ef', lotKeys: '#80cbc4', markingStyle: '#fff3b0',
   utilities: '#f7aef8', barriers: '#d0d0d0', landscape: '#6bd425', transit: '#4cc9f0', people: '#ffffff',
-  trees: '#2d6a4f', elements: '#e0aaff', fog: '#e9ecef', clouds: '#f8f9fa', weather: '#adb5bd', nature: '#52b788',
+  trees: '#2d6a4f', elements: '#e0aaff', weather: '#adb5bd', nature: '#52b788',
   gullies: '#8d5524', economy: '#2a9d8f', buildingWear: '#a26769', elevation: '#ff6b6b', ground: '#f4a261', light: '#ffe066', surfaces: '#4361ee',
 };
 
@@ -3549,8 +3452,6 @@ function buildSummary(stations: Parameters<typeof buildRuns>[0]): string {
 /** The brush's colour, by what it does to the ground. */
 const TERRAIN_BRUSH_COLOUR: Readonly<Record<BrushMode, string>> = {
   paint: '#f2d27a',
-  fog: '#e8eef4',
-  cloud: '#ffffff',
   elements: '#b8e07a',
   gully: '#c98a5a',
   trees: '#5fbf5a',
@@ -3567,8 +3468,6 @@ const TERRAIN_BRUSH_COLOUR: Readonly<Record<BrushMode, string>> = {
 
 const TERRAIN_BRUSH_FILL: Readonly<Record<BrushMode, string>> = {
   paint: 'rgba(242,210,122,0.10)',
-  fog: 'rgba(232,238,244,0.12)',
-  cloud: 'rgba(255,255,255,0)',
   elements: 'rgba(184,224,122,0.10)',
   gully: 'rgba(201,138,90,0.10)',
   trees: 'rgba(95,191,90,0.10)',

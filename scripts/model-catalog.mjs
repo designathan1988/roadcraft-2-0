@@ -147,7 +147,6 @@ const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s
 writeFileSync(join(out, 'catalog.csv'), [COLUMNS.map(([h]) => h).join(','), ...rows.map((r, i) => COLUMNS.map(([, f]) => cell(f(r, i))).join(','))].join('\n'));
 
 const known = [
-  'Clouds: no mesh; drawn by ray marching in the post chain (src/render/postprocess.ts CLOUD_SHADOWS).',
   'Vehicles\' intermediate levels: made at run time by the simplifier (vehicleLevels.ts partLevels, meshoptimizer); the catalogue gives the full model (L0) and the far model.',
   'Pictures: the colours are each material\'s base colour where its look needs the running game (baked surfaces, the engine\'s uniforms); the geometry and every number are the engine\'s.',
   'Editor feedback on the ground (src/render/renderer.ts blink) and the tools\' 2D gizmos (drawn on a canvas over the view): no catalogued mesh.',

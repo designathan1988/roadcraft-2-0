@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RoadDoc, type RoadNode, type SerializedDoc } from '@world/doc';
 import type { Change, ChangeKind, ChangeRect } from '@world/changes';
 import { MAX_PAINT_DABS } from '@world/terrainPaint';
-import { MAX_FOG_DABS } from '@world/fogPaint';
 import { MAX_GULLY_DABS } from '@world/gullies';
 import { MAX_ELEMENTS, type ElementItem } from '@world/elements';
 import { MAX_PLANTED_TREES, MAX_TREE_CLEARINGS, type PlantedTree } from '@world/trees';
@@ -132,30 +131,27 @@ describe("a list at its tile's cap (decision 5.1): nothing leaves, the new item 
   const dab = (other = false): { x: number; y: number; radius: number; strength: number } =>
     ({ x: other ? -2000 : 2000, y: other ? -2000 : 2000, radius: 10, strength: 1 });
 
-  it('paint, fog, gullies, stamps, clearings', () => {
+  it('paint, gullies, stamps, clearings', () => {
     const doc = new RoadDoc();
     for (let i = 0; i < MAX_PAINT_DABS; i++) doc.addPaintDab({ kind: 'sand', ...dab() });
-    for (let i = 0; i < MAX_FOG_DABS; i++) doc.addFogDab({ ...dab(), height: 10, speed: 1 });
     for (let i = 0; i < MAX_GULLY_DABS; i++) doc.addGullyDab(dab());
     for (let i = 0; i < MAX_TERRAIN_STAMPS; i++) doc.addTerrainStamp({ ...dab(), mode: 'raise' });
     for (let i = 0; i < MAX_TREE_CLEARINGS; i++) doc.cutTrees(dab().x, dab().y, 10);
-    const counts = [doc.terrainPaint.length, doc.fogDabs.length, doc.gullyDabs.length, doc.terrainStamps.length, doc.treeClearings.length];
+    const counts = [doc.terrainPaint.length, doc.gullyDabs.length, doc.terrainStamps.length, doc.treeClearings.length];
     const seen = doc.changes.version;
     // The full tile: each refused, nothing taken away for it.
     expect(doc.addPaintDab({ kind: 'sand', ...dab() })).toBe(false);
-    expect(doc.addFogDab({ ...dab(), height: 10, speed: 1 })).toBe(false);
     expect(doc.addGullyDab(dab())).toBe(false);
     expect(doc.addTerrainStamp({ ...dab(), mode: 'raise' })).toBeNull();
     expect(doc.cutTrees(2000, 2000, 10)).toBe(false);
-    expect([doc.terrainPaint.length, doc.fogDabs.length, doc.gullyDabs.length, doc.terrainStamps.length, doc.treeClearings.length]).toEqual(counts);
-    for (const kind of ['paint', 'fog', 'gullies', 'terrain', 'clearings'] as const) expect(entriesSince(doc, seen, kind), kind).toEqual([]);
+    expect([doc.terrainPaint.length, doc.gullyDabs.length, doc.terrainStamps.length, doc.treeClearings.length]).toEqual(counts);
+    for (const kind of ['paint', 'gullies', 'terrain', 'clearings'] as const) expect(entriesSince(doc, seen, kind), kind).toEqual([]);
     // Another tile: taken, its entry where it lies, not the whole map.
     doc.addPaintDab({ kind: 'sand', ...dab(true) });
-    doc.addFogDab({ ...dab(true), height: 10, speed: 1 });
     doc.addGullyDab(dab(true));
     doc.addTerrainStamp({ ...dab(true), mode: 'raise' });
     doc.cutTrees(-2000, -2000, 10);
-    for (const kind of ['paint', 'fog', 'gullies', 'terrain', 'clearings'] as const) {
+    for (const kind of ['paint', 'gullies', 'terrain', 'clearings'] as const) {
       const entries = entriesSince(doc, seen, kind);
       expect(placed(entries), kind).toBe(true);
       expect(covers(entries, -2000, -2000), kind).toBe(true);

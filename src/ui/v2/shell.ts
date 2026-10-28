@@ -20,7 +20,7 @@ import {
 import type { TransitLine } from '@world/transit';
 import { blockGridChoice, roadGridShown, roadWidth, setRoadGridShown, setRoadWidth, setZoneColoursShown, signChoice, strikeChoice, zoneColoursShown } from '../toolChoices';
 import { SIGN_HAS_TEXT, SIGN_TEXT_MAX, SIGN_TYPES } from '@world/landscape';
-import { CLOUD_MODES, POLE_TOOL_MODES, cloudMode, setCloudMode, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, fogErase, paintKind, poleToolMode, setFogErase, setPaintKind, setPoleToolMode, type PoleChoices, setStreetscapeKind, streetscapeKind } from '../toolChoices';
+import { POLE_TOOL_MODES, gullyErase, setGullyErase, TREE_MODES, treeMode, setTreeMode, treeKind, setTreeKind, elementKind, elementMode, setElementKind, setElementMode, paintKind, poleToolMode, setPaintKind, setPoleToolMode, type PoleChoices, setStreetscapeKind, streetscapeKind } from '../toolChoices';
 import { PAINT_KINDS, type PaintKind } from '@world/terrainPaint';
 
 /** The colour of each paintable ground, for its button. */
@@ -94,7 +94,6 @@ const ICON: Record<string, string> = {
   paint: '<path d="M4 20c2 0 4-1 4-4 0-2 2-3 4-3"/><path d="M12 13l7-7a2 2 0 0 0-3-3l-7 7"/><path d="M9 10l3 3"/>',
   cloud: '<path d="M7 18h10a4 4 0 0 0 0-8 6 6 0 0 0-11.3 1.7A3.2 3.2 0 0 0 7 18Z"/>',
   storm: '<path d="M7 15h9a4 4 0 0 0 0-8 6 6 0 0 0-11.3 1.7A3.2 3.2 0 0 0 7 15Z"/><path d="m12 15-2 4h3l-2 4"/>',
-  fog: '<path d="M3 9h13"/><path d="M6 13h15"/><path d="M3 17h13"/><path d="M19 9h2M3 13h1M18 17h3"/>',
   mesa: '<path d="M2 20h20"/><path d="M4 20 7 9h10l3 11"/><path d="M7.6 13h8.8M6.6 16.5h10.8"/>',
   canyon: '<path d="M2 6h6l2 13h4l2-13h6"/><path d="M8.6 10h-6M15.4 10h6M9.3 14.5h-7M14.7 14.5h7"/>',
   escarpment: '<path d="M2 20h20"/><path d="M3 20V8h9l1 12"/><path d="M5 8v12M7.5 8v12M10 8v12"/><path d="M13 20c3-1 5-2 9-2"/>',
@@ -414,7 +413,7 @@ export interface ShellDeps {
   setBarrierKind(kind: string): void;
   mapBiome(): string;
   setMapBiome(key: string): void;
-  /** An action on the whole map, asking first: clearTerrain, clearGullies, clearFog, clearTrees, clearElements, scatterClouds, clearClouds. */
+  /** An action on the whole map, asking first: clearTerrain, clearGullies, clearTrees, clearElements. */
   mapAction(name: string): void;
   // The simulation.
   demand(): number;
@@ -1392,12 +1391,12 @@ export function mountShell(deps: ShellDeps): ShellHandle {
   type LandTab = 'relief' | 'ground' | 'nature' | 'sky' | 'street';
   const RELIEF_MODES = [['raise', 'raise'], ['lower', 'lower'], ['flatten', 'flatten'], ['river', 'river'], ['gully', 'gully']] as const;
   const LANDFORMS = ['mesa', 'canyon', 'escarpment', 'sugarloaf'] as const;
-  const SKY_MODES = [['cloud', 'cloud'], ['fog', 'fog'], ['weather', 'storm']] as const;
+  const SKY_MODES = [['weather', 'storm']] as const;
   const PROPS: readonly ElementKind[] = ['grass', 'tallGrass', 'scrub', 'fern', 'clover', 'flowers', 'mushrooms', 'stones', 'pebbles', 'gravel', 'leaves'];
   const BARRIER_ICON = (kind: string, size: number): string =>
     kind === 'guardrail' || kind === 'railing' ? svg(kind, size) : builderIconSvg(kind === 'hedge' ? 'hedge' : kind === 'wall' ? 'wallRun' : 'fenceRun', size);
   /** What each tab last had in hand, so going back to it picks that again. */
-  const landLast: Record<LandTab, string> = { relief: 'raise', ground: 'paint', nature: 'trees', sky: 'cloud', street: 'streetscape' };
+  const landLast: Record<LandTab, string> = { relief: 'raise', ground: 'paint', nature: 'trees', sky: 'weather', street: 'streetscape' };
   const terrainModeNow = (): string => game.terrainMode;
   const isEffect = (kind: string): boolean => (EFFECT_KINDS as readonly string[]).includes(kind);
   const landTabOf = (current: string): LandTab => {
@@ -1519,27 +1518,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
       for (const kind of EFFECT_KINDS) {
         effects.appendChild(card(t(`el.kind.${kind}`), inTerrain && mode === 'elements' && elementKind() === kind, () => { useElement(kind); render(); }, undefined, svg(`el_${kind}`, 30)));
       }
-      if (mode === 'cloud') {
-        // Put clouds in the sky, move them, set them to the tool's size, height and density, or take them away (`world/clouds.ts`).
-        const icons: Record<(typeof CLOUD_MODES)[number], string> = { add: 'plus', move: 'move', edit: 'draw', remove: 'eraser' };
-        options.appendChild(orow(t('v2.row.brush'), choices(CLOUD_MODES.map((m) => ({
-          label: t(`cloud.${m}`), on: cloudMode() === m, run: () => { setCloudMode(m); render(); }, icon: svg(icons[m], 18),
-        })))));
-        options.append(range('cloud.size', 'cloudSize'), range('cloud.height', 'cloudHeight', 'v2.s.base'), range('cloud.density', 'cloudDensity'));
-        // Many at once over the whole sky, each then the tool's to move or take away.
-        options.append(subhead(t('cloud.spread')), range('cloud.count', 'cloudCount'), range('cloud.variation', 'cloudVariation', 'v2.s.variation'),
-          orow(t('v2.row.sky'), mapAction(t('cloud.scatter'), 'scatterClouds', 'scatter', false), mapAction(t('cloud.clear'), 'clearClouds', 'trash')));
-      } else if (mode === 'fog') {
-        // The fog brush lays or wipes banks, each keeping its own height and drift (`world/fogPaint.ts`).
-        options.appendChild(orow(t('v2.row.brush'), choices([
-          { label: t('fog.lay'), on: !fogErase(), run: () => { setFogErase(false); render(); }, icon: svg('brush', 18) },
-          { label: t('fog.erase'), on: fogErase(), run: () => { setFogErase(true); render(); }, icon: svg('eraser', 18) },
-        ])));
-        brushRows(range('fog.strength', 'fogStrength', 'terrain.strength'), range('fog.height', 'fogHeight'), range('fog.speed', 'fogSpeed', 'v2.s.wind'));
-        // The whole map's: every bank's thickness at once, and the haze over everything.
-        options.append(subhead(t('v2.map')), range('fog.mapDensity', 'fogMapDensity', 'v2.s.fogAll'), range('atmo.fog', 'atmoFog'), range('atmo.fogHeight', 'atmoFogHeight', 'v2.s.mistHeight'),
-          orow(t('v2.row.clear'), mapAction(t('fog.clear'), 'clearFog', 'trash')));
-      } else if (mode === 'weather') {
+      if (mode === 'weather') {
         // Rain, wind, lightning and thunder over the whole map; a click calls a bolt down there (`world/weather.ts`).
         options.append(range('weather.rain', 'weatherRain'), range('weather.wind', 'weatherWind'), range('weather.windDirection', 'weatherWindDir', 'v2.s.direction'),
           subhead(t('weather.storm')), range('weather.lightning', 'weatherLightning', 'v2.s.lightning'), range('weather.thunder', 'weatherThunder', 'v2.s.thunder'));
@@ -2025,7 +2004,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
   };
   deps.game.watch(['sky'], syncSky);
   deps.game.watch(['paused', 'speed'], syncSpeed);
-  // An undo or a load changes the map's own numbers (the fog, the weather, the biome) under the panel.
+  // An undo or a load changes the map's own numbers (the weather, the biome) under the panel.
   deps.game.watch(['canUndo', 'canRedo'], () => { syncHistory(); later(); });
   deps.game.watch(['inspectorOpen'], () => { syncSide(); later(); });
   // What the panels show: the tool in hand and each tool's settings.

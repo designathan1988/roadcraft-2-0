@@ -17,7 +17,6 @@ import {
   Box3,
   DoubleSide,
   Float32BufferAttribute,
-  Color,
   ACESFilmicToneMapping,
   PointLight,
   Group,
@@ -67,7 +66,7 @@ import { liveTargetCount, liveTargets, renderTargetsBytes } from './targetBytes'
 import { deviceGpuCap, gpuLedger, readGpuDevice } from './gpuLedger';
 import { screenSizer } from './screenSize';
 import { WEAK_MACHINE } from '@core/weakMachine';
-import { DEFAULT_ATMOSPHERE, createPostChain, type Atmosphere, type PostChain } from './postprocess';
+import { createPostChain, type PostChain } from './postprocess';
 import { solidsJobAsk } from './buildings/solidJobs';
 import { CANYON_WINDOW } from './canyonLight';
 import { OCCLUDERS_REACH } from './occlusion';
@@ -173,7 +172,6 @@ import { FOREST_SPECIES, createGroundCoverKit } from './groundCover';
 import type { PlantedTree } from '@world/trees';
 import { ClearingCells } from './clearingCells';
 import { buildNatureForest, loadNatureTrees, seedOfKind, type NatureTreeKit } from './natureTrees';
-import { createFogField, createFogTexture, type FogLayer } from './fogLayer';
 import { createElementLayer, loadElementKit, type ElementKit, type ElementLayer } from './elements';
 import { isCoverKind } from '@world/terrainPaint';
 import { CellKeeps, keepCellAt, keepCellRect, keepCellsOver } from './cellKeeps';
@@ -319,13 +317,11 @@ export interface SceneHandle {
   strikeAt(x: number, y: number): void;
   /** Called at every strike with where it fell and how far from the view's centre, world units (for the thunder). */
   onStrike(listener: (x: number, y: number, distance: number) => void): void;
-  /** How far the wind has carried the clouds, on the map (`world/clouds.ts` driftedCloud). */
-  cloudDrift(): { readonly x: number; readonly y: number };
   /** A lasting fire at world (x, y), height z (a building burning). */
   burn(x: number, y: number, z: number, size: number, seconds: number): void;
   /** Whether anything is still moving on its own (an explosion, bodies, debris): keep drawing. */
   busy(): boolean;
-  /** Clouds drifting over the map: worth a frame now and then even with nothing else moving. */
+  /** The elements' effects giving off smoke and the like, or the weather moving: worth a frame now and then even with nothing else moving. */
   drifting(): boolean;
   /** The bytes of the render targets and shadow maps alive (an estimate, `targetBytes.ts`): not in the scene, so not in `countMemory`. */
   targetBytes(): number;
@@ -339,8 +335,6 @@ export interface SceneHandle {
   setBuildingCutaway(spec: CutawaySpec | null): void;
   /** The sky: always day, always night, or the residents' own clock. */
   setSkyMode(mode: SkyMode): void;
-  /** Clouds and mist as the player set them (Landscape > Sky and weather). */
-  setAtmosphere(atmosphere: Atmosphere): void;
   /** Perspective camera on, or the orthographic (isometric) view. */
   setPerspective(on: boolean): void;
   /** A shot: a tracer from the muzzle to where it struck, and the muzzle's flash (world x, y, height). */
@@ -1649,7 +1643,6 @@ export function createSceneRenderer(
   /** The weather drawn (`world/weather.ts`) */
   const rain = createRain();
   const lightning = createLightning();
-  const cloudDrift = { x: 0, y: 0 };
   const canvasSize = new Vector2();
   const rainWind = new Vector2();
   let weatherActive = false;
@@ -1665,18 +1658,10 @@ export function createSceneRenderer(
   };
   /** The gully revision the relief was baked for. */
   let gulliesFor = -1;
-  /** The painted fog's map (`fogLayer.ts`), and the fog and land it was built for. */
-  const fogTexture = createFogTexture();
-  let fogLayer: FogLayer | null = null;
-  const fogField = createFogField(fogTexture);
-  /** What the fog map follows in the diary, and how far it was read. */
-  const FOG_KINDS: readonly ChangeKind[] = ['fog', 'terrain', 'ground'];
-  let fogJournal: ChangeJournal | null = null;
-  let fogSeen = -1;
-  let fogTerrainSeen = -1;
-  let fogMoving = false;
-  /** Clouds placed on the map: they boil, so the frame is drawn now and then. */
-  let placedCloudsShown = false;
+  /** The land's revision last taken by the elements: a land stroke under way holds them until its end. */
+  let elementsLandSeen = -1;
+  /** The elements give off smoke and the like (`elements.ts` hasEffects): the frame is drawn now and then. */
+  let effectsShown = false;
   let natureTreesStarted = false;
   /** @rebuild Once, when the first world is in (`draw`). */
   const startNatureTrees = (): void => {
@@ -1708,10 +1693,6 @@ export function createSceneRenderer(
   /** The buildings cut open, for the people drawn inside them (`indoors.ts`). */
   let cutSpec: CutawaySpec | null = null;
   let skyMode: SkyMode = 'day';
-  /** Clouds and mist as the player set them (`setAtmosphere`). */
-  let atmosphere: Atmosphere = DEFAULT_ATMOSPHERE;
-  /** The sun's colour times its strength, that the clouds are lit by. */
-  const sunLight = new Color();
   /** Towards the sun, for the relief's own shadows (`TerrainSurface.setSun`). */
   const sunTowards = new Vector3();
   const flatDirection = new Vector3();
@@ -3403,12 +3384,11 @@ export function createSceneRenderer(
     setSmog: (k) => environment.setSmog(k),
     strikeAt: (x, y) => strikeAt(x, y),
     onStrike(listener) { strikeListeners.push(listener); },
-    cloudDrift: () => cloudDrift,
     // A plate of the ground still on its way to the view (`flatAtlas.ts` waiting): drawn on until it is in, a still camera too.
     busy: () => (fx?.busy() ?? false) || natureTreesPending || keepsWaiting || cameraEasing || (terrain.waiting?.() ?? false),
     targetBytes: () => renderTargetsBytes([...post.targets(), ...environment.shadowMaps()]),
     buildingDetailBytes: () => buildings.residentBytes,
-    drifting: () => ((fogMoving || placedCloudsShown) && post.enabled && (quality.cloudShadows || quality.skyClouds)) || weatherActive,
+    drifting: () => (effectsShown && post.enabled && quality.airPass) || weatherActive,
     forgetRuin(id) { fx?.forgetRuin(id); },
     setTransitXray(on) {
       transitXray = on;
@@ -3460,9 +3440,6 @@ export function createSceneRenderer(
     setSkyMode(mode) {
       // Read by the next frame drawn.
       skyMode = mode;
-    },
-    setAtmosphere(next) {
-      atmosphere = next;
     },
     setBuildingCutaway(spec) {
       buildings.setCutaway(spec);
@@ -3941,13 +3918,10 @@ export function createSceneRenderer(
       const fixedHour = skyMode === 'day' ? 16 * 60 : skyMode === 'night' ? 22 * 60 : null;
       const clock = fixedHour === null ? sim.minutes : fixedHour;
       {
-        // THE WEATHER (`world/weather.ts`): the wind carries the clouds and bends the plants and the smoke
+        // THE WEATHER (`world/weather.ts`): the wind bends the plants and the smoke
         const weather = net.doc.weather;
         const step = Math.min(0.1, Math.max(0, delta));
         const wind = windVector(weather, m(1));
-        cloudDrift.x += wind.x * step;
-        cloudDrift.y += wind.y * step;
-        post.setCloudDrift(cloudDrift.x, cloudDrift.y);
         setWindWeather(wind.x, -wind.y, weather.wind);
         // The water: its waves run with the wind, rougher the harder it blows; its foam; how fast the rivers run.
         const windLength = Math.hypot(wind.x, wind.y);
@@ -3972,10 +3946,10 @@ export function createSceneRenderer(
         rainWind.set(wind.x, -wind.y);
         rain.update(weather.rain, target, span, rainWind, step);
         sceneryKit.setHaze(Math.max(weather.rain, storm));
-        weatherActive = weather.rain > 0 || weather.lightning > 0 || flash > 0 || (weather.wind > 0 && placedCloudsShown);
+        weatherActive = weather.rain > 0 || weather.lightning > 0 || flash > 0 || (weather.wind > 0 && effectsShown);
       }
       const dark = environment.setTimeOfDay(clock);
-      // What a cloud's shadow can take: the sun's share of the light now.
+      // The street light's sun: its share of the light now.
       post.setDirectShare(environment.directShare());
       if (Math.abs(dark - lastDark) > 0.01) {
         lastDark = dark;
@@ -4103,32 +4077,10 @@ export function createSceneRenderer(
       // The far blocks' instances shown as their levels are (`mesh/farBlockBatches.ts`): every frame, after the levels were chosen.
       farBlocks.sync();
       {
-        // The painted fog: its map again when the fog or the land under it changed (never in the middle of a sculpting stroke).
         const doc = net.doc;
-        // A fog stroke shows as it is painted; a land stroke waits for its end.
-        const landHeld = !!options?.holdRoads && fogTerrainSeen !== doc.terrainRevision;
-        const fogSerial = doc.changes.serialOf(...FOG_KINDS);
-        if ((fogJournal !== doc.changes || fogSerial !== fogSeen) && !landHeld) {
-          const startedAt = performance.now();
-          // Only where the fog, the land or the ground under it changed (`createFogField`)
-          const entries = fogJournal === doc.changes && fogSeen >= 0 ? doc.changes.since(fogSeen, FOG_KINDS) : null;
-          const ground = (x: number, y: number): number => terrain.renderedHeightAt(x, y);
-          const laid = !entries || entries.some((e) => e.rects === null)
-            ? fogField.whole(doc.fogDabs, ground)
-            : fogField.update(doc.fogDabs, ground, entries.flatMap((e) => e.rects!));
-          fogLayer = laid.any ? laid : null;
-          fogJournal = doc.changes;
-          fogSeen = fogSerial;
-          fogTerrainSeen = doc.terrainRevision;
-          measureHitch('hitch:fog', startedAt);
-        }
-        if (!landHeld) {
-          // The fog's window kept round where the view looks (`fogLayer.ts`): only the texels that came in written.
-          const followed = fogField.follow(rig.viewport.centre.x, rig.viewport.centre.y, doc.fogDabs, (x, y) => terrain.renderedHeightAt(x, y));
-          if (followed) fogLayer = followed.any ? followed : null;
-        }
-        const f = doc.fogSettings;
-        post.setPlacedClouds(doc.clouds);
+        // A land stroke waits for its end.
+        const landHeld = !!options?.holdRoads && elementsLandSeen !== doc.terrainRevision;
+        if (!landHeld) elementsLandSeen = doc.terrainRevision;
         // The elements: again only in the cells where they or the ground under them changed (`elements.ts`).
         if (elementKit && !landHeld) {
           const startedAt = performance.now();
@@ -4147,18 +4099,12 @@ export function createSceneRenderer(
           measureHitch('hitch:elements', startedAt);
         }
         elementLayer?.emit(Math.min(0.1, Math.max(0, delta)), rig.camera.position, exhaust);
-        post.setGroundFog(fogLayer?.any ? { texture: fogLayer.texture, low: fogLayer.low, high: fogLayer.high, density: f.density, window: fogLayer.window } : null);
-        fogMoving = !!fogLayer?.any;
-        placedCloudsShown = doc.clouds.length > 0 || !!elementLayer?.hasEffects;
+        effectsShown = !!elementLayer?.hasEffects;
       }
-      // Rain thickens the air: a grey mist over the distance (`world/weather.ts`).
-      const rainNow = net.doc.weather.rain;
-      const air = rainNow > 0 ? { ...atmosphere, fog: Math.max(atmosphere.fog, rainNow * 0.2), fogHeight: Math.max(atmosphere.fogHeight, m(120)) } : atmosphere;
       // The orthographic camera stands far back by construction
       const eyeShift = rig.perspective ? 0
         : rig.camera.position.distanceTo(rig.target) - halfHeight / Math.tan((PERSPECTIVE_FOV * Math.PI) / 360);
-      post.setAtmosphere(air, sunTowards.copy(environment.sun.position).sub(environment.sun.target.position), environment.skyColor,
-        sunLight.copy(environment.sun.color).multiplyScalar(environment.sun.intensity), eyeShift);
+      post.setAtmosphere(sunTowards.copy(environment.sun.position).sub(environment.sun.target.position), eyeShift);
       const atRender = performance.now();
       // The people's skeletons on the GPU (`people/crowdAnimation.ts`), before anybody draws them; none while the effects panel hides the people (`switchedOff`).
       if (effectSwitches.people) agents.renderPalettes(renderer);
@@ -4402,7 +4348,6 @@ export function createSceneRenderer(
       gardens?.dispose();
       for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.dispose();
       coverKit.dispose();
-      fogTexture.dispose();
       elementLayer?.dispose();
       elementKit?.dispose();
       paintedForest?.dispose();

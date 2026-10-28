@@ -42,8 +42,8 @@ export interface QualitySettings {
   readonly vehicleErrorPixels: number;
   /** Vehicles drawn whole (body, cabin, wheels apart) at most: the biggest on the screen (`agents.ts`). */
   readonly vehicleWholeCap: number;
-  /** Soft shadows of drifting clouds over the land (`postprocess.ts`, needs post-processing). */
-  readonly cloudShadows: boolean;
+  /** The air round the map: the backdrop where nothing is drawn and the haze by distance (`postprocess.ts` AIR, needs post-processing). */
+  readonly airPass: boolean;
   /** The ecosystem's vegetation (`render/nature/`) */
   readonly vegetationDistance: number;
   /** Far plants as impostors - billboards baked from each species. */
@@ -52,10 +52,6 @@ export interface QualitySettings {
   readonly birds: number;
   /** Raindrops in the air (the wet ground is drawn on every tier). */
   readonly rain: boolean;
-  /** The cloud layer of the play sky. */
-  readonly skyClouds: boolean;
-  /** Morning mist in the valleys and over the water. */
-  readonly mist: boolean;
   /** The spray and mist at the foot of waterfalls (their falling water is drawn on every tier). */
   readonly waterfalls: boolean;
   /** Share of the view's budget of triangles the buildings' levels may add up to (`core/perfBudget.ts` VIEW_BUDGETS, `buildings/frameBudget.ts`): past it their error scale rises. */
@@ -140,13 +136,11 @@ export const QUALITY: Readonly<Record<QualityLevel, QualitySettings>> = {
     // The weak machine's integrated GPU: parts a pixel off, fewer whole vehicles (the other tiers draw as they always did).
     vehicleErrorPixels: 1,
     vehicleWholeCap: 60,
-    cloudShadows: false,
+    airPass: false,
     vegetationDistance: m(180),
     impostors: true,
     birds: 0,
     rain: false,
-    skyClouds: false,
-    mist: false,
     waterfalls: false,
     triangleScale: 0.35,
     detailMemoryMB: 256,
@@ -171,13 +165,11 @@ export const QUALITY: Readonly<Record<QualityLevel, QualitySettings>> = {
     occupantZoom: perM(5.5),
     vehicleErrorPixels: VEHICLE_ERROR_PIXELS,
     vehicleWholeCap: VEHICLE_WHOLE_CAP,
-    cloudShadows: false,
+    airPass: true,
     vegetationDistance: m(300),
     impostors: true,
     birds: 150,
     rain: true,
-    skyClouds: true,
-    mist: false,
     waterfalls: true,
     triangleScale: 0.6,
     detailMemoryMB: 448,
@@ -206,13 +198,11 @@ export const QUALITY: Readonly<Record<QualityLevel, QualitySettings>> = {
     occupantZoom: perM(4),
     vehicleErrorPixels: VEHICLE_ERROR_PIXELS,
     vehicleWholeCap: VEHICLE_WHOLE_CAP,
-    cloudShadows: true,
+    airPass: true,
     vegetationDistance: m(440),
     impostors: true,
     birds: 400,
     rain: true,
-    skyClouds: true,
-    mist: true,
     waterfalls: true,
     triangleScale: 1,
     detailMemoryMB: 768,
@@ -245,13 +235,11 @@ export const QUALITY: Readonly<Record<QualityLevel, QualitySettings>> = {
     occupantZoom: perM(3.25),
     vehicleErrorPixels: VEHICLE_ERROR_PIXELS,
     vehicleWholeCap: VEHICLE_WHOLE_CAP,
-    cloudShadows: true,
+    airPass: true,
     vegetationDistance: m(640),
     impostors: true,
     birds: 600,
     rain: true,
-    skyClouds: true,
-    mist: true,
     waterfalls: true,
     triangleScale: 1,
     detailMemoryMB: 1024,

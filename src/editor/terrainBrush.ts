@@ -26,7 +26,7 @@ interface Landform {
 
 /** Everything a dab reads of the brush in hand, read once per dab. */
 export interface DabSettings {
-  /** The brush (`main.ts` BrushMode): a land mode, a landform, or paint/fog/gully/trees/elements. */
+  /** The brush (`main.ts` BrushMode): a land mode, a landform, or paint/gully/trees/elements. */
   readonly mode: string;
   readonly radius: number;
   readonly strength: number;
@@ -37,8 +37,6 @@ export interface DabSettings {
   readonly tree: { readonly mode: string; readonly kind: TreeKind; readonly brush: TreeBrush };
   /** 0..100. */
   readonly gully: { readonly strength: number; readonly erase: boolean };
-  /** Strength 0..100; height and speed in metres. */
-  readonly fog: { readonly strength: number; readonly height: number; readonly speed: number; readonly erase: boolean };
   readonly paint: PaintKind;
 }
 
@@ -96,16 +94,6 @@ function stampTerrain(doc: RoadDoc, at: Vec2, level: number, stroke: number | nu
       x: at.x, y: at.y, radius: s.radius,
       strength: Math.max(0.05, Math.min(1, s.gully.strength / 100)),
       ...(s.gully.erase ? { erase: true } : {}),
-    });
-  }
-  if (s.mode === 'fog') {
-    // Fog moves no height either: a dab of mist laid, or taken away.
-    return doc.addFogDab({
-      x: at.x, y: at.y, radius: s.radius,
-      strength: Math.max(0.02, Math.min(1, s.fog.strength / 100)),
-      height: s.fog.height * UNITS_PER_METER,
-      speed: s.fog.speed * UNITS_PER_METER,
-      ...(s.fog.erase ? { erase: true } : {}),
     });
   }
   if (s.mode === 'paint') {

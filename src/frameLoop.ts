@@ -65,7 +65,7 @@ export class FrameClock {
     this.last = performance.now();
   }
 
-  /** Only the clouds are moving: a frame in `DRIFT_MS`, unless one is already on its way. */
+  /** Only the elements' smoke, the weather or the clock moving: a frame in `DRIFT_MS`, unless one is already on its way. */
   drift(): void {
     if (this.driftQueued) return;
     this.driftQueued = true;
@@ -76,7 +76,7 @@ export class FrameClock {
   }
 }
 
-/** Twenty frames a second for the clouds drifting alone. */
+/** Twenty frames a second for what moves on its own alone (the elements' smoke, the weather, the clock). */
 const DRIFT_MS = 50;
 
 /** Work done every `seconds` of wall time, not every frame (the minimap ten times a second, the panels two and a half). */

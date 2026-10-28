@@ -140,11 +140,9 @@ const EDITS: readonly [string, Edit][] = [
   ['the land and its brushes', (doc, _net, at) => {
     doc.addTerrainStamp({ mode: 'raise', x: at * 400, y: 300, radius: 80, strength: 3 });
     doc.addPaintDab({ kind: 'grass', x: at * 400, y: 310, radius: 20, strength: 1 });
-    doc.addFogDab({ x: at * 400, y: 320, radius: 30, strength: 0.5, height: 20 } as never);
     doc.plantTrees([{ x: at * 400, y: 330, height: 20, yaw: 0, seed: at }, { x: at * 400 + 10, y: 335, height: 20, yaw: 1, seed: at }]);
     doc.cutTrees(at * 400 + 10, 335, 4);
     doc.addElements([{ kind: 'rock', x: at * 400, y: 340, size: 2, yaw: 0, seed: at } as never]);
-    doc.addCloud({ x: at * 400, y: 350, size: 90, height: 300, density: 0.5, yaw: 0 } as never);
     doc.setWeather({ rain: at });
     doc.setBalance(1_000_000 - Math.floor(at * 1000));
   }],

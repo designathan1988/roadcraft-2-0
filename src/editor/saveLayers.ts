@@ -26,10 +26,13 @@ const DENSE_SQUARE = CELL;
 
 /** The keyed layers (records with ids, any order) and the ordered lists (the order is meaning: stamps and dabs are laid in turn). */
 export type KeyedName = 'nodes' | 'segments' | 'poles' | 'spans' | 'landscape' | 'barriers' | 'buildings' | 'lots';
-export type ListName = 'stamps' | 'paint' | 'fog' | 'gullies' | 'clouds' | 'trees' | 'clearings' | 'elements' | 'zones' | 'zoneMarks';
+export type ListName = 'stamps' | 'paint' | 'gullies' | 'trees' | 'clearings' | 'elements' | 'zones' | 'zoneMarks';
+/** Lists the game no longer has: the placed clouds and the painted fog (MISSION.md item 4, 2026-10-28). An old save's squares of them are taken as part of its manifest, never read, and removed by its next save (`TiledSaves.adopt`). */
+export const RETIRED_LISTS = ['fog', 'clouds'] as const;
+export type RetiredName = (typeof RETIRED_LISTS)[number];
 export type LayerName = KeyedName | ListName;
 export const KEYED_NAMES: readonly KeyedName[] = ['nodes', 'segments', 'poles', 'spans', 'landscape', 'barriers', 'buildings', 'lots'];
-export const LIST_NAMES: readonly ListName[] = ['stamps', 'paint', 'fog', 'gullies', 'clouds', 'trees', 'clearings', 'elements', 'zones', 'zoneMarks'];
+export const LIST_NAMES: readonly ListName[] = ['stamps', 'paint', 'gullies', 'trees', 'clearings', 'elements', 'zones', 'zoneMarks'];
 export const LAYER_NAMES: readonly LayerName[] = [...KEYED_NAMES, ...LIST_NAMES];
 
 interface Place { readonly x: number; readonly y: number }
@@ -125,9 +128,7 @@ const itself = (item: Place): Place => item;
 export const LISTS: Readonly<Record<ListName, ListSpec>> = {
   stamps: listed<Place>({ side: SAVE_TILE, kinds: ['terrain'], list: (doc) => doc.terrainStamps, at: itself }),
   paint: listed<Place>({ side: SAVE_TILE, kinds: ['paint'], list: (doc) => doc.terrainPaint, at: itself }),
-  fog: listed<Place>({ side: SAVE_TILE, kinds: ['fog'], list: (doc) => doc.fogDabs, at: itself }),
   gullies: listed<Place>({ side: SAVE_TILE, kinds: ['gullies'], list: (doc) => doc.gullyDabs, at: itself }),
-  clouds: listed<Place>({ side: SAVE_TILE, kinds: ['clouds'], list: (doc) => doc.clouds, at: itself }),
   trees: listed<Place>({ side: SAVE_TILE, kinds: ['trees'], list: (doc) => doc.trees, at: itself }),
   clearings: listed<Place>({ side: SAVE_TILE, kinds: ['clearings'], list: (doc) => doc.treeClearings, at: itself }),
   elements: listed<Place>({ side: SAVE_TILE, kinds: ['elements'], list: (doc) => doc.elements, at: itself }),
@@ -137,7 +138,7 @@ export const LISTS: Readonly<Record<ListName, ListSpec>> = {
 
 /** The kinds each part kept outside the tiles is written again for. */
 export const GLOBAL_KINDS: Readonly<Record<GlobalPart, readonly ChangeKind[]>> = {
-  values: ['terrain', 'fog', 'gullies', 'nature', 'weather', 'economy', 'markingStyle'],
+  values: ['terrain', 'gullies', 'nature', 'weather', 'economy', 'markingStyle'],
   lotKeys: ['lotKeys'],
   people: ['people'],
   transit: ['transit'],

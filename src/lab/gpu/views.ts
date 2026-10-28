@@ -113,7 +113,7 @@ export function createDebugViews(scene: Scene, reversedDepth: boolean, changed: 
     if (view === 'overdraw') {
       m.blending = AdditiveBlending;
       m.transparent = true;
-      // Every fragment passes, its depth still written (the last one's): the chain's passes read the scene's depth, and with none the clouds' pass painted the air over every pixel. DO NOT turn the test off for it: with the depth test disabled the depth buffer is not written (OpenGL ES 3.0, 4.1.5).
+      // Every fragment passes, its depth still written (the last one's): the chain's passes read the scene's depth, and with none the air pass painted the air over every pixel. DO NOT turn the test off for it: with the depth test disabled the depth buffer is not written (OpenGL ES 3.0, 4.1.5).
       m.depthTest = true;
       // r186 `WebGLState` maps every depth function to its reverse on a reversed depth buffer (`ReversedDepthFuncs`: Always to Never): Never asked there to get Always.
       m.depthFunc = reversedDepth ? NeverDepth : AlwaysDepth;

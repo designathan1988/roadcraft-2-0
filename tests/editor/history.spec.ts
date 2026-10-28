@@ -226,7 +226,6 @@ function fullMap(seed: number): RoadDoc {
   for (let i = 0; i < 5; i++) doc.buildings.add({ ...generateBody('residential', 30, 30, 2), ...at(), rotation: 0 } as unknown as Building);
   doc.plantTrees(Array.from({ length: 40 }, () => ({ ...at(), height: 8 + rng.float() * 10, yaw: rng.float(), seed: rng.float() })));
   doc.addElements(Array.from({ length: 10 }, () => ({ kind: 'stones' as const, ...at(), size: 3, yaw: rng.float(), seed: rng.float() })));
-  doc.addClouds(Array.from({ length: 4 }, () => ({ ...at(), height: 200, size: 100, density: 0.5, yaw: rng.float() })));
   doc.addTerrainStamp({ mode: 'raise', ...at(), radius: 50, strength: 2 });
   doc.addPaintDab({ kind: 'sand', ...at(), radius: 40, strength: 0.6 });
   doc.setWeather({ rain: rng.float() });
@@ -319,9 +318,9 @@ describe("a gesture's step", () => {
     expect(doc.buildings.size).toBe(1);
   });
 
-  it("is closed by the page when the terrain's stroke and the clouds' gesture end", () => {
+  // The clouds' gesture and its step left with the clouds (MISSION.md item 4, 2026-10-28).
+  it("is closed by the page when the terrain's stroke ends", () => {
     const main = readFileSync('src/main.ts', 'utf8');
     expect(main.slice(main.indexOf('const wasPainting = terrainBrush.end();'), main.indexOf('const wasPainting = terrainBrush.end();') + 300)).toContain('if (wasPainting) { history.end(doc);');
-    expect(main.slice(main.indexOf('cloudTool.up(e.pointerId);'), main.indexOf('cloudTool.up(e.pointerId);') + 200)).toContain('if (cloudStepOpen) { cloudStepOpen = false; history.end(doc);');
   });
 });

@@ -47,7 +47,7 @@ const LAYER_SWITCH: readonly (readonly [RegExp, string, string])[] = [
   [/density/, 'farTraffic', 'distant traffic'],
 ];
 const PASS_SWITCH: Readonly<Record<string, string>> = {
-  shadows: 'shadows', gtao: 'ambientOcclusion', canyon: 'canyonLight', bloom: 'bloom', clouds: 'clouds', smaa: 'smaa', output: 'sharpen',
+  shadows: 'shadows', gtao: 'ambientOcclusion', canyon: 'canyonLight', bloom: 'bloom', atmosphere: 'atmosphere', smaa: 'smaa', output: 'sharpen',
 };
 
 export const layerSwitch = (layer: string): { key: string; label: string } | null => {

@@ -5,7 +5,7 @@ import type { DocTable } from '@world/docBinary';
 import type { GlobalPart, SavedGlobals, SerializedDoc } from '@world/doc';
 import { REGION_CODEC, type SquareSections, squareFrame } from './regionFrames';
 import { JSON_CODEC, type SquareBlob, type SquareCodec, withWear } from './tileCodec';
-import { KEYED, KEYED_NAMES, type KeyedName, type LayerName, type ListName } from './saveLayers';
+import { KEYED, KEYED_NAMES, type KeyedName, type LayerName, type ListName, type RetiredName } from './saveLayers';
 
 /**
  * A MAP SAVED BY SQUARES DECODED FROM ITS BLOBS (`chunkedSave.ts` readSquares): the squares decompressed and read, a kind kept in a table
@@ -22,7 +22,8 @@ export interface TiledManifest {
   readonly version: 5 | 6 | 7 | 8;
   readonly savedAt: number;
   readonly settings: unknown;
-  readonly squares: Partial<Record<LayerName, readonly string[]>>;
+  /** An old save's squares of the lists the game no longer has (`RETIRED_LISTS`) too: never read. */
+  readonly squares: Partial<Record<LayerName | RetiredName, readonly string[]>>;
   readonly globals: readonly GlobalPart[];
 }
 
@@ -34,6 +35,8 @@ export interface SavedLayout {
   readonly globals: readonly GlobalPart[];
   /** Each list's places in the order and squares, in the order read. */
   readonly lists: Partial<Record<ListName, { readonly ords: readonly number[]; readonly squares: readonly string[] }>>;
+  /** The keys of an old save's squares of the lists the game no longer has (`RETIRED_LISTS`), in this format: removed by the next save. */
+  readonly retired?: readonly string[];
   /** The squares of a kind kept in a table stored before its box or summary columns, as this format writes them (`upgraded`): stored again when the map is adopted (`TiledSaves.adopt`), so the next opening copies their rows as they are. */
   readonly upgraded?: readonly UpgradedSquare[];
 }
@@ -246,13 +249,13 @@ export async function decodeSquares(read: SquaresRead): Promise<TiledSession | n
   for (const out of listRead.values()) out.sort((a, b) => a.ord - b.ord);
   const records = (name: KeyedName): unknown[] => (keyedRead.get(name) ?? []).map((e) => e.record);
   const items = (name: ListName): unknown[] => (listRead.get(name) ?? []).map((e) => e.item);
-  const { fogSettings, gullyAuto, ...rest } = globals as SavedGlobals & Record<string, unknown>;
+  // An old save's fog settings (the painted fog left the game, MISSION.md item 4): dropped.
+  const { fogSettings: _fog, gullyAuto, ...rest } = globals as SavedGlobals & Record<string, unknown>;
   const document = {
     ...rest,
     nodes: records('nodes'), segments: records('segments'), terrain: items('stamps'), paint: items('paint'),
-    fog: { dabs: items('fog'), ...(fogSettings !== undefined ? { settings: fogSettings } : {}) },
     gullies: { dabs: items('gullies'), ...(gullyAuto !== undefined ? { auto: gullyAuto } : {}) },
-    clouds: items('clouds'), elements: items('elements'), trees: items('trees'), treeClearings: items('clearings'),
+    elements: items('elements'), trees: items('trees'), treeClearings: items('clearings'),
     poles: records('poles'), poleSpans: records('spans'), landscape: records('landscape'), barriers: records('barriers'),
     buildings: records('buildings'), zones: items('zones'), zoneMarks: items('zoneMarks'), lots: records('lots'), lotKeys: rest.lotKeys ?? [],
   } as unknown as SerializedDoc;

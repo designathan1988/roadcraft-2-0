@@ -13,7 +13,7 @@ import './doctor.css';
 /** THE DIAGNOSIS (the lab's first tab): it measures by itself - the frame, every GPU pass, one frame's every draw, the CPU's systems and functions - and lists the CAUSES by weight, each with its figures, why it matters, a one-click A/B test of the change that would remove it, and where to look (its draws, the object in the inspector, its code). Chrome's Insights sidebar for the game. */
 
 const PASS_COLOUR: Readonly<Record<string, string>> = {
-  shadows: '#9b87f5', scene: '#2fc2ab', gtao: '#f5a524', canyon: '#ef6b5b', bloom: '#ffd166', clouds: '#6aa9ff', smaa: '#8bd17c', output: '#b9c3c8',
+  shadows: '#9b87f5', scene: '#2fc2ab', gtao: '#f5a524', canyon: '#ef6b5b', bloom: '#ffd166', atmosphere: '#6aa9ff', smaa: '#8bd17c', output: '#b9c3c8',
 };
 const fmt = (n: number): string => n.toLocaleString('en-US', { maximumFractionDigits: n >= 100 ? 0 : 1 });
 
