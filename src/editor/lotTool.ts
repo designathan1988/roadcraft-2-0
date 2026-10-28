@@ -780,9 +780,19 @@ export class LotTool {
       for (const key of this.toLeave) if (inRange(kept, key)) this.toLeave.delete(key);
       this.drawnRange = drawn;
       this.keptRange = kept;
+      this.fillStale = true;
     }
     return this.settleWindow(d, seen);
   }
+
+  /** The cells to fill nearest the view's middle first, as last ordered, the middle they were ordered for, and the next one to look at:
+   *  ordered again only when the middle moved or the queue changed (`moveWindow`, `drawAllLots`). DO NOT sort every waiting cell at every
+   *  frame: pulling the camera back over the 10 km map queued thousands, each frame sorted them all to fill the few its 2 ms allow. */
+  private fillOrder: number[] = [];
+  private fillNext = 0;
+  private fillX = Number.NaN;
+  private fillY = Number.NaN;
+  private fillStale = true;
 
   /** The cells queued to be drawn (`toFill`) and let go (`toLeave`), for `WINDOW_FILL_MS` of the frame, the nearest the view's middle first;
    *  another frame asked while some wait. Whether any lot was drawn or let go. */
@@ -804,8 +814,18 @@ export class LotTool {
       }
     }
     if (this.toFill.size && performance.now() <= until) {
-      const order = [...this.toFill].map((key) => [away(key), key] as const).sort((a, b) => a[0] - b[0]);
-      for (const [, key] of order) {
+      if (this.fillStale || cx !== this.fillX || cy !== this.fillY) {
+        this.fillOrder = [...this.toFill].map((key) => [away(key), key] as const).sort((a, b) => a[0] - b[0]).map(([, key]) => key);
+        this.fillNext = 0;
+        this.fillX = cx;
+        this.fillY = cy;
+        this.fillStale = false;
+      }
+      const order = this.fillOrder;
+      for (; this.fillNext < order.length; this.fillNext++) {
+        const key = order[this.fillNext]!;
+        // Filled already (the queue changes elsewhere only in `moveWindow`, which orders it again).
+        if (!this.toFill.has(key)) continue;
         if (performance.now() > until) break;
         this.toFill.delete(key);
         this.windowCells.add(key);
@@ -831,6 +851,7 @@ export class LotTool {
     this.windowCells.clear();
     this.toFill.clear();
     this.toLeave.clear();
+    this.fillStale = true;
     this.drawnRange = this.keptRange = null;
     if (!this.seen) { for (const lot of this.doc.lotStore.all()) this.drawLot(lot.id, d); return; }
     this.moveWindow(d);
