@@ -4131,8 +4131,10 @@ export function createSceneRenderer(
         // THE MAP'S OWN ROADS (`mapRoadsIn`), not whatever stands: DO NOT take the last city's for this one's - the curtain fell on a town of buildings over grass, no street drawn (2026-10-21).
         // And every road past the opening's view at its far level (`networkFar`): DO NOT show a map whose streets stop at the view's edge.
         const roadsIn = roads !== null && mapRoadsIn && !networkFar.pending;
+        // And the people's bodies, every one asked at the start (`keepPeople`): DO NOT put a body together on the page once the town shows
+        // (its cook read, its materials and impostor made, its clips taken: a stall when a person first showed, MISSION.md item 6).
         const whole = roadsIn && !buildings.coarsePending && (mapView || !buildings.viewPending)
-          && natureTreesStarted && !natureTreesPending;
+          && natureTreesStarted && !natureTreesPending && !agents.peopleLoading();
         // DO NOT draw the unseen frame before the town's programs are built: drawn first, each program was built at its first use, one after the other, in that one frame (4.5 s of the opening's 62, 2026-10-16); asked together, the driver builds them in parallel (KHR_parallel_shader_compile).
         // The programs are asked once the BUILDINGS are in, not when every road tile and tree is: the town's cells are what bring every
         // material the reveal draws, and the driver builds the shaders while the last tiles stream (the compile was on the critical path

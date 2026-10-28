@@ -1163,6 +1163,12 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       const tilt = body ? batches.get(body.index)?.stopTilt : undefined;
       return tilt ? (motorcycle ? tilt.moto : tilt.bike) : null;
     },
+    /** The bodies kept (`keepAll`) whose load is under way: the opening's curtain waits for them (`renderer.ts` reveal), so no body is put together on the page once the town shows (MISSION.md item 6). A failed one is not waited for (asked again later). */
+    get keptLoading(): number {
+      let n = 0;
+      for (const index of resident) if (!batches.has(index) && loading.has(index)) n++;
+      return n;
+    },
     /** Every body loaded now and kept: the people in the vehicles are drawn the first frame they are near, not seconds later (a body was asked for only once a car came near, and let go a minute after the view left). */
     keepAll(): void {
       for (let index = 0; index < models.length; index++) {
