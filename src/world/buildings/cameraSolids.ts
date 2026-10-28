@@ -128,6 +128,8 @@ export interface SolidsOffPage {
   /** A building's floor known without its record (the floor kept of its row, or the one the cells' jobs measured where its blocks are its
    *  volumes: `floors.ts`); undefined: worked out from its record (`floorAt`). */
   footOf(id: BuildingId, blocksAreVolumes: boolean): number | undefined;
+  /** Moves whenever a floor `footOf` answers may have become known (a row's floor kept, a job's floors learned); none: asked at every frame. */
+  footsVersion?(): number;
   /** A cell filed from off the page: what the camera and the canyon light read there may have changed (a frame asked). */
   arrived?(): void;
 }
@@ -189,6 +191,12 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   const cellRect = (key: number): Rect => [cellX(key) * CELL, cellY(key) * CELL, (cellX(key) + 1) * CELL, (cellY(key) + 1) * CELL];
   /** By the cell each waits in (its centre's), in the order they came. */
   const footless = new Map<number, Footless[]>();
+  /** What the last whole walk of the waiting buildings was made for (`footsVersion`, the filing's `version`), and the earliest a building left
+   *  waiting runs out of its wait: walked again only when one of them moved, a building came to wait, or a walk was cut by its deadline.
+   *  DO NOT ask every waiting building's floor at every frame: each asked the cells' digest and the jobs' floors again (up to 2 ms a frame). */
+  let walkedFor = '';
+  let walkDue = Infinity;
+  let walkAgain = true;
   /** One waiting building filed if it can be: with the floor now known of it (the cells' jobs measure it with the masses, the first level to
    *  land), or worked out here when `work` is asked (a question reached its cell), when the jobs never measure it (its blocks are not its
    *  volumes) or when it waited past `FOOTLESS_WAIT_MS`; whether it was. DO NOT work out on the page what the masses' jobs are about to
@@ -217,21 +225,31 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
       arrived.push(cellRect(cell));
       return;
     }
+    const foots = offPage.footsVersion?.();
+    const walkKey = foots === undefined ? '' : `${foots}|${version}`;
+    if (foots !== undefined && !walkAgain && walkKey === walkedFor && performance.now() < walkDue) return;
+    let due = Infinity;
     for (const [key, list] of footless) {
       let kept = 0, k = 0, now = performance.now();
       for (; k < list.length; k++) {
         // The clock read a few buildings apart: reading it for each was a cost of its own.
         if ((k & 7) === 0) now = performance.now();
         if (now >= until) break;
-        if (!settleOne(town, list[k]!, false, now)) list[kept++] = list[k]!;
+        const f = list[k]!;
+        if (!settleOne(town, f, false, now)) { list[kept++] = f; due = Math.min(due, f.since + FOOTLESS_WAIT_MS); }
       }
       const settled = kept < k;
+      // Cut by the deadline: the rest walked at the next frame.
+      if (k < list.length) walkAgain = true;
       for (; k < list.length; k++) list[kept++] = list[k]!;
       list.length = kept;
       if (settled) arrived.push(cellRect(key));
       if (kept === 0) footless.delete(key);
-      if (performance.now() >= until) return;
+      if (walkAgain && performance.now() >= until) return;
     }
+    walkedFor = walkKey;
+    walkDue = due;
+    walkAgain = false;
   };
   /** The cell a building's solids are kept waiting by: the one its centre stands in. */
   const cellOfRows = (rows: Float64Array, fallback: number): number =>
@@ -393,6 +411,7 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
                 let list = footless.get(at);
                 if (!list) footless.set(at, list = []);
                 list.push({ id, rows: answer.rows, blocksAreVolumes: answer.blocksAreVolumes, since: performance.now() });
+                walkAgain = true;
                 continue;
               }
               // Changed since it was asked, or no floor known of it: as the page files it, from its record as it stands.

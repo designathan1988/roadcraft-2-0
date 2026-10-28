@@ -1827,6 +1827,8 @@ export function createSceneRenderer(
       if (!at) return undefined;
       return floors.floorKept(at.table, at.row) ?? (blocksAreVolumes ? buildings.knownFloor(id) : undefined);
     },
+    // A floor kept of a row, or the cells' jobs' floors learned: the waiting buildings asked again (`cameraSolids.ts` settleFootless).
+    footsVersion: () => floors.keptVersion + buildings.floorsLearned,
     arrived: () => onAssetsReady(),
   } : null);
   /** The roads watched for vanishing from the picture */

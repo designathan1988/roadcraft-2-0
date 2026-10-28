@@ -10,6 +10,8 @@ export interface BuildingFloors {
   floorOf(b: Building): number;
   /** The floor kept of a table's row, its record not read; undefined when none is kept. */
   floorKept(table: TableRows, row: number): number | undefined;
+  /** Moves whenever a row's floor is kept (`floorOf`): what `floorKept` answers may have changed since. */
+  readonly keptVersion: number;
   /** Forgets one building's floor (its site worked out again). */
   forget(b: Building): void;
   /** Forgets every floor (the roads or the land moved everywhere). */
@@ -49,14 +51,16 @@ export function buildingFloors(groundAt: GroundAt, pavedAt: PavedAt | undefined,
   let seen = -1;
   /** The row a record stands as, only when it is that row's own record (`BuildingStore.recordRow`: a building edited, or a preview of one, keeps its own floor). */
   const rowOf = (b: Building): { readonly table: TableRows; readonly row: number } | null => standing?.(b) ?? null;
+  let keptVersion = 0;
   return {
+    get keptVersion() { return keptVersion; },
     floorOf(b) {
       const at = rowOf(b);
       if (at) {
         let column = rows.get(at.table);
         if (!column) rows.set(at.table, column = new Float64Array(at.table.size).fill(Number.NaN));
         let floor = column[at.row]!;
-        if (Number.isNaN(floor)) column[at.row] = floor = work(b);
+        if (Number.isNaN(floor)) { column[at.row] = floor = work(b); keptVersion++; }
         return floor;
       }
       let floor = known.get(b);

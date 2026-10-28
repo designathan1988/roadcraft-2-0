@@ -1195,6 +1195,9 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
         pack: (rect) => paving?.pack?.(rect) ?? null,
       };
     },
+    get floorsLearned() {
+      return pool.floorsLearned;
+    },
     knownFloor(id) {
       // As the cells' jobs measured it (`CellPool.floorKnown`): the building's record as the town files it (its signature), the ground of its cell
       // and the paving read as they stand now. Undefined where no job measured it so, or it measured none (no closed block).
