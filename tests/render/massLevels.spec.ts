@@ -383,22 +383,38 @@ describe('the tiles and bases (the plates\' level) asked of the workers', () => 
     expect(levels.asking).toBe(0);
   });
 
-  it('asks a tile only once the view wants it (its plate refined), and every base at once', () => {
+  it('asks a tile only once the view wants it (its plate refined), and a base only once its plate is within a plate of the view (MISSION.md item 5)', () => {
     const { pool, asked, answer } = fakePool();
     const planned: string[] = [];
-    const wanted = new Set<string>();
+    const wanted = new Set<string>(['b:0,0']);
     const levels = new MassLevels(pool, () => {}, () => {}, (key) => planned.push(key), (key) => wanted.has(key));
     levels.touch('0,0', entries('a'));
     // Cell 9: tile 2, plate 1 (the plates from the cells' origin, `levelKeys.ts`).
     levels.touch('9,0', entries('b'));
     levels.flush(env);
-    // The bases asked, the plates and the tiles only planned: a plate (its base) stands for them from afar.
-    expect(asked.map((a) => a.key).sort()).toEqual(['b:0,0', 'b:1,0']);
+    // The base the view wants asked at once; the other base, the plates and the tiles only planned. DO NOT ask every base of the map.
+    expect(asked.map((a) => a.key)).toEqual(['b:0,0']);
     expect(planned.sort()).toEqual(['b:0,0', 'b:1,0', 'p:0,0', 'p:1,0', 't:0,0', 't:2,0']);
     answer();
     asked.length = 0;
     levels.pump(env);
     expect(asked).toEqual([]);
+    // The view comes within a plate of the other plate: its base asked.
+    wanted.add('b:1,0');
+    levels.pump(env);
+    expect(asked.map((a) => a.key)).toEqual(['b:1,0']);
+    answer();
+    asked.length = 0;
+    // Let go past the ring for the budget (`massCells.ts` evictLevels): asked again only once the view wants it again.
+    wanted.delete('b:1,0');
+    levels.release('b:1,0');
+    levels.pump(env);
+    expect(asked).toEqual([]);
+    wanted.add('b:1,0');
+    levels.pump(env);
+    expect(asked.map((a) => a.key)).toEqual(['b:1,0']);
+    answer();
+    asked.length = 0;
     // The eye comes near one plate: its tile asked, the other still not.
     wanted.add('t:0,0');
     levels.pump(env);
@@ -472,7 +488,8 @@ describe('a tile or a plate drawn before some of its buildings came in', () => {
       isRunning: () => true,
       cancel: () => {},
     } as unknown as CellPool;
-    const levels = new MassLevels(pool, () => {}, () => {}, () => {}, () => false);
+    // The view wants its base (its plate within a plate of the view), not its tiles.
+    const levels = new MassLevels(pool, () => {}, () => {}, () => {}, (key) => key[0] === 'b');
     expect(levels.outdated(plateOf(0, 0))).toBe(false);
     levels.touch('0,0', { ids: Float64Array.of(1), sigs: Float64Array.of(1), digest: 0 });
     expect(levels.outdated(plateOf(0, 0))).toBe(true);

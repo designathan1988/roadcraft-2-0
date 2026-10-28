@@ -94,7 +94,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   let lodStale = true;
   const lodChanged = (): void => { lodStale = true; };
   const massCells = createMassCells(kit, BATCH_CELL, (key) => {
-    if (key[0] === 't') levels.release(key);
+    if (key[0] === 't' || key[0] === 'b') levels.release(key);
     else massAsked.delete(key);
   }, (key) => !levels.outdated(key), lodChanged);
   group.add(massCells.group);
@@ -452,7 +452,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   const levels = new MassLevels(pool, (key, mass) => { massCells.landLevel(key, mass); chooseNow(); }, (key) => massCells.removeLevel(key),
     (key) => massCells.planLevel(key), (key) => massCells.wanted(key));
   levels.changed = lodChanged;
-  // The base over each plate's square (the top level, `massBase.ts`): asked first, kept for good, drawn wherever nothing finer is.
+  // The base over each plate's square (the top level, `massBase.ts`): asked first for the plates within a plate of the view, kept while they are, drawn wherever nothing finer is.
   levels.landBase = (key, base) => { massCells.landBase(key, base); chooseNow(); };
   // Behind the curtain a tile or a plate out of the view is not asked: the workers make what the opening's picture draws first (`coarsePending`), the rest nearest first once it is shown.
   // One let go for the budget (`massBudget`) waits for the view to meet it again and want it whole (`askable`): DO NOT ask it back at once, to be let go again.

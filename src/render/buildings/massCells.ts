@@ -12,8 +12,9 @@ import { PLATE_DETAIL, TILE_DETAIL } from './massing';
 
 /** THE BUILDINGS' FAR LEVEL, cell by cell: each cell of the buildings' grid */
 /** Above the cells, a tile (L2, 16 cells) of masses, one mesh each, and a plate (L3, 64 cells), chosen as Cesium's HLOD does (`massLevels.ts`) */
-/** The plate drawn by its square's base (`massBase.ts`, the plate's own level laid cell by cell, no mesh nor job of the plate's): never let go,
- *  drawn under every cell nothing finer draws (`syncBases`) - a plate drawn whole is its base drawing all its cells. */
+/** The plate drawn by its square's base (`massBase.ts`, the plate's own level laid cell by cell, no mesh nor job of the plate's): asked for the
+ *  plates the view meets or is a plate away from (`BASE_RING`), never let go while it is, drawn under every cell nothing finer draws
+ *  (`syncBases`) - a plate drawn whole is its base drawing all its cells. */
 /** Only the buildings of the page's document (the tiles loaded): the other tiles' are baked in workers from the tile store (`farLevels.ts`) */
 
 /** The largest thing the far level leaves out, m: a balcony's slab (1.3 m) or a sill and its frame stand out of the wall */
@@ -45,6 +46,11 @@ const HORIZON_HALF = m(150);
 /** A cell comes near only when its box, grown by this share of a cell, meets the view's frustum; a near cell stays near while its box grown by `VIEW_KEEP` does (hysteresis, so a pan does not let go what it just made). */
 const VIEW_COME = 0.125;
 const VIEW_KEEP = 0.5;
+/** A plate's base is wanted (asked, kept) while the plate's box grown by this many cells meets the view's frustum: one plate round the view,
+ *  so a pan or a turn finds the base there before it shows (Cesium's `loadSiblings`). DO NOT ask every plate's base of the map at the opening
+ *  and keep it for good: the 10 km city held its whole town at the plate's detail on the GPU and in the workers' queue, whatever the view
+ *  (MISSION.md item 5). Past the ring a base goes only for the masses' budget (`evictLevels`), the least recently seen first. */
+const BASE_RING = 8;
 /** The vertical extent a tile's or a plate's box is tested against the view with (`levelInView`): below any ground, and as tall as a tower before its masses say how tall it is. */
 const LEVEL_FLOOR = m(-500);
 const LEVEL_CEILING = m(400);
@@ -105,7 +111,7 @@ interface Level {
 
 /** The base over a plate's square (`massBase.ts`): planned once its square has buildings, its mesh (null: none of its buildings stands from
  *  afar) and its cells' runs of indices (`BaseMass.cells`) once they come. */
-interface Base { readonly key: string; mesh: Mesh | null; cells: Int32Array; landed: boolean }
+interface Base { readonly key: string; mesh: Mesh | null; cells: Int32Array; landed: boolean; seenAt: number }
 const NO_CELLS = new Int32Array(0);
 
 /** What draws a cell of buildings now (`MassCells.census`): its detail, its masses, its tile's or plate's, the base's; 'empty' where none of its buildings stands from afar (lots of grass alone), null where nothing does (a hole). */
@@ -125,7 +131,8 @@ export interface MassCells {
   removeLevel(key: string): void;
   /** A tile or a plate that has buildings, its masses asked or not yet (`massLevels.ts` `plan`). */
   planLevel(key: string): void;
-  /** Whether the view wants a tile's masses (its plate refined); a plate's always. */
+  /** Whether the view wants a tile's masses (its plate refined), a base's (its plate within `BASE_RING` of the view at the last `choose`, every
+   *  one at a `choose` with no frustum, none before the first `choose`); a plate's always. */
   wanted(key: string): boolean;
   /** The cells drawn one by one now (their tile refined, `choose`): the only cells whose own masses are asked (`layer.ts`). */
   exposedCells(): Iterable<string>;
@@ -133,7 +140,7 @@ export interface MassCells {
   readonly waiting: number;
   /** Of `waiting`, those that meet the view's frustum: what the opening's picture waits for (`layer.ts` coarsePending). The levels out of view are drawn whole once they come, after the curtain. */
   readonly waitingInView: number;
-  /** The tiles' and plates' masses out of the view let go, the least recently seen first, until every mass of the town (cells, tiles, plates) holds `budget` bytes or less: what was freed, bytes. A level let go is asked again once the view meets it (`evicted`). */
+  /** The tiles' and plates' masses out of the view let go, the least recently seen first, then the bases past `BASE_RING`, until every mass of the town (cells, tiles, bases) holds `budget` bytes or less: what was freed, bytes. A level let go is asked again once the view meets it (`evicted`); a base once its plate is within the ring (`wanted`). */
   evictLevels(budget: number): number;
   /** Whether a tile's or a plate's masses were let go for the budget and not asked again since (`evictLevels`). */
   evicted(key: string): boolean;
@@ -170,7 +177,7 @@ export interface MassCells {
   shadowMasses(on: boolean): string[];
   /** A base's prisms come (`massLevels.ts` landBase; null: none of its buildings stands from afar). */
   landBase(key: string, base: BaseMass | null): void;
-  /** Bases planned whose prisms have not come: the town has holes until they do. */
+  /** Bases wanted (`wanted`) whose prisms have not come: the town has holes until they do. */
   readonly basesWaiting: number;
   /** Of `basesWaiting`, those whose plate meets the view's frustum at the last `choose` (every one before a `choose` with a frustum): what the opening's picture waits for (`layer.ts` coarsePending); the others come after the curtain, nearest first. */
   readonly basesWaitingInView: number;
@@ -435,6 +442,12 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
   /** The plates, and the tiles of the plates refined, in the view's frustum (grown by `VIEW_KEEP`) at the last `choose` (`levelSeen`); `allSeen`, a `choose` with no frustum. None before the first `choose`. */
   const seenPlates = new Set<string>();
   let allSeen = false;
+  /** The bases whose plate is within `BASE_RING` of the view's frustum at the last `choose` (`wanted`), worked out again only when the view
+   *  moved (`viewSerial`) or a base came, went or landed (`basesMoved`): DO NOT test every base's box against a view that did not move. */
+  const basesWanted = new Set<string>();
+  let basesSerial = -1;
+  let basesMoved = true;
+  const baseWanted = (key: string): boolean => allSeen || basesWanted.has(key);
   /** A plate is kept while it has a mesh or a tile of its own: its tiles are found through it (`choose`), so a tile makes its plate. */
   const ensure = (key: string): Level => {
     const map = levelsOf(key);
@@ -667,7 +680,7 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
     removeLevel(key) {
       if (key[0] === 'b') {
         const base = bases.get(key);
-        if (base) { changed(); dropBase(base); bases.delete(key); staleBases.delete(key); }
+        if (base) { changed(); dropBase(base); bases.delete(key); staleBases.delete(key); basesMoved = true; }
         return;
       }
       const level = levelsOf(key).get(key);
@@ -675,10 +688,11 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
     },
     planLevel(key) {
       changed();
-      if (key[0] === 'b') { if (!bases.has(key)) bases.set(key, { key, mesh: null, cells: NO_CELLS, landed: false }); return; }
+      if (key[0] === 'b') { if (!bases.has(key)) { bases.set(key, { key, mesh: null, cells: NO_CELLS, landed: false, seenAt: 0 }); basesMoved = true; } return; }
       ensure(key);
     },
     wanted(key) {
+      if (key[0] === 'b') return baseWanted(key);
       return key[0] === 'p' || (tiles.get(key)?.wanted ?? false);
     },
     *exposedCells() {
@@ -712,13 +726,13 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       return level !== undefined && standsFor(level);
     },
     evictLevels(budget) {
-      // The bases with the rest: never let go, what they hold leaves the levels less room.
+      // The bases with the rest: what they hold leaves the levels less room.
       let total = gpuLedger.bytes('tile masses') + gpuLedger.bytes('cell masses') + gpuLedger.bytes('base masses');
       if (total <= budget || allSeen) return 0;
       // Out of the view first; then IN THE VIEW AND IDLE, drawn by its children (Cesium's cache keeps a refined tile's content only while
       // under `cacheBytes`): the plates and tiles a district view refines stood on the GPU beside the tiles and cells drawn in their place,
       // 125 MB of the city of 25,000 buildings' 244 MB of masses on low against a budget of 96 (step-25k, 2026-10-21). DO NOT let go one
-      // drawn, or one the view wants whole: the hole it leaves waits for the workers. The base (the plates) stands under all of them for good.
+      // drawn, or one the view wants whole: the hole it leaves waits for the workers. The base stands under all of them while its plate is within the ring.
       const out: Level[] = [];
       for (const level of tiles.values()) if (level.mesh && (!seenPlates.has(level.key) || (!level.coarse && !level.whole))) out.push(level);
       // The least recently seen first (the idle ones in the view were seen now: after every level out of it); of those seen as long ago, the largest.
@@ -736,6 +750,26 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
         total -= bytes.get(level)!;
         freed += bytes.get(level)!;
       }
+      // Then the bases past the ring, the least recently seen first: asked again once their plate is within it (`wanted`), before it shows.
+      if (total > budget) {
+        const far: Base[] = [];
+        for (const base of bases.values()) if (base.mesh && !baseWanted(base.key)) far.push(base);
+        const baseBytes = new Map(far.map((base) => [base, geometryCost(base.mesh!.geometry).bytes]));
+        far.sort((a, b) => a.seenAt - b.seenAt || baseBytes.get(b)! - baseBytes.get(a)!);
+        for (const base of far) {
+          if (total <= budget) break;
+          const plate = plates.get(`p:${base.key.slice(2)}`);
+          // Its plate stands for nothing now: not drawn, and its tiles not asked while it is out of the view (`plateGone`).
+          if (plate) { setCoarse(plate, false); plate.error = Infinity; plate.evicted = true; }
+          dropBase(base);
+          base.landed = false;
+          staleBases.delete(base.key);
+          evictions++;
+          released(base.key);
+          total -= baseBytes.get(base)!;
+          freed += baseBytes.get(base)!;
+        }
+      }
       if (freed > 0) changed();
       return freed;
     },
@@ -746,7 +780,9 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       changed();
       staleBases.add(key);
       let base = bases.get(key);
-      if (!base) bases.set(key, base = { key, mesh: null, cells: NO_CELLS, landed: false });
+      if (!base) bases.set(key, base = { key, mesh: null, cells: NO_CELLS, landed: false, seenAt: 0 });
+      // Its plate's box is its masses' now: the ring tested again.
+      basesMoved = true;
       dropBase(base);
       base.landed = true;
       // Its plate's level: what it leaves out, how high it stands, whether it has any mass (none: its cells stand for it).
@@ -769,13 +805,13 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
     },
     get basesWaiting() {
       let n = 0;
-      for (const base of bases.values()) if (!base.landed) n++;
+      for (const base of bases.values()) if (!base.landed && baseWanted(base.key)) n++;
       return n;
     },
     get basesWaitingInView() {
       let n = 0;
       for (const base of bases.values()) {
-        if (base.landed) continue;
+        if (base.landed || !baseWanted(base.key)) continue;
         if (!chosenView) { n++; continue; }
         const { i0, j0, n: side } = levelCells(base.key);
         levelBox.min.set(i0 * cellSize, LEVEL_FLOOR, -((j0 + side) * cellSize));
@@ -873,6 +909,24 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       seenPlates.clear();
       allSeen = !view;
       chooseSerial++;
+      // The bases the view wants: their plate within a plate of it (`BASE_RING`); one coming in asked (`massLevels.ts` pump).
+      if (!view) basesMoved = true;
+      else if (basesMoved || basesSerial !== viewSerial) {
+        basesMoved = false;
+        basesSerial = viewSerial;
+        basesWanted.clear();
+        for (const base of bases.values()) {
+          // Its plate's box as `levelInView` reads it (as tall as its masses once they came), or its square as tall as a tower before.
+          const plate = plates.get(`p:${base.key.slice(2)}`);
+          const { i0, j0, n } = levelCells(base.key);
+          const g = BASE_RING * cellSize;
+          levelBox.min.set((plate?.x0 ?? i0 * cellSize) - g, LEVEL_FLOOR, -((plate?.y1 ?? (j0 + n) * cellSize) + g));
+          levelBox.max.set((plate?.x1 ?? (i0 + n) * cellSize) + g, Math.max(plate?.top ?? 0, LEVEL_CEILING), -((plate?.y0 ?? j0 * cellSize) - g));
+          if (!view.intersectsBox(levelBox)) continue;
+          basesWanted.add(base.key);
+          base.seenAt = chooseSerial;
+        }
+      }
       /** A level waited for: by the opening's picture too while it meets the frustum (`waitingInView`). One let go for the budget out of the view is not: it is asked again once the view meets it. */
       const wait = (level: Level): void => {
         const seen = levelInView(view, level, VIEW_COME);
@@ -1169,6 +1223,8 @@ export function createMassCells(kit: BuildingKit, cellSize: number, released: (k
       waitingInView = 0;
       seenPlates.clear();
       allSeen = false;
+      basesWanted.clear();
+      basesMoved = true;
       lastEye.known = false;
       highest = -Infinity;
       highestStale = false;

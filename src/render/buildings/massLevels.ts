@@ -7,7 +7,7 @@ import { type MassLevel, baseOf, cellIndex, levelCells, plateOf, tileOf } from '
 import type { BaseMass } from './massBase';
 import { warmFull } from '../uploads';
 
-/** THE BUILDINGS' LEVELS ABOVE THE CELLS: a 1,000 m tile (L2) of masses, one mesh each (`massCells.ts` chooses them), and the base over each plate's square (the plate's own level, L3, laid cell by cell, `massBase.ts`): asked at once, before every other, never let go. A plate has no job of its own: its base is it (the same buildings, the same detail, the same bytes). */
+/** THE BUILDINGS' LEVELS ABOVE THE CELLS: a 1,000 m tile (L2) of masses, one mesh each (`massCells.ts` chooses them), and the base over each plate's square (the plate's own level, L3, laid cell by cell, `massBase.ts`): asked before every other once the view wants it (its plate within a plate of the view, `massCells.ts` BASE_RING), never let go while it does. A plate has no job of its own: its base is it (the same buildings, the same detail, the same bytes). */
 
 const KIND: Readonly<Partial<Record<MassLevel, JobKind>>> = { tile: 'massTile', base: 'massBase' };
 /** The base that is a plate's level (`massBase.ts`). */
@@ -69,8 +69,15 @@ export class MassLevels {
       this.plan(key);
       // A plate is its base's (`massBase.ts`): planned, never asked.
       if (key[0] === 'p') { this.edited.delete(key); continue; }
-      // THE BASE AT ONCE, whatever the view and the upload queue: it is what stands where no finer level is (`massBase.ts`).
-      if (key[0] === 'b') { this.ask(key, env); continue; }
+      // THE BASE AT ONCE once the view wants it, whatever the upload queue: it is what stands where no finer level is (`massBase.ts`). DO NOT
+      // ask every base of the map: one out of the ring waits, stale, until the view comes within a plate of it (`pump`).
+      if (key[0] === 'b') {
+        if (this.wanted(key) || this.edited.has(key)) { this.ask(key, env); continue; }
+        const was = this.asked.get(key);
+        if (was !== undefined) { this.pool.cancel(was); this.asked.delete(key); }
+        this.stale.add(key);
+        continue;
+      }
       // The upload queue full (`uploads.ts` warmFull): left stale, asked by `pump` once it drains.
       if (this.wanted(key) && (this.edited.has(key) || (!warmFull() && !this.deferred(key)))) this.ask(key, env);
       else {
@@ -87,6 +94,13 @@ export class MassLevels {
   /** The tiles changed since last asked that a view now wants (a plate refined): asked (each frame, `layer.ts`; as many as tiles changed, never the map). */
   pump(env: CellEnv): void {
     for (const key of this.stale) {
+      // A base as soon as the view wants it, whatever the upload queue (`flush`).
+      if (key[0] === 'b') {
+        if (!this.wanted(key)) continue;
+        this.stale.delete(key);
+        if (this.hasAny(key)) this.ask(key, env);
+        continue;
+      }
       // DO NOT ask masses to upload while the upload queue is full: their arrays waited on the page (conf77, 2026-10-17); asked once it drains.
       if (warmFull() && !this.edited.has(key)) continue;
       if (!this.wanted(key) || (this.deferred(key) && !this.edited.has(key))) continue;
@@ -95,9 +109,9 @@ export class MassLevels {
     }
   }
 
-  /** A tile whose masses were let go, neither drawn nor wanted, or let go out of the view for the budget (`massCells.ts` evictLevels): asked again once a view wants it (`pump`, `deferred`). */
+  /** A tile whose masses were let go, neither drawn nor wanted, or let go out of the view for the budget (`massCells.ts` evictLevels): asked again once a view wants it (`pump`, `deferred`); a base let go past the ring, once its plate is within it. */
   release(key: string): void {
-    if (key[0] === 'b' || key[0] === 'p' || !this.hasAny(key)) return;
+    if (key[0] === 'p' || !this.hasAny(key)) return;
     const was = this.asked.get(key);
     if (was !== undefined) { this.pool.cancel(was); this.asked.delete(key); }
     this.stale.add(key);
