@@ -10,6 +10,7 @@ import {
 } from 'three';
 import { m } from '@world/units';
 import { pullTowardEye } from './depthConvention';
+import { pinned } from './pinned';
 
 /** A patch of blood on the ground: where, how big at full spread, and how long it takes to spread. */
 export interface BloodDecal {
@@ -101,7 +102,8 @@ export interface CasualtyLayer {
 }
 
 export function createCasualties(): CasualtyLayer {
-  const group = new Group();
+  // The stains are placed by their instances: the group and its meshes never move as objects.
+  const group = pinned(new Group());
   group.name = 'casualties';
   const geometry = new CircleGeometry(0.5, 20).rotateX(-Math.PI / 2);
   const stamps = VARIANTS.map((variant) => {
@@ -110,7 +112,7 @@ export function createCasualties(): CasualtyLayer {
       map: bloodTexture(variant), transparent: true, depthWrite: false, roughness: 0.18, metalness: 0,
     });
     pullTowardEye(material, 3, 3);
-    const mesh = new InstancedMesh(geometry, material, MAX);
+    const mesh = pinned(new InstancedMesh(geometry, material, MAX));
     mesh.name = 'casualties-blood';
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;

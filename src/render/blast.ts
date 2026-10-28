@@ -28,6 +28,7 @@ import {
 
 import { TUNED_UNIT, m } from '@world/units';
 import { pullTowardEye } from './depthConvention';
+import { pinned } from './pinned';
 import type { Exhaust } from './exhaust';
 
 /** Explosions, and what they throw */
@@ -208,7 +209,8 @@ function craterTexture(road: boolean): CanvasTexture | null {
 
 /** `light`: the flash, made by the renderer and in the scene since it opened (`PlayEffectsContext.lights`). */
 export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
-  const group = new Group();
+  // Never moved as objects: the group, the debris and crater meshes (placed by their instances), the wires (by their vertices); the ring and the wrecks move themselves.
+  const group = pinned(new Group());
   group.name = 'blast';
   const debrisMaterial = new MeshStandardMaterial({ roughness: 0.9, metalness: 0.05 });
   const boxes = new InstancedMesh(new BoxGeometry(1, 1, 1), debrisMaterial, MAX_PIECES);
@@ -234,6 +236,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
     .translate(0, 0, -0.5).rotateX(-Math.PI / 2);
   const slabs = new InstancedMesh(slabGeometry, debrisMaterial, MAX_PIECES);
   for (const mesh of [boxes, cylinders, shells, slabs]) {
+    pinned(mesh);
     mesh.name = 'blast-debris';
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;
@@ -267,13 +270,13 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   craterMaterials.push(soot);
   const craterMeshes = craterMaterials.map((material, i) => {
     if (i === 2) {
-      const mesh = new InstancedMesh(craterGeometry, material, MAX_SOOT);
+      const mesh = pinned(new InstancedMesh(craterGeometry, material, MAX_SOOT));
       mesh.name = 'blast-soot';
       mesh.count = 0; mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.receiveShadow = true; mesh.visible = false;
       group.add(mesh);
       return mesh;
     }
-    const mesh = new InstancedMesh(craterGeometry, material, MAX_CRATERS);
+    const mesh = pinned(new InstancedMesh(craterGeometry, material, MAX_CRATERS));
     mesh.name = 'blast-craters';
     mesh.count = 0;
     mesh.frustumCulled = false;
@@ -295,7 +298,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   const wireGeometry = new BufferGeometry();
   const wirePositions = new Float32Array(MAX_WIRES * (WIRE_POINTS - 1) * 2 * 3);
   wireGeometry.setAttribute('position', new BufferAttribute(wirePositions, 3));
-  const wires = new LineSegments(wireGeometry, new LineBasicMaterial({ color: 0x141414 }));
+  const wires = pinned(new LineSegments(wireGeometry, new LineBasicMaterial({ color: 0x141414 })));
   wires.name = 'blast-wires';
   wires.frustumCulled = false;
   wires.visible = false;

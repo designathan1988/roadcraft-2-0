@@ -1720,6 +1720,8 @@ export function createSceneRenderer(
     const light = new PointLight(0xffd6a0, 0, m(8), 2);
     light.name = 'room-light';
     light.castShadow = false;
+    // Moved only when a floor is cut open (`lampsKey`): its matrix composed there, not every frame.
+    light.matrixAutoUpdate = false;
     scene.add(light);
     roomLights.push(light);
   }
@@ -3905,7 +3907,7 @@ export function createSceneRenderer(
         roomLights.forEach((light, i) => {
           const at = lamps[i];
           light.userData['used'] = !!at;
-          if (at) light.position.set(at.x, at.z, -at.y);
+          if (at) { light.position.set(at.x, at.z, -at.y); light.updateMatrix(); }
         });
       }
       // Falls off with the distance in world units: the same lamp in metres at any unit.

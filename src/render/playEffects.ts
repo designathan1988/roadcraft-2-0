@@ -35,6 +35,7 @@ import { createBlast } from './blast';
 import { createDestruction } from './destruction';
 import { createGroundCorners } from './ragdollGround';
 import { compileAhead } from './uploads';
+import { pinned } from './pinned';
 
 /** What shots and blows leave behind: the bodies they throw */
 export interface PlayEffectsContext {
@@ -111,7 +112,8 @@ export function createTracers(scene: Scene): Tracers {
   geometry.setAttribute('position', positions);
   geometry.setAttribute('color', colours);
   const material = new LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false });
-  const lines = new LineSegments(geometry, material);
+  // Placed by its vertices: never moved as an object.
+  const lines = pinned(new LineSegments(geometry, material));
   lines.name = 'tracers';
   lines.frustumCulled = false;
   lines.visible = false;
@@ -161,7 +163,8 @@ export function createPlayEffects(ctx: PlayEffectsContext): PlayEffects {
   const { scene, exhaust, agents, buildings, onAssetsReady } = ctx;
   /** Buildings knocked down block by block (`destruction.ts`). */
   const destruction = createDestruction(exhaust, buildings.chunkOf);
-  scene.add(destruction.group);
+  // Its ruins and flying pieces are placed by themselves: the group never moves.
+  scene.add(pinned(destruction.group));
   destruction.onRuined = () => { buildings.setRuined(destruction.ruined); };
   /** Blood where blows killed people (`casualties.ts`). */
   const casualties = createCasualties();

@@ -1,4 +1,5 @@
 import { fitInstances } from './instanceBounds';
+import { pinned } from './pinned';
 import {
   Color, CylinderGeometry, DynamicDrawUsage, Group, InstancedMesh, Matrix4, MeshStandardMaterial, Quaternion, Sphere, SphereGeometry, Vector3,
 } from 'three';
@@ -59,7 +60,8 @@ function equalFloats(a: Float32Array, b: Float32Array): boolean {
 }
 
 export function createGore(): Gore {
-  const group = new Group();
+  // The pieces are placed by their instances: the group and its meshes never move as objects.
+  const group = pinned(new Group());
   group.name = 'gore';
   // Wet: glossy, dark.
   const flesh = new MeshStandardMaterial({ roughness: 0.4, metalness: 0 });
@@ -71,6 +73,7 @@ export function createGore(): Gore {
   const cuffs = new InstancedMesh(new CylinderGeometry(1, 1, 1, 9), flesh, MAX_BONES);
   segments.name = 'gore-guts'; organs.name = 'gore-organs'; bones.name = 'gore-bones'; cuffs.name = 'gore-cuffs';
   for (const mesh of [segments, organs, bones, cuffs]) {
+    pinned(mesh);
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;
     // Culled by a sphere round its pieces, fitted when they change (`fitInstances`, AGT-04/15): out of the cascades that do not reach it.
@@ -94,6 +97,8 @@ export function createGore(): Gore {
   };
   const chains: Chain[] = [];
   const loose: Organ[] = [];
+  /** A chain stepped, spilt or let go since the guts were written; an organ moved, thrown or let go since the organs were: what lies still is not composed again. */
+  let gutsMoved = false, organsMoved = false;
   const stubs: Ends[] = [];
   const mtx = new Matrix4(), q = new Quaternion(), s = new Vector3(), up = new Vector3(0, 1, 0), d = new Vector3(), mid = new Vector3();
   const CUFF = new Color(0x4a0a0e);
@@ -114,6 +119,7 @@ export function createGore(): Gore {
       const at = anchor();
       if (!at) return;
       if (chains.length * LINKS >= MAX_SEGMENTS) chains.shift();
+      gutsMoved = true;
       const p: Vector3[] = [], o: Vector3[] = [];
       const seg = m(0.055 + Math.random() * 0.02);
       for (let i = 0; i < LINKS; i++) {
@@ -129,6 +135,7 @@ export function createGore(): Gore {
       });
     },
     scatter(at, count, kick) {
+      if (count > 0) organsMoved = true;
       for (let i = 0; i < count; i++) {
         if (loose.length >= MAX_ORGANS) loose.shift();
         const r = m(0.025 + Math.random() * 0.035);
@@ -156,6 +163,7 @@ export function createGore(): Gore {
         const held = c.anchor ? c.anchor() : null;
         if (c.anchor && !held) c.anchor = null;
         if (c.still > 1.5 && !held) continue;
+        gutsMoved = true;
         let moved = 0;
         for (let i = 0; i < c.p.length; i++) {
           const v = c.p[i]!, old = c.o[i]!;
@@ -189,6 +197,7 @@ export function createGore(): Gore {
       // Organs: thrown, landing with a flop, lying where they land.
       for (const o of loose) {
         if (o.rest) continue;
+        organsMoved = true;
         o.v.y -= GRAVITY * step;
         o.p.addScaledVector(o.v, step);
         const g = groundAt(o.p.x, -o.p.z) + o.size.y * 0.6;
@@ -199,21 +208,29 @@ export function createGore(): Gore {
           if (o.v.lengthSq() < m(0.3) ** 2) o.rest = true;
         }
       }
-      let n = 0;
-      for (const c of chains) {
-        for (let i = 1; i < c.p.length && n < MAX_SEGMENTS; i++) {
-          between(segments, n, c.p[i - 1]!, c.p[i]!, c.radius);
-          segments.setColorAt(n++, c.color);
+      // The bones follow their bodies every frame; the guts and organs only when one moved or the set changed.
+      const gutsWritten = gutsMoved, organsWritten = organsMoved;
+      if (gutsMoved) {
+        gutsMoved = false;
+        let n = 0;
+        for (const c of chains) {
+          for (let i = 1; i < c.p.length && n < MAX_SEGMENTS; i++) {
+            between(segments, n, c.p[i - 1]!, c.p[i]!, c.radius);
+            segments.setColorAt(n++, c.color);
+          }
         }
+        segments.count = n;
       }
-      segments.count = n;
-      let k = 0;
-      for (const o of loose) {
-        mtx.compose(o.p, o.q, o.size);
-        organs.setMatrixAt(k, mtx);
-        organs.setColorAt(k++, o.color);
+      if (organsMoved) {
+        organsMoved = false;
+        let k = 0;
+        for (const o of loose) {
+          mtx.compose(o.p, o.q, o.size);
+          organs.setMatrixAt(k, mtx);
+          organs.setColorAt(k++, o.color);
+        }
+        organs.count = k;
       }
-      organs.count = k;
       let b = 0;
       for (let i = stubs.length - 1; i >= 0; i--) {
         const e = stubs[i]!();
@@ -230,7 +247,7 @@ export function createGore(): Gore {
       // Only what is drawn, uploaded and drawn: three uploads a whole buffer whose `needsUpdate` has no ranges
       for (const mesh of [segments, organs, bones, cuffs]) {
         mesh.visible = mesh.count > 0;
-        if (!mesh.visible) continue;
+        if (!mesh.visible || (mesh === segments && !gutsWritten) || (mesh === organs && !organsWritten)) continue;
         // DO NOT send what lies still: the same pieces as last frame go up again for nothing (AGT-15).
         if (sameAsSent(mesh)) continue;
         fitInstances(mesh, mesh.count);
@@ -248,6 +265,7 @@ export function createGore(): Gore {
       chains.length = 0;
       loose.length = 0;
       stubs.length = 0;
+      gutsMoved = organsMoved = true;
     },
     dispose() {
       for (const mesh of [segments, organs, bones, cuffs]) mesh.geometry.dispose();
