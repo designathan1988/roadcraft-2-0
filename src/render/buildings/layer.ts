@@ -19,7 +19,7 @@ import { type FlagInstance, createFlagLayer } from './flagLayer';
 import { TownIndex, patchCell, signatureBodies } from './townIndex';
 import { fadeMeshes } from './fade';
 import { FAR_ERROR, createMassCells, sameFrustum } from './massCells';
-import { FrameScale, LandedMeasure, TYPICAL_LEVEL_TRIANGLES, letBackFitting, letGoPassed } from './frameBudget';
+import { FrameScale, LandedMeasure, TYPICAL_LEVEL_TRIANGLES } from './frameBudget';
 import { type GpuClass, gpuLedger } from '../gpuLedger';
 import { MassLevels } from './massLevels';
 import { levelCells } from './levelKeys';
@@ -254,19 +254,6 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   const chooseRaw = (): void => {
     if (eye) massCells.choose(eye.x, eye.y, eye.z, eye.pxAtMetre, eye.orthoPx, forcedNear, eye.reach, viewKnown ? eyeView : null);
   };
-  /** The detail drawn within the room the ledger leaves (`MassCells.cap`): a level never landed counts as its kind's landed do on average, and before any of its kind landed as its cell's masses. DO NOT reckon it at a fixed number (64 MB each capped every cell before one came), nor at the masses once a level of its kind measured (the facade level holds 4-5 times its masses: the cap asked too many and the admission threw whole jobs away). */
-  const capNow = (): void => {
-    lodStale = true;
-    capRaw();
-  };
-  const capRaw = (): void => {
-    if (!eye) return;
-    massCells.cap(eye.x, eye.y, room(), (key, fine) => {
-      const kind: BatchKind = fine ? 'cell' : 'facade';
-      const mean = landedBytes.of(kind, key);
-      return resident.of(kind, key, Number.isNaN(mean) ? massCells.massBytes(key) : mean);
-    }, forcedNear);
-  };
   /** The shown buildings' ids by coarse cell, as last put together (`update`): what a cell streamed in is made of. */
   let townCells = new Map<string, number[]>();
   /** What the levels chosen draw, triangles: each near cell's level (shown, or as its kind is reckoned until it lands), and every mass resident (the cells', tiles' and plates': those hidden under a cell's detail counted too, so never under what is drawn). */
@@ -281,44 +268,18 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     }
     return n;
   };
-  /** DO NOT fit the view's budget of triangles by raising one error scale for the whole view: every cell coarsened at once, the ones at the eye fell to their facade level; the farthest go first (`MassCells.cap`, as the bytes' budget), detail to facade level to masses, the nearest kept in detail */
-  /** The cells the budget held back, remembered (`MassCells.hold`): a cell capped stays capped until its next level fits the budget with what the view draws, then comes back a level, the ones spanning most of the screen first (let all back at once, the view passed the budget again and they were capped again: the city blinked, cells loaded and unloaded by turns). */
-  const heldFar = new Set<string>(), heldCoarse = new Set<string>();
   /** What the frame's last choice read (`levelOfDetail`), the levels it left, and whether it left them as the one before it with the same reading (settled). */
-  const lodRead = new Float64Array(10), lodLast = new Float64Array(10).fill(Number.NaN);
+  const lodRead = new Float64Array(7), lodLast = new Float64Array(7).fill(Number.NaN);
   const lodView = new Frustum();
   let lodForced: ReadonlySet<string> | null = null, lodChoice = '', lodSettled = false;
-  /** The levels chosen, as a string: the scale, each near cell and whether at full detail, the cells held. */
+  /** The levels chosen, as a string: each near cell and whether at full detail. */
   const lodChosen = (): string => {
-    let out = `${frame.scale}|`;
+    let out = '';
     for (const key of massCells.nearKeys()) out += `${key}${massCells.fine(key) ? '+' : '-'};`;
-    out += '|';
-    for (const key of heldFar) out += `${key};`;
-    out += '|';
-    for (const key of heldCoarse) out += `${key};`;
     return out;
   };
-  /** How far down the order the budget coarsens in a cell stands (`MassCells.cap`): the less a metre spans there, the sooner it goes; DO NOT rank it by its distance to the eye's point on the plan (two cells alike either side of it were ranked apart). */
+  /** The order the room lets the levels not shown go in (`keepToBudget`): the less a metre spans there, the sooner; DO NOT rank it by its distance to the eye's point on the plan (two cells alike either side of it were ranked apart). */
   const rankOf = (key: string): number => -massCells.pixels(key, 1);
-  const capTriangles = (): void => {
-    if (!eye || !Number.isFinite(frame.budget)) return;
-    const masses = massCells.farTriangles();
-    const fineBefore = new Map<string, boolean>();
-    for (const key of massCells.nearKeys()) fineBefore.set(key, massCells.fine(key));
-    massCells.cap(eye.x, eye.y, frame.budget - masses, (key, fine) => landedTriangles.of(fine ? 'cell' : 'facade', key), forcedNear, (key) => massCells.massTriangles(key));
-    for (const [key, wasFine] of fineBefore) {
-      if (!massCells.near(key)) heldFar.add(key);
-      else if (wasFine && !massCells.fine(key)) heldCoarse.add(key);
-    }
-    // The eye moved: a cell held that spans more of the screen than one the budget keeps goes back to the view (the one spanning least is capped in its place).
-    letGoPassed(heldFar, heldCoarse, [...massCells.nearKeys()].map((key) => ({ key, fine: massCells.fine(key) })), rankOf);
-    // Each held cell a level back while the view with it still fits (`letBackFitting`), not only under a share of the budget.
-    if (heldFar.size || heldCoarse.size) {
-      letBackFitting(heldFar, heldCoarse, chosenTriangles(), frame.budget, rankOf, (key, far) =>
-        (far ? landedTriangles.of('facade', key) - massCells.massTriangles(key) : landedTriangles.of('cell', key) - landedTriangles.of('facade', key)));
-    }
-    massCells.hold(heldFar, heldCoarse);
-  };
   /** The cells whose batches must be made for the town as it is now, shown as they land (`landCells`). */
   const pendingCells = new Set<string>();
   /** The town behind its curtain (`hidden`). */
@@ -472,12 +433,11 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   };
   const pool = new CellPool(() => kitBoxes(kit), (entry) => refFor(entry), true, kit.finishTone);
   pool.warm();
-  /** A cell's level landed: uploaded only if the view still wants it at that level within the room (the cap worked out again with its measured bytes). */
+  /** A cell's level landed: uploaded if the view still wants it at that level (its error on the screen, `MassCells.choose`). DO NOT refuse it for the room or a triangle budget: the form of a building is the view's alone (MISSION.md 3a). */
   const admit = (kind: BatchKind, cell: string, bytes: number): boolean => {
     resident.landed(kind, cell, bytes);
     landedBytes.set(kind, cell, bytes);
     if (forcedNear.has(cell) || !eye) return true;
-    capNow();
     return massCells.near(cell) && (massCells.fine(cell) ? 'cell' : 'facade') === kind;
   };
   /** A landing's upload ranked by the pixels the masses standing for it leave out (`uploads.ts`). */
@@ -535,7 +495,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       requests.dropMass(cell); massCells.remove(cell); levels.touch(cell, null, editedCells.has(cell)); massEntries.delete(cell); massAsked.delete(cell);
       resident.forget(cell);
       // Gone from the town: nothing of it kept by the budget either (its measures, held back or not).
-      landedTriangles.forget(cell); landedBytes.forget(cell); heldFar.delete(cell); heldCoarse.delete(cell);
+      landedTriangles.forget(cell); landedBytes.forget(cell);
       return;
     }
     // Its height till its masses come: the ground under its buildings to the highest roof (the view's frustum, `MassCells.choose`).
@@ -998,19 +958,18 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       eye = eyeNow;
       viewKnown = view !== null;
       if (view) eyeView.copy(view);
-      // The levels chosen ONCE a frame, by the view alone (one form at a view): over the view's budget of triangles the farthest coarsened first
-      // (`capTriangles`). The building cut open and the one being edited stay in detail whatever the eye says. DO NOT raise an error scale
-      // under load and choose again at each step (`fitErrorScale`): every frame of a camera drag chose and capped the whole town two to six
-      // times, and a building's form hung on the frame's load, not on the view. The frame's time is the quality governor's (`quality.ts`).
+      // The levels chosen ONCE a frame, by the view alone (one form at a view, MISSION.md 3a): each cell by its error on the screen. The
+      // building cut open and the one being edited stay in detail whatever the eye says. DO NOT coarsen a cell for the GPU's room or a
+      // triangle budget (`MassCells.cap`): its form then hung on what else was resident and on the frame's load, not on the view, and cells
+      // blinked between levels as room came and went. DO NOT raise an error scale under load either (`fitErrorScale`). The room lets go only
+      // the levels not shown (`keepToBudget`); the frame's time is the quality governor's (`quality.ts`).
       const fitted = (): void => {
         massCells.setErrorScale(1); chooseRaw();
-        capRaw();
-        capTriangles();
       };
-      // DO NOT choose the levels again when nothing they read changed and the last choice left them as the one before it did (the choice is deterministic: the same inputs from where it settled give the same levels; 2 to 4 whole choices and caps a frame, PRD-01). A choice that moved anything (a held cell let back a level, a scale stepping down) is run again until it settles.
+      // DO NOT choose the levels again when nothing they read changed and the last choice left them as the one before it did (the choice is deterministic: the same inputs from where it settled give the same levels; 2 to 4 whole choices a frame, PRD-01). A choice that moved anything is run again until it settles.
       const read = lodRead;
       read[0] = eyeX; read[1] = eyeY; read[2] = eyeZ; read[3] = pxAtMetre; read[4] = orthoPx ?? -1; read[5] = reach;
-      read[6] = frame.budget; read[7] = 1; read[8] = room(); read[9] = view ? 1 : 0;
+      read[6] = view ? 1 : 0;
       const sameRead = lodForced === forcedNear && read.every((v, i) => Object.is(v, lodLast[i])) && (!view || sameFrustum(lodView, view));
       if (lodStale || !sameRead || !lodSettled) {
         const wasStale = lodStale;
@@ -1060,7 +1019,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     books() {
       return {
-        ...massCells.books(), landedTriangles: landedTriangles.size, landedBytes: landedBytes.size, heldFar: heldFar.size, heldCoarse: heldCoarse.size,
+        ...massCells.books(), landedTriangles: landedTriangles.size, landedBytes: landedBytes.size,
         massEntries: massEntries.size, massAsked: massAsked.size, cells: cells.size, facades: facades.size, partCells: partCells.size, facadeParts: facadeParts.size,
         townCells: townCells.size, columns: columns.size, kept: kept.size, cellGround: cellGround.size, cellEntries: cellEntries.size, flags: flagsOf.size,
       };
@@ -1083,7 +1042,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     levels() {
       // Asked, never each frame (the per-frame log of this was the page's garbage): each cell of the town by the level chosen for it, the level shown, and why it is below its detail.
-      const count = { cells: 0, chosenDetail: 0, chosenFacade: 0, chosenFar: 0, shownDetail: 0, shownFacade: 0, shownNone: 0, notLanded: 0, heldFar: 0, heldCoarse: 0 };
+      const count = { cells: 0, chosenDetail: 0, chosenFacade: 0, chosenFar: 0, shownDetail: 0, shownFacade: 0, shownNone: 0, notLanded: 0 };
       for (const key of townCells.keys()) {
         count.cells++;
         const near = massCells.near(key), fine = near && massCells.fine(key);
@@ -1091,8 +1050,6 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
         const shown = levelShown(key);
         if (shown === 'cell') count.shownDetail++; else if (shown === 'facade') count.shownFacade++; else count.shownNone++;
         if ((fine && shown !== 'cell') || (near && !fine && shown !== 'facade')) count.notLanded++;
-        if (heldFar.has(key)) count.heldFar++;
-        if (heldCoarse.has(key)) count.heldCoarse++;
       }
       return { ...count, evictions: massCells.books()['massEvictions'] ?? 0, massing: requests.massing, levelsWaiting: massCells.waiting, levelsWaitingInView: massCells.waitingInView, basesWaiting: massCells.basesWaiting, scale: frame.scale, budgetTriangles: frame.budget, chosenTriangles: chosenTriangles(), residentBytes: resident.total, detailBudgetBytes: budget, roomBytes: room() };
     },

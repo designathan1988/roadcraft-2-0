@@ -1,6 +1,6 @@
 import { PAINT_ATTRIBUTE, PAINT_UNIT, WEAR_STEPS } from '@render/buildings/cellArrays';
-import { describe, expect, it } from 'vitest';
-import type { Mesh, Object3D } from 'three';
+import { describe, expect, it, vi } from 'vitest';
+import { Frustum, Matrix4, PerspectiveCamera, type Mesh, type Object3D } from 'three';
 
 import { createBuildingLayer } from '@render/buildings/layer';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
@@ -261,35 +261,41 @@ describe('the cells the budget of triangles held back', () => {
     return { detail, masses };
   };
 
-  it('come back, still view, once a lighter level landed leaves room for them', () => {
-    const doc = town(4);
-    const layer = createBuildingLayer();
-    // Under every cell at its detail: at 58 k the lighter window frames (drawn by the pane's material, 0f26bc5e) let all nine in, none held back;
-    // at 50 k the plain windows' recesses drawn by the pane too (`glazedRecessed`); at 44 k the faces no one sees left out (the faces inside
-    // another solid, a balcony railing's ends on the wall: the nine at their detail 45,212 -> 43,180 triangles).
-    layer.frame.budget = 40_000;
-    frames(layer, doc);
-    // The heavy middle building: the cells spanning least held back a level (their facade level, reckoned from their own detail's measure, or their masses).
-    const held = layer.levels();
-    expect(held.chosenDetail).toBeLessThan(9);
-    const middle = [...doc.buildings.all()][4]!;
-    doc.buildings.put({ ...middle, ...body(20, middle.x, middle.y), id: middle.id } as Building);
-    frames(layer, doc);
-    expect(shown(layer).masses).toBe(0);
-    expect(layer.triangles).toBeLessThanOrEqual(40_000);
-    layer.dispose();
+  // ONE FORM PER VIEW (MISSION.md 3a, the owner's order): a cell's level is its error on the screen alone, never a triangle budget nor the
+  // GPU's room. These replace the tests of the budget's coarsening (cells held back a level while the view passed a triangle budget), which
+  // asserted the behaviour the order takes out.
+  it('choose the same levels whatever the triangle budget: the view alone decides, the edited heavy building too', () => {
+    const doc = town(4), other = town(4);
+    const tight = createBuildingLayer(), free = createBuildingLayer();
+    tight.frame.budget = 30_000;
+    free.frame.budget = Infinity;
+    frames(tight, doc);
+    frames(free, other);
+    expect(tight.levels().chosenDetail).toBe(free.levels().chosenDetail);
+    expect(shown(tight)).toEqual(shown(free));
+    // Every cell near this eye spans enough of the screen for its detail: none stands in its masses for a budget.
+    expect(tight.levels().chosenDetail).toBe(9);
+    expect(shown(tight).masses).toBe(0);
+    // The heavy middle building: still the view's level, whatever it weighs.
+    for (const d of [doc, other]) {
+      const middle = [...d.buildings.all()][4]!;
+      d.buildings.put({ ...middle, ...body(20, middle.x, middle.y), id: middle.id } as Building);
+    }
+    frames(tight, doc);
+    frames(free, other);
+    expect(shown(tight)).toEqual(shown(free));
+    expect(shown(tight).masses).toBe(0);
+    tight.dispose();
+    free.dispose();
   });
 
-  it('ask no frame while none of them fits and nothing is measured anew', () => {
+  it('ask no frame once the view\'s levels have landed and nothing changes', () => {
     const doc = town(4);
     const layer = createBuildingLayer();
-    // Under the facades' level too, so the town is held at its masses: at 40 k the kit's lighter parts (hidden faces dropped, adb9d57c) let
-    // every facade in, and nothing was held back.
     layer.frame.budget = 30_000;
     const ran = frames(layer, doc);
     expect(ran).toBeLessThan(20);
     const held = shown(layer);
-    expect(held.masses).toBeGreaterThan(0);
     // Further frames of the same still view: nothing to wait for, nothing changes.
     for (let frame = 0; frame < 5; frame++) {
       layer.update(doc, flat, 'g');
@@ -300,31 +306,36 @@ describe('the cells the budget of triangles held back', () => {
     expect(shown(layer)).toEqual(held);
     layer.dispose();
   });
+
   it('choose the levels no more while the view stands still and nothing changed, and again once the eye moves (PRD-01)', () => {
     const doc = town(4);
     const layer = createBuildingLayer();
-    layer.frame.budget = 40_000;
-    frames(layer, doc);
-    const held = shown(layer);
-    // A choice reads the budget of triangles in its cap (`capTriangles`) and its fit: a frame that does not choose reads it once, to see it did not change.
-    let reads = 0, budget = layer.frame.budget;
-    Object.defineProperty(layer.frame, 'budget', { get: () => { reads++; return budget; }, set: (v: number) => { budget = v; }, configurable: true });
-    // Settled first: a choice that moved anything is run again until it does not.
-    for (let frame = 0; frame < 3; frame++) layer.levelOfDetail(m(384), m(384), m(300), 1000, null);
-    const still: number[] = [];
-    for (let frame = 0; frame < 10; frame++) {
+    const camera = new PerspectiveCamera(50, 16 / 9, 1, 100_000);
+    camera.position.set(m(384), m(300), -m(384) + m(200));
+    camera.lookAt(m(384), 0, -m(384));
+    camera.updateMatrixWorld();
+    const view = new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+    const frame = (x: number): void => {
       layer.update(doc, flat, 'g');
-      reads = 0;
-      layer.levelOfDetail(m(384), m(384), m(300), 1000, null);
-      still.push(reads);
-      layer.cullDetails(m(384), m(384), m(300), 1000, null, m(1));
+      layer.levelOfDetail(x, m(384), m(300), 1000, null, Infinity, view);
+      layer.cullDetails(x, m(384), m(300), 1000, null, m(1));
+    };
+    for (let k = 0; k < 2000 && (k < 1 || layer.pending); k++) frame(m(384));
+    const held = shown(layer);
+    // A frame keeps the view it was given (one copy); a frame that chooses keeps the view it chose in too (a second).
+    const copies = vi.spyOn(Frustum.prototype, 'copy');
+    const still: number[] = [];
+    for (let k = 0; k < 10; k++) {
+      copies.mockClear();
+      frame(m(384));
+      still.push(copies.mock.calls.length);
     }
     expect(shown(layer)).toEqual(held);
-    reads = 0;
-    layer.levelOfDetail(m(390), m(384), m(300), 1000, null);
-    const moved = reads;
-    expect(moved).toBeGreaterThan(1);
     expect(still).toEqual(still.map(() => 1));
+    copies.mockClear();
+    frame(m(390));
+    expect(copies.mock.calls.length).toBeGreaterThan(1);
+    copies.mockRestore();
     layer.dispose();
   });
 });
