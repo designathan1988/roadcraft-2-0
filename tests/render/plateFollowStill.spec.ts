@@ -9,10 +9,10 @@ afterEach(() => vi.restoreAllMocks());
 describe('the plates followed at every frame', () => {
   it('rebuild nothing for the same parts, and still take a change and a plate gone', () => {
     const a = { revision: 1 }, b = { revision: 1 };
-    const follow = new PlateFollow((s: { revision: number }) => s.revision);
+    const follow = new PlateFollow<{ revision: number }, number>((s) => s.revision);
     const took: unknown[] = [], left: unknown[] = [];
     const parts = [{ surface: a, cx: 0, cy: 0 }, { surface: b, cx: 1, cy: 0 }];
-    const run = (list: typeof parts): number => follow.follow(list, (part) => { took.push(part.surface); }, (part) => { left.push(part.surface); });
+    const run = (list: typeof parts): number => follow.follow(list, (part) => took.push(part.surface), (part) => { left.push(part.surface); });
     const first = run(parts);
     expect(took).toEqual([a, b]);
     const clears = vi.spyOn(Set.prototype, 'clear');
