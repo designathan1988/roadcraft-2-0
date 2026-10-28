@@ -234,7 +234,7 @@ export function createBuildingWiring(deps: BuildingWiringDeps): BuildingWiring {
         deps.flash('hint.reference.loaded', {
           name: info.name, w: formatDecimal(info.size[0], 1), d: formatDecimal(info.size[1], 1), h: formatDecimal(info.size[2], 1),
         });
-      }).catch(() => deps.flash('hint.reference.failed'));
+      }).catch((error: unknown) => { console.warn('[reference model] not read', error); deps.flash('hint.reference.failed'); });
     };
     input.click();
   };

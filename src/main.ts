@@ -241,7 +241,7 @@ const keptZones = Promise.resolve(new Map<string, Float64Array | null>());
 clearOldMapsOnce();
 /** The mark a world by tiles left open at its last close: DO NOT open it again - the player, 2026-10-18: no city by tiles any more; the mark is let go, and the map saved as a map opens. */
 const STREAMED_MARK = 'roadcraft.streamedWorld';
-try { window.localStorage.removeItem(STREAMED_MARK); } catch { /* storage blocked */ }
+try { window.localStorage.removeItem(STREAMED_MARK); } catch (error) { console.warn('[storage] storage blocked', error); }
 const streamedAtBoot: string | null = null;
 // The autosave: the small key, or IndexedDB for a map too large for it (`Persistence.loadSessionAsync`); not read under a streamed world (its tiles are its save).
 /** Buildings from which a saved map is restored through one table (`prepareCity`): a small map loads as it did. */
@@ -309,7 +309,8 @@ function clearOldMapsOnce(): void {
     }
     for (const key of doomed) window.localStorage.removeItem(key);
     window.localStorage.setItem(MARK, '2026-10-04');
-  } catch {
+  } catch (error) {
+    console.warn('[storage] Storage blocked: nothing was kept to clear', error);
     // Storage blocked: nothing was kept to clear.
   }
 }
@@ -2029,7 +2030,7 @@ async function cityData(ask: CityGenAsk): Promise<OpenedCity> {
   // Being made ahead (`cityAhead`): that job's answer, never a second one for the same city.
   const making = key ? citiesAhead.get(key) : undefined;
   if (making) { performance.mark('city:ahead'); return openedOf(await making); }
-  const kept = key ? await readDerived<KeptCity>(key).catch(() => undefined) : undefined;
+  const kept = key ? await readDerived<KeptCity>(key).catch((error: unknown) => { console.warn('[city ahead] its kept city not read: made again', error); return undefined; }) : undefined;
   // A city kept with a buildings' table of the format before the box columns (`recordTable.ts` format 1) is not taken: the page would decode it whole to file it by place; the shipped or regrown one is kept in its stead.
   if (kept?.data && kept.buildings instanceof ArrayBuffer && tableFormat(kept.buildings) >= 2) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), besideTables(kept, tableIn)); }
   // Shipped with the game (the first new city of its size, `cookedCities.ts`): read, and kept as one grown here would be.
@@ -2057,7 +2058,7 @@ async function cityJob(ask: CityGenAsk, key: string | null, priority: number): P
   // Laid out by one worker, its tiles grown by many at once, joined by one (`editor/cityInTiles.ts`): each step said on the console as it ends.
   const started = performance.now();
   const reply = await growCityInTiles(ask, priority, priority === 0 ? null : key, (step, detail) => {
-    console.info(`[city] ${step} after ${((performance.now() - started) / 1000).toFixed(1)} s${detail ? ` (${detail})` : ''}`);
+    console.info(`[city] ${step} after ${Math.round((performance.now() - started) / 100) / 10} s${detail ? ` (${detail})` : ''}`);
     // The step on the page's own timeline too, as the opening's are (`city:asked`, `city:applied`).
     performance.mark(`city:${step}`, { detail });
   });
@@ -2077,12 +2078,12 @@ const NEXT_CITY_KEY = 'roadcraft.nextCitySeed';
 const citiesAhead = new Map<string, Promise<CityGenReply>>();
 function nextCitySeed(kind: CityGenAsk['kind'], take = false): number {
   let seeds: Partial<Record<CityGenAsk['kind'], number>> = {};
-  try { seeds = JSON.parse(localStorage.getItem(NEXT_CITY_KEY) ?? '{}') as typeof seeds; } catch { /* none kept */ }
+  try { seeds = JSON.parse(localStorage.getItem(NEXT_CITY_KEY) ?? '{}') as typeof seeds; } catch (error) { console.warn('[storage] none kept', error); }
   const fresh = (): number => Math.floor(Math.random() * 0x7fff_ffff) || 1;
   // The first of a size is the city shipped with the game (`COOKED_CITY_SEEDS`): read, never grown in front of the player.
   const seed = Number.isInteger(seeds[kind]) && seeds[kind]! > 0 ? seeds[kind]! : (kind === 'large' || kind === 'small' ? COOKED_CITY_SEEDS[kind] : fresh());
   seeds[kind] = take ? fresh() : seed;
-  try { localStorage.setItem(NEXT_CITY_KEY, JSON.stringify(seeds)); } catch { /* not kept: a seed of its own next time */ }
+  try { localStorage.setItem(NEXT_CITY_KEY, JSON.stringify(seeds)); } catch (error) { console.warn('[storage] not kept: a seed of its own next time', error); }
   return seed;
 }
 async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
@@ -2092,7 +2093,7 @@ async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
   const seed = nextCitySeed(kind);
   const key = `${CITY_PREFIX}${kind}:${seed}`;
   if (citiesAhead.has(key)) return;
-  const kept = await readDerivedKeys(CITY_PREFIX).catch(() => new Set<string>());
+  const kept = await readDerivedKeys(CITY_PREFIX).catch((error: unknown) => { console.warn('[city ahead] the kept cities not listed: none taken as kept', error); return new Set<string>(); });
   // `readDerivedKeys` gives the keys without their prefix: DO NOT ask for the whole key, every kept city was grown again.
   if (kept.has(key.slice(CITY_PREFIX.length)) || citiesAhead.has(key)) return;
   // The city shipped with the game for this seed (`cookedCities.ts`): kept from its files, DO NOT grow it again.
@@ -2100,7 +2101,7 @@ async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
   if (cooked) { void keepDerivedDurably(key, cooked satisfies KeptCity); return; }
   const made = cityJob({ id: cityAskId++, kind, seed }, key, 1_000_000);
   citiesAhead.set(key, made);
-  void made.catch(() => {}).finally(() => { if (citiesAhead.get(key) === made) citiesAhead.delete(key); });
+  void made.catch((error: unknown) => { console.warn('[city ahead] not made ahead: made when asked', error); }).finally(() => { if (citiesAhead.get(key) === made) citiesAhead.delete(key); });
 }
 /** Both sizes' next cities made ahead, the large first, once the opening's work is behind (`cityAhead` waits for the world to stand). DO NOT wait a fixed 15 s more: on the first launch the empty map stands in seconds, and the player's first large city was grown from nothing in front of them (8.4 s of its 18 s, 2026-10-21). */
 function citiesAheadLater(): void {
@@ -2110,7 +2111,7 @@ function citiesAheadLater(): void {
 /** A city made off the page and put in place of the map: the curtain over the map while its worker builds it, then the real map opened whole. One at a time, in the order asked. */
 function openCityOffPage(ask: CityGenAsk): Promise<void> {
   const opened = (cityOpening ?? Promise.resolve()).then(() => openCityNow(ask));
-  cityOpening = opened.catch(() => {});
+  cityOpening = opened.catch((error: unknown) => { console.warn('[city] its opening failed: the next one goes on', error); });
   return opened;
 }
 
@@ -2203,12 +2204,12 @@ const SKY_MODES: readonly SkyMode[] = ['day', 'night', 'cycle'];
 function setSky(mode: string): void {
   if (!(SKY_MODES as readonly string[]).includes(mode)) return;
   gameState.set('sky', mode as SkyMode, 'sky chosen');
-  try { localStorage.setItem(SKY_KEY, mode); } catch { /* not kept */ }
+  try { localStorage.setItem(SKY_KEY, mode); } catch (error) { console.warn('[storage] not kept', error); }
 }
 try {
   const saved = localStorage.getItem(SKY_KEY);
   if (saved && (SKY_MODES as readonly string[]).includes(saved)) gameState.set('sky', saved as SkyMode, 'saved preference');
-} catch { /* storage blocked: day */ }
+} catch (error) { console.warn('[storage] storage blocked: day', error); }
 gameState.watch(['sky'], () => { scene.setSkyMode(game.sky); requestDraw(); });
 scene.setSkyMode(game.sky);
 
@@ -2262,7 +2263,7 @@ async function openMap(): Promise<void> {
 const PERSPECTIVE_KEY = 'roadcraft.perspective.v2';
 function setPerspective(on: boolean): void {
   gameState.set('perspective', on, 'camera');
-  try { localStorage.setItem(PERSPECTIVE_KEY, on ? '1' : '0'); } catch { /* not kept */ }
+  try { localStorage.setItem(PERSPECTIVE_KEY, on ? '1' : '0'); } catch (error) { console.warn('[storage] not kept', error); }
 }
 /** The camera as the game's state has it. */
 function showPerspective(): void {
@@ -2272,7 +2273,7 @@ gameState.watch(['perspective'], showPerspective);
 // At boot, once the whole file has run: switching the camera asks for a frame, and the frame loop is set up further down.
 queueMicrotask(() => {
   let kept: string | null = null;
-  try { kept = localStorage.getItem(PERSPECTIVE_KEY); } catch { /* storage blocked: the default */ }
+  try { kept = localStorage.getItem(PERSPECTIVE_KEY); } catch (error) { console.warn('[storage] storage blocked: the default', error); }
   gameState.set('perspective', kept !== '0', 'saved preference');
   showPerspective();
 });

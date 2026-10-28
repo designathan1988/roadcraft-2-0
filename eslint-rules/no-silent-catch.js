@@ -13,6 +13,16 @@ function isConsoleReport(callee) {
     && callee.property.type === 'Identifier' && (callee.property.name === 'error' || callee.property.name === 'warn');
 }
 
+/** A message posted with the error in it (`postMessage({ ..., error })`): a worker's error handed to the page that asked, which says it. */
+function postsError(call) {
+  if (calleeName(call.callee) !== 'postMessage') return false;
+  let message = call.arguments[0];
+  // Through a `satisfies` or an `as` round it.
+  while (message && (message.type === 'TSSatisfiesExpression' || message.type === 'TSAsExpression')) message = message.expression;
+  return message?.type === 'ObjectExpression' && message.properties.some((p) => p.type === 'Property' && !p.computed
+    && ((p.key.type === 'Identifier' && p.key.name === 'error') || (p.key.type === 'Literal' && p.key.value === 'error')));
+}
+
 /** Whether `node` (a handler's body) throws or reports somewhere inside it. */
 function speaks(node, visitorKeys) {
   let found = false;
@@ -21,7 +31,7 @@ function speaks(node, visitorKeys) {
     if (n.type === 'ThrowStatement') { found = true; return; }
     if (n.type === 'CallExpression') {
       const name = calleeName(n.callee);
-      if (isConsoleReport(n.callee) || REPORTS.test(name) || name === 'queueMicrotask') { found = true; return; }
+      if (isConsoleReport(n.callee) || REPORTS.test(name) || name === 'queueMicrotask' || postsError(n)) { found = true; return; }
     }
     for (const key of visitorKeys[n.type] ?? []) {
       const child = n[key];

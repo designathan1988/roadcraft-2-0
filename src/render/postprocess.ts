@@ -258,7 +258,7 @@ export function createPostChain(
     }
     const previous = renderer.getRenderTarget();
     renderer.setRenderTarget(bloom.renderTargetsHorizontal[0]!);
-    warming.push(renderer.compileAsync(warm, camera).catch(() => {}).finally(() => quad.dispose()));
+    warming.push(renderer.compileAsync(warm, camera).catch((error: unknown) => { console.warn('[post chain] not built ahead: built at its first draw', error); }).finally(() => quad.dispose()));
     renderer.setRenderTarget(previous);
   }
   // The air round the map (`AIR`): the backdrop and the haze by distance, on the linear image before tone mapping.
@@ -281,7 +281,7 @@ export function createPostChain(
       const previous = renderer.getRenderTarget();
       renderer.setRenderTarget(composer.renderTarget1);
       // Not drawn until it is built: drawn while the driver still builds it, the frame waits all the same
-      warming.push(renderer.compileAsync(warm, camera).catch(() => {}).finally(() => { quad.dispose(); airReady = true; }));
+      warming.push(renderer.compileAsync(warm, camera).catch((error: unknown) => { console.warn('[post chain] not built ahead: built at its first draw', error); }).finally(() => { quad.dispose(); airReady = true; }));
       renderer.setRenderTarget(previous);
     }
   }

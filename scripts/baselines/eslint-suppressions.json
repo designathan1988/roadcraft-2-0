@@ -149,27 +149,11 @@
     },
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 1
-    }
-  },
-  "src/cityGen.worker.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 1
-    }
-  },
-  "src/core/clipper.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 1
     }
   },
   "src/core/derivedCache.ts": {
     "roadcraft/no-module-state": {
       "count": 2
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 10
     }
   },
   "src/core/rerootMap.ts": {
@@ -179,9 +163,6 @@
   },
   "src/desktopSaves.ts": {
     "roadcraft/no-logic-timer": {
-      "count": 1
-    },
-    "roadcraft/no-silent-catch": {
       "count": 1
     }
   },
@@ -245,9 +226,6 @@
   "src/editor/roadParking.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/editor/roadTool.ts": {
@@ -266,9 +244,6 @@
   "src/editor/snap.ts": {
     "roadcraft/no-module-state": {
       "count": 3
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/editor/transitTools.ts": {
@@ -313,10 +288,7 @@
       "count": 7
     },
     "roadcraft/no-module-state": {
-      "count": 33
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 14
+      "count": 32
     }
   },
   "src/render/agents.ts": {
@@ -414,18 +386,8 @@
       "count": 4
     }
   },
-  "src/render/citizenBake.worker.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 1
-    }
-  },
   "src/render/citizenGait.ts": {
     "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
-  "src/render/ecology.worker.ts": {
-    "roadcraft/no-silent-catch": {
       "count": 1
     }
   },
@@ -447,11 +409,6 @@
       "count": 17
     }
   },
-  "src/render/flatGround.worker.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 1
-    }
-  },
   "src/render/flatGroundPool.ts": {
     "roadcraft/no-module-state": {
       "count": 5
@@ -467,11 +424,6 @@
       "count": 2
     },
     "roadcraft/no-module-state": {
-      "count": 1
-    }
-  },
-  "src/render/mesh/simplify.ts": {
-    "roadcraft/no-silent-catch": {
       "count": 1
     }
   },
@@ -505,14 +457,6 @@
       "count": 1
     }
   },
-  "src/render/postprocess.ts": {
-    "max-lines": {
-      "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
-    }
-  },
   "src/render/ragdoll.ts": {
     "max-lines": {
       "count": 1
@@ -531,7 +475,7 @@
       "count": 1
     },
     "roadcraft/no-global-revision": {
-      "count": 45
+      "count": 43
     },
     "roadcraft/no-logic-timer": {
       "count": 1
@@ -588,11 +532,6 @@
       "count": 4
     }
   },
-  "src/render/terrainLight.worker.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 1
-    }
-  },
   "src/render/terrainLightPool.ts": {
     "roadcraft/no-module-state": {
       "count": 2
@@ -605,7 +544,7 @@
   },
   "src/render/uploads.ts": {
     "roadcraft/no-module-state": {
-      "count": 23
+      "count": 22
     }
   },
   "src/render/utilities.ts": {
@@ -785,19 +724,11 @@
   "src/ui/buildStamp.ts": {
     "roadcraft/no-module-state": {
       "count": 2
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 1
     }
   },
   "src/ui/chrome.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    }
-  },
-  "src/ui/healthWatch.ts": {
-    "roadcraft/no-silent-catch": {
-      "count": 8
     }
   },
   "src/ui/i18n/en.ts": {
@@ -808,9 +739,6 @@
   "src/ui/i18n/index.ts": {
     "roadcraft/no-module-state": {
       "count": 4
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/ui/i18n/pt-BR.ts": {
@@ -844,9 +772,6 @@
   "src/ui/roads/cutWalls.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/ui/roads/drawProfile.ts": {
@@ -857,9 +782,6 @@
   "src/ui/roads/furnitureChoice.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/ui/roads/junctionPanel.ts": {
@@ -870,9 +792,6 @@
   "src/ui/roads/keys.ts": {
     "roadcraft/no-module-state": {
       "count": 3
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/ui/roads/keysPanel.ts": {
@@ -883,33 +802,21 @@
   "src/ui/roads/profileEditor.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 1
     }
   },
   "src/ui/thunder.ts": {
     "roadcraft/no-module-state": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 1
     }
   },
   "src/ui/toolChoices.ts": {
     "roadcraft/no-module-state": {
-      "count": 18
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 10
+      "count": 14
     }
   },
   "src/ui/v2/shell.ts": {
     "max-lines": {
       "count": 1
-    },
-    "roadcraft/no-silent-catch": {
-      "count": 2
     }
   },
   "src/world/barriers.ts": {
@@ -993,7 +900,7 @@
       "count": 1
     },
     "roadcraft/no-global-revision": {
-      "count": 23
+      "count": 21
     },
     "roadcraft/no-module-state": {
       "count": 1

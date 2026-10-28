@@ -1062,7 +1062,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
   let modelQuery = '';
   let modelCat = 'all';
   let advanced = false;
-  try { advanced = window.localStorage.getItem('roadcraft.builder.advanced') === '1'; } catch { /* off */ }
+  try { advanced = window.localStorage.getItem('roadcraft.builder.advanced') === '1'; } catch (error) { console.warn('[builder] off', error); }
   const requested = new Set<string>();
 
   const tool = (): string => game.tool;
@@ -1715,7 +1715,7 @@ export function mountShell(deps: ShellDeps): ShellHandle {
       const adv = group(advanced ? t('builder.advanced.on') : `${t('builder.advanced.off')} (${count})`);
       adv.appendChild(choices([{ label: advanced ? t('builder.advanced.on') : `${t('builder.advanced.off')} (${count})`, on: advanced, icon: svg('advanced', 18), run: () => {
         advanced = !advanced;
-        try { window.localStorage.setItem('roadcraft.builder.advanced', advanced ? '1' : '0'); } catch { /* not kept */ }
+        try { window.localStorage.setItem('roadcraft.builder.advanced', advanced ? '1' : '0'); } catch (error) { console.warn('[builder] not kept', error); }
         render();
       } }]));
       options.appendChild(adv);

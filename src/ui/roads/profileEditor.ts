@@ -344,7 +344,7 @@ export function openProfileEditor(options: ProfileEditorOptions): void {
       selected = from;
     }
     // Captured, so a drag that leaves the picture keeps going; a pointer the browser no longer tracks cannot be.
-    try { stage.setPointerCapture(event.pointerId); } catch { /* the drag still follows moves over the picture */ }
+    try { stage.setPointerCapture(event.pointerId); } catch (error) { console.warn('[profile editor] the drag still follows moves over the picture', error); }
     stage.classList.add('dragging');
     drawStage(drag.kind === 'edge' ? { scale: drag.scale, anchor: drag.anchor } : undefined);
     event.preventDefault();

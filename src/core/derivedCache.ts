@@ -38,7 +38,8 @@ function database(): Promise<IDBDatabase | null> {
     let request: IDBOpenDBRequest;
     try {
       request = indexedDB.open(DB, DB_VERSION);
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] not open or not read: as if nothing kept', error);
       resolve(null);
       return;
     }
@@ -87,7 +88,8 @@ export async function readDerived<T>(key: string): Promise<T | undefined> {
       const request = db.transaction(store, 'readonly').objectStore(store).get(key);
       request.onsuccess = () => resolve(request.result as T | undefined);
       request.onerror = () => resolve(undefined);
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] not open or not read: as if nothing kept', error);
       resolve(undefined);
     }
   });
@@ -104,7 +106,8 @@ export async function readDerivedKeys(prefix: string): Promise<Set<string>> {
       const keys = db.transaction(store, 'readonly').objectStore(store).getAllKeys(prefixRange(prefix));
       keys.onsuccess = () => { for (const key of keys.result ?? []) out.add(String(key).slice(prefix.length)); resolve(out); };
       keys.onerror = () => resolve(out);
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] not open or not read: as if nothing kept', error);
       resolve(out);
     }
   });
@@ -128,7 +131,8 @@ export async function readDerivedSome<T>(prefix: string, keys: readonly string[]
       tx.oncomplete = () => resolve(out);
       tx.onerror = () => resolve(out);
       tx.onabort = () => resolve(out);
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] not open or not read: as if nothing kept', error);
       resolve(out);
     }
   });
@@ -144,7 +148,8 @@ async function keepDerived(key: string, value: unknown): Promise<void> {
     const tx = db.transaction(store, 'readwrite', RELAXED);
     const request = tx.objectStore(store).put(value, key);
     request.onerror = (event) => event.preventDefault();
-  } catch {
+  } catch (error) {
+    console.warn('[derived cache] Not kept (no space, private window): made again next time', error);
     // Not kept (no space, private window): made again next time.
   }
 }
@@ -164,7 +169,8 @@ export async function keepDerivedDurably(key: string, value: unknown): Promise<{
     const request = tx.objectStore(store).put(value, key);
     request.onerror = (event) => event.preventDefault();
     return { committed };
-  } catch {
+  } catch (error) {
+    console.warn('[derived cache] not open or not read: as if nothing kept', error);
     return { committed: Promise.resolve() };
   }
 }
@@ -299,7 +305,8 @@ export async function keepDerivedMany(prefix: string, values: ReadonlyMap<string
       const request = tx.objectStore(storeOf(whole)).put(value, whole);
       request.onerror = (event) => event.preventDefault();
     }
-  } catch {
+  } catch (error) {
+    console.warn('[derived cache] Not kept (no space, private window): made again next time', error);
     // Not kept (no space, private window): made again next time.
   }
 }
@@ -334,7 +341,8 @@ export function forgetDerivedKeys(prefix: string, keys: Iterable<string>): void 
         const request = tx.objectStore(storeOf(key)).delete(key);
         request.onerror = (event) => event.preventDefault();
       }
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] Left for another time', error);
       // Left for another time.
     }
   });
@@ -352,7 +360,8 @@ export function forgetOtherDerived(kind: string, fingerprint: string): void {
       request.onsuccess = () => {
         for (const key of request.result) if (!String(key).startsWith(keep)) store.delete(key);
       };
-    } catch {
+    } catch (error) {
+      console.warn('[derived cache] Left for another time', error);
       // Left for another time.
     }
   });

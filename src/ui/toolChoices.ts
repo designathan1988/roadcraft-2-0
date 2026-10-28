@@ -10,7 +10,8 @@ function stored<T extends string>(key: string, allowed: readonly T[], fallback: 
   try {
     const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(key);
     if (raw && (allowed as readonly string[]).includes(raw)) return raw as T;
-  } catch {
+  } catch (error) {
+    console.warn('[tool choices] Not kept: the default stands', error);
     // Not kept: the default stands.
   }
   return fallback;
@@ -19,7 +20,8 @@ function stored<T extends string>(key: string, allowed: readonly T[], fallback: 
 function keep(key: string, value: string): void {
   try {
     if (typeof localStorage !== 'undefined') localStorage.setItem(key, value);
-  } catch {
+  } catch (error) {
+    console.warn('[tool choices] Not kept between sessions; it still applies now', error);
     // Not kept between sessions; it still applies now.
   }
 }
@@ -81,7 +83,7 @@ let treeModeNow: TreeMode = 'plant';
 let treeKindNow: TreeKind = 'mixed';
 const TREE_BRUSH_KEY = 'roadcraft.treeBrush';
 let treeBrushNow: TreeBrush = (() => {
-  try { return { ...DEFAULT_TREE_BRUSH, ...((JSON.parse(localStorage.getItem(TREE_BRUSH_KEY) ?? '{}') ?? {}) as Partial<TreeBrush>) }; } catch { return DEFAULT_TREE_BRUSH; }
+  try { return { ...DEFAULT_TREE_BRUSH, ...((JSON.parse(localStorage.getItem(TREE_BRUSH_KEY) ?? '{}') ?? {}) as Partial<TreeBrush>) }; } catch (error) { console.warn('[tool choices] blocked: the default', error); return DEFAULT_TREE_BRUSH; }
 })();
 export function treeMode(): TreeMode { return treeModeNow; }
 export function setTreeMode(next: TreeMode): void { treeModeNow = next; }
@@ -90,7 +92,7 @@ export function setTreeKind(next: TreeKind): void { treeKindNow = next; }
 export function treeBrush(): TreeBrush { return treeBrushNow; }
 export function setTreeBrush(change: Partial<TreeBrush>): void {
   treeBrushNow = { ...treeBrushNow, ...change };
-  try { localStorage.setItem(TREE_BRUSH_KEY, JSON.stringify(treeBrushNow)); } catch { /* not kept */ }
+  try { localStorage.setItem(TREE_BRUSH_KEY, JSON.stringify(treeBrushNow)); } catch (error) { console.warn('[tool choices] not kept', error); }
 }
 
 /** The gully brush (Paisagem > Terreno > Ravinas, `world/gullies.ts`): cutting gullies, or wiping them away. Not kept between sessions. */
@@ -108,7 +110,7 @@ let elementKindNow: ElementKind = 'stones';
 let elementModeNow: ElementBrushMode = 'lay';
 const ELEMENT_BRUSH_KEY = 'roadcraft.elementBrush';
 let elementBrushes: Partial<Record<ElementKind, ElementBrush>> = (() => {
-  try { return (JSON.parse(localStorage.getItem(ELEMENT_BRUSH_KEY) ?? '{}') ?? {}) as Partial<Record<ElementKind, ElementBrush>>; } catch { return {}; }
+  try { return (JSON.parse(localStorage.getItem(ELEMENT_BRUSH_KEY) ?? '{}') ?? {}) as Partial<Record<ElementKind, ElementBrush>>; } catch (error) { console.warn('[tool choices] blocked: the default', error); return {}; }
 })();
 export function elementKind(): ElementKind { return elementKindNow; }
 export function elementMode(): ElementBrushMode { return elementModeNow; }
@@ -118,7 +120,7 @@ export function elementBrush(kind: ElementKind = elementKindNow): ElementBrush {
 }
 export function setElementBrush(change: Partial<ElementBrush>): void {
   elementBrushes = { ...elementBrushes, [elementKindNow]: { ...elementBrush(), ...change } };
-  try { localStorage.setItem(ELEMENT_BRUSH_KEY, JSON.stringify(elementBrushes)); } catch { /* not kept */ }
+  try { localStorage.setItem(ELEMENT_BRUSH_KEY, JSON.stringify(elementBrushes)); } catch (error) { console.warn('[tool choices] not kept', error); }
 }
 export function setElementKind(next: ElementKind): void {
   elementKindNow = next;

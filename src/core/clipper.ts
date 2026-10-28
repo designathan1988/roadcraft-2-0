@@ -118,6 +118,7 @@ function compatibleRun(kind: ClipType, a: MultiPoly, b: MultiPoly = []): MultiPo
   try {
     return run(kind, a, b);
   } catch (error) {
+    console.warn('[clipper] the integer kernel failed: the float one instead', error);
     return martinezRun(kind, a, b, { error });
   }
 }

@@ -8,7 +8,7 @@ function read(): FurnitureSet {
   try {
     const v = globalThis.localStorage?.getItem(STORAGE_KEY);
     return isFurnitureSet(v) ? v : 'complete';
-  } catch { return 'complete'; }
+  } catch (error) { console.warn('[furniture] blocked: the default', error); return 'complete'; }
 }
 
 export function furnitureChosen(): FurnitureSet {
@@ -18,5 +18,5 @@ export function furnitureChosen(): FurnitureSet {
 export function setFurnitureChosen(set: FurnitureSet): void {
   if (set === chosen) return;
   chosen = set;
-  try { globalThis.localStorage?.setItem(STORAGE_KEY, set); } catch { /* kept for this session */ }
+  try { globalThis.localStorage?.setItem(STORAGE_KEY, set); } catch (error) { console.warn('[furniture] kept for this session', error); }
 }

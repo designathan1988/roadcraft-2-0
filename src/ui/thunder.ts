@@ -32,7 +32,8 @@ export function playThunder(metres: number, volume: number): void {
   if (volume <= 0) return;
   try {
     audio ??= { ctx: new AudioContext(), noise: null, waiting: null };
-  } catch {
+  } catch (error) {
+    console.warn('[thunder] no audio here: no thunder', error);
     return;
   }
   const state = audio;

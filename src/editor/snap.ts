@@ -50,7 +50,8 @@ try {
     const v = JSON.parse(raw) as Partial<RoadSnap>;
     roadSnapState = { on: v.on !== false, angles: v.angles !== false, grid: v.grid !== false };
   }
-} catch {
+} catch (error) {
+  console.warn('[road snap] Not kept: the defaults stand', error);
   // Not kept: the defaults stand.
 }
 /** The grid the road snap lands on: the 1 m subdivision, or - while the grid is drawn (the road panel's Grid) */
@@ -65,7 +66,8 @@ export function setRoadSnap(patch: Partial<RoadSnap>): void {
   roadSnapState = { ...roadSnapState, ...patch };
   try {
     if (typeof localStorage !== 'undefined') localStorage.setItem(ROAD_SNAP_KEY, JSON.stringify(roadSnapState));
-  } catch {
+  } catch (error) {
+    console.warn('[road snap] Not kept between sessions; it still applies now', error);
     // Not kept between sessions; it still applies now.
   }
 }
