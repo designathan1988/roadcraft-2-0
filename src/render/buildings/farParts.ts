@@ -5,7 +5,7 @@ import { CELL } from '@world/cells';
 import { HYSTERESIS } from '../cellInstances';
 import { PICTURE_PX } from '../plantImpostors';
 import { ERROR_PIXELS } from '../propLevels';
-import { COLOURED_PARTS } from './cellArrays';
+import { COLOURED_PARTS, TINT_HALVES } from './cellArrays';
 import { partLook } from './fade';
 import type { BuildingKit, PartKind, PartLevel } from './kit';
 import { PART_KINDS } from './partKinds';
@@ -120,7 +120,7 @@ export class FarPartBatch {
       mesh.count = 0;
       mesh.visible = false;
       if (COLOURED_PARTS.has(kind)) {
-        mesh.instanceColor = new InstancedBufferAttribute(new Uint16Array(capacity * 3), 3);
+        mesh.instanceColor = new InstancedBufferAttribute(new Uint16Array(capacity * TINT_HALVES), TINT_HALVES);
         (mesh.instanceColor as unknown as { isFloat16BufferAttribute: boolean }).isFloat16BufferAttribute = true;
       }
       this.group.add(mesh);
@@ -356,7 +356,7 @@ export class FarPartBatch {
       const start = batch.used;
       this.grow(batch, start + count);
       (batch.poses.array as Float32Array).set(band.poses, start * POSE_FLOATS);
-      if (batch.colours && band.colours) (batch.colours.array as Uint16Array).set(band.colours, start * 3);
+      if (batch.colours && band.colours) (batch.colours.array as Uint16Array).set(band.colours, start * TINT_HALVES);
       const screen = this.kit.screen[band.kind];
       const bar = screen.pieces[0] !== screen.extent ? widestBar(screen.pieces, band.scale) : Number.NaN;
       // The cell's largest scales, after its sub-cells' (`FiledBand.scale`).
@@ -388,7 +388,7 @@ export class FarPartBatch {
         const tail = batch.used - end;
         if (tail > 0) {
           (batch.poses.array as Float32Array).copyWithin(run.start * POSE_FLOATS, end * POSE_FLOATS, batch.used * POSE_FLOATS);
-          if (batch.colours) (batch.colours.array as Uint16Array).copyWithin(run.start * 3, end * 3, batch.used * 3);
+          if (batch.colours) (batch.colours.array as Uint16Array).copyWithin(run.start * TINT_HALVES, end * TINT_HALVES, batch.used * TINT_HALVES);
           for (const other of batch.runs) if (other !== run && other.start >= end) other.start -= run.count;
         }
         batch.runs.splice(i, 1);
@@ -419,9 +419,9 @@ export class FarPartBatch {
     batch.poses = poseBuffer;
     if (batch.caster) batch.caster.geometry = this.copyOf(batch, batch.model);
     if (batch.colours) {
-      const colours = new Uint16Array(capacity * 3);
+      const colours = new Uint16Array(capacity * TINT_HALVES);
       colours.set(batch.colours.array as Uint16Array);
-      batch.mesh.instanceColor = new InstancedBufferAttribute(colours, 3);
+      batch.mesh.instanceColor = new InstancedBufferAttribute(colours, TINT_HALVES);
       (batch.mesh.instanceColor as unknown as { isFloat16BufferAttribute: boolean }).isFloat16BufferAttribute = true;
       batch.colours = batch.mesh.instanceColor;
     }
@@ -441,7 +441,7 @@ function dirty(batch: KindBatch, start: number, count: number): void {
   poses.addUpdateRange(start * POSE_FLOATS, count * POSE_FLOATS);
   poses.needsUpdate = true;
   if (batch.colours) {
-    batch.colours.addUpdateRange(start * 3, count * 3);
+    batch.colours.addUpdateRange(start * TINT_HALVES, count * TINT_HALVES);
     batch.colours.needsUpdate = true;
   }
 }
