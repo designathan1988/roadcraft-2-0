@@ -80,6 +80,11 @@
             "type": "command",
             "command": "node \"${CLAUDE_PROJECT_DIR}/.claude/hooks/notebook-gate.cjs\"",
             "timeout": 30
+          },
+          {
+            "type": "command",
+            "command": "npm run typecheck 1>&2 || exit 2",
+            "timeout": 180
           }
         ]
       }
@@ -106,6 +111,9 @@
         ]
       }
     ]
+  },
+  "permissions": {
+    "deny": ["Agent"]
   },
   "autoMemoryEnabled": false
 }

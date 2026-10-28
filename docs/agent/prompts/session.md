@@ -1,0 +1,71 @@
+# Executar a missão
+
+Execute a missão de `docs/agent/MISSION.md` até o fim, na ordem, um item por vez.
+
+- Leia `docs/agent/MISSION.md` inteira antes de começar. Ela tem 16.971 caracteres, mais do que um hook entrega, e por isso só o começo dela aparece impresso no início da sessão.
+- O andamento fica em `docs/agent/work.md`. Comece pelo primeiro item não feito, que é o do "Next" de lá. O item 1a já está feito (d3a2d41e).
+- Cada problema, a fonte e a solução decidida estão em `docs/agent/findings.md`.
+- O que já foi conferido no código atual está em `docs/agent/open-checked.md`.
+
+## Antes do primeiro item: as regras que o programa garante
+
+Em `.claude/settings.json` (https://code.claude.com/docs/en/permissions, https://code.claude.com/docs/en/hooks):
+
+- `"deny": ["Agent"]` em `permissions`: sem subagentes;
+- no `Stop`, ao lado do `notebook-gate.cjs`, um hook `npm run typecheck 1>&2 || exit 2` com `timeout` de 180: o turno não termina com erro de tipo.
+
+Commite essa mudança sozinha.
+
+## Regras
+
+- O primeiro passo de cada item é reachar no código atual cada causa listada (arquivo:linha). As linhas dos relatórios são de builds antigos. O que já estiver corrigido sai do item, com a prova no código.
+- Ache cada causa lendo o código. Nada de medir, benchmark, sonda ou F7 para achar problema.
+- Confira cada item só com `npm run typecheck`, eslint sem erro novo e o spec do ponto.
+  - Um spec novo tem de falhar quando a correção é desfeita.
+  - Nunca enfraqueça, apague ou fixe valores de teste. Se um teste estiver errado ou um item for inviável como está escrito, diga com a prova no código, em vez de contornar.
+  - Sem `any`, sem erro engolido.
+- Commite cada item verificado e publique no roadcraft-2-0 pelo procedimento de `docs/agent/memory/push-roadcraft-2-0.md`. Mostre o hash no chat.
+- Pesquise a documentação oficial (three r186, WebGL, ANGLE, meshoptimizer) antes de mudar o uso de uma API e cite o link.
+- O jogo só abre uma vez, no Fim. Isso vale acima da "Verificação visual" do `CLAUDE.md` de `city` e da memória "Corrigir no código, testar no jogo", que pedem foto depois de cada mudança: a missão do dono (2026-10-28) manda abrir só no Fim.
+- Decida sozinho, sem me perguntar. Não termine o turno com um resumo que anuncia o próximo passo: faça o próximo passo. Só pare quando nada puder andar sem mim.
+- Nada falso: nenhuma caixa no lugar de prédio ou objeto, nenhum plano no lugar de via, nenhuma cidade cozida, nenhuma forma trocada pelo que carregou, nenhuma compensação de cor em shader.
+- Nunca assar prédios: eles são gerados durante o jogo e editados pelo jogador.
+- Otimização não muda nada visível e não tira nada, a não ser onde um item manda. Um nível mais simples só vale pelo erro em pixels na distância em que é desenhado e pela silhueta, e é simplificação do próprio modelo.
+- Não refaça o que foi revertido:
+  - fila de envio à GPU com teto por quadro;
+  - cena congelada;
+  - placar do grafo de código;
+  - os passos 2, 3, 4 e 6 da solução antiga;
+  - as rodadas de modelos rejeitadas (caixas no lugar de objetos, nível médio de planta que muda a copa, pneus facetados, leques de agulhas nas vias).
+- Tudo no projeto em inglês; no chat, português.
+
+## Itens, na ordem
+
+Os detalhes, com arquivo:linha, estão na missão.
+
+1. **Câmera ao arrastar:**
+   - (a) shaders compilados no meio do movimento (feito: d3a2d41e);
+   - (b) paletas das pessoas desenhadas todo quadro, mesmo fora da tela;
+   - (c) buffers de imagem refeitos quando a janela alterna entre 1079 e 1080 px;
+   - (d) textura dos lotes do three reenviada a cada desenho de cada câmera, e o crescimento do lote;
+   - (e) atributos de 3 componentes de 16 ou 8 bits que o ANGLE converte;
+   - (f) trabalho da página no caminho do quadro.
+2. **Nada criado, enviado, recalculado ou contado a cada quadro sem necessidade:** buffers reenviados com o mesmo conteúdo, geometria refeita com a vista parada, uma escrita por item onde basta uma por quadro, matrizes de objetos parados, cálculos com a vista parada, contadores no quadro, geometrias guardadas em dobro.
+3. **Uma forma por vista para tudo:** prédios (e a placa de massas escolhida pelo erro na tela), depois árvores, mobiliário (faixas das escadas distantes separadas na CPU), pessoas, postes e fios, via recém-desenhada, terreno e água.
+4. **Tirar nuvens e neblina do jogo**, mantendo os saves antigos abrindo.
+5. **Trabalho do mapa inteiro:** a base na abertura, a simulação recebendo o mapa inteiro, as superfícies das vias e as células de placas, postes e objetos calculadas na página, as varreduras do mapa todo, e o save e o desfazer copiando o documento inteiro.
+6. **Pessoas:** carregadas e com as animações assadas na página dentro do quadro, buffers do tamanho da capacidade, o elenco cozido que sempre tem de carregar, e os orçamentos de triângulos.
+7. **Refazer com a mesma aparência** as 7 texturas pintadas na abertura e os modelos pesados: carros, peças dos prédios, cascas e lotes, objetos de rua, sinais, barreiras, céu, bandeiras, elementos glTF, água, terreno, marcações dos cruzamentos e o vértice das vias. Prova com `scripts/optimization-sheet.mjs`, antes e depois.
+8. **A aparência de longe igual à de perto** em cada nível (CIEDE2000 até 2), pelos materiais e luzes reais, nunca cor fixada à mão; o bege noturno de longe entra aqui.
+9. **Pendentes:** motos e bicicletas de longe com piloto, câmera de pedestre na rua, telhados inclinados na base, os specs `cellAffinity` e `buildingsVisibleSame`, os erros engolidos da base do lint, as opções de qualidade que nenhum sistema lê, e o código morto.
+
+## Fim, uma vez
+
+1. Abra o jogo com a janela na frente.
+2. Fotografe as mesmas vistas neste código e no 7c4de70f (worktree): centro de perto, centro de longe, rua de um bairro, durante e depois de arrastar, e à noite.
+3. Analise cada foto e corrija no código o que diferir sem dever.
+4. Commite e publique.
+5. Relate:
+   - o que foi feito, com os hashes;
+   - o que não foi e por quê, com a prova no código;
+   - o que não foi verificado.

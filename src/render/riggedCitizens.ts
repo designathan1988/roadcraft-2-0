@@ -72,6 +72,8 @@ interface CitizenBatch {
   gait: GaitClips;
   /** Floats of a body's palette (16 a bone), and the bodies written this frame. */
   width: number; count: number;
+  /** The palette rows written this frame: the bodies at a mesh level. A card reads none (`emit`): DO NOT give it a row, the pass blended its row every frame for nobody. */
+  posed: number;
   /** The skeletons blended on the GPU (`people/crowdAnimation.ts`): the clips' atlas, the pass, its rows; the skinning reads `uniform`. */
   atlas: CitizenAtlas; pass: PalettePass; rows: number; uniform: { value: Texture };
   /** Its first row in the palettes' shared target, read by the skinning. */
@@ -550,7 +552,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       owned.add(impostor);
       const batch: CitizenBatch = { levels: [], errors, source, local: source.matrixWorld.clone(), impostor, clips, gait: gaitClips(clips), width, rows,
         atlas, pass, uniform, base, scratch: new Float32Array(width), joints, parents, sex, scene: loaded.scene, rigNodes: null,
-        count: 0, helmet, stopTilt, resources: owned, animationBytes: 0,
+        count: 0, posed: 0, helmet, stopTilt, resources: owned, animationBytes: 0,
         lastUsed: performance.now(), disposed: false,
         deferred, baking: Promise.resolve() };
       owned.add({ dispose: () => { batch.pass.dispose(); batch.atlas.anim.atlas.dispose(); batch.joints.dispose(); } });
@@ -802,7 +804,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       c[o] = colour.r; c[o + 1] = colour.g; c[o + 2] = colour.b;
       at.colourChanged = true;
     }
-    (at.rows!.array as Float32Array)[slot] = batch.count;
+    (at.rows!.array as Float32Array)[slot] = batch.posed++;
     if (face) setFacialExpression(at.mesh, batch.source, slot, face);
   }
 
@@ -811,7 +813,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
     weights: readonly number[], x: number, height: number, y: number, heading: number, scale: number,
     lean = 0, ground: Gradient | null = null, expression?: FaceWeights, lost: readonly Severable[] | null = null, level = 0): void {
     // A card needs no palette: its row is never read.
-    if (!batch.levels[Math.min(level, batch.levels.length - 1)]!.impostor) pose(batch, batch.count, clips, phases, weights, lost);
+    if (!batch.levels[Math.min(level, batch.levels.length - 1)]!.impostor) pose(batch, batch.posed, clips, phases, weights, lost);
     transform.position.set(x, height, -y);
     // Yaw, then a roll about the body's own forward axis
     transform.rotation.set(0, heading + Math.PI / 2, -lean, 'YXZ');
@@ -861,6 +863,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       band = citizenBandAt(zoom);
       for (const batch of batches.values()) {
         batch.count = 0;
+        batch.posed = 0;
         for (const at of batch.levels) at.count = 0;
       }
     },
@@ -885,7 +888,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         return;
       }
       if (batch.count >= CAPACITY) return;
-      if (batch.count >= batch.rows) grow(batch);
+      if (batch.posed >= batch.rows) grow(batch);
       const time = Math.max(0, ped.age - (1 - alpha) * DT);
       const scale = body.size * (0.92 + ((hash >>> 8) & 255) / 255 * 0.17);
       let gait = motion.get(ped);
@@ -980,7 +983,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         return 0;
       }
       if (batch.count >= CAPACITY) return 0;
-      if (batch.count >= batch.rows) grow(batch);
+      if (batch.posed >= batch.rows) grow(batch);
       mixClips.length = 0;
       mixPhases.length = 0;
       mixWeights.length = 0;
@@ -1088,11 +1091,11 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         }
       }
     },
-    /** The skeletons of the bodies written this frame, blended on the GPU before anybody draws them (`agents.renderPalettes`). */
+    /** The skeletons of the bodies written this frame at a mesh level, blended on the GPU before anybody draws them (`agents.renderPalettes`): none for a batch drawn as cards alone. */
     renderPalettes(renderer: WebGLRenderer): void {
       for (const batch of batches.values()) {
-        if (batch.count === 0) continue;
-        batch.pass.render(renderer, batch.count);
+        if (batch.posed === 0) continue;
+        batch.pass.render(renderer, batch.posed);
         batch.uniform.value = batch.pass.texture;
         batch.base.value = batch.pass.base;
       }
@@ -1173,10 +1176,10 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
     drawPalette(index: number, palette: Float32Array, instance: Matrix4, charred = false): void {
       const batch = batches.get(index);
       if (!batch || batch.count >= CAPACITY || palette.length !== batch.width) return;
-      if (batch.count >= batch.rows) grow(batch);
+      if (batch.posed >= batch.rows) grow(batch);
       // Worked out by the ragdoll: the pass copies it as it is.
-      batch.pass.setOverride(batch.count, palette);
-      batch.pass.setPlays(batch.count, null, 0);
+      batch.pass.setOverride(batch.posed, palette);
+      batch.pass.setPlays(batch.posed, null, 0);
       const e = instance.elements;
       // Never a card for a body on the ground: the palette is its pose. Its face's weights too, close up: the slot otherwise keeps whatever the morph texture held there - zero, never written
       const level = Math.min(levelOf(batch, e[12]!, -e[14]!, e[13]!), batch.errors.length - 1);

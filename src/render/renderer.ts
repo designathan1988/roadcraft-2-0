@@ -4146,8 +4146,8 @@ export function createSceneRenderer(
       post.setAtmosphere(air, sunTowards.copy(environment.sun.position).sub(environment.sun.target.position), environment.skyColor,
         sunLight.copy(environment.sun.color).multiplyScalar(environment.sun.intensity), eyeShift);
       const atRender = performance.now();
-      // The people's skeletons on the GPU (`people/crowdAnimation.ts`), before anybody draws them.
-      agents.renderPalettes(renderer);
+      // The people's skeletons on the GPU (`people/crowdAnimation.ts`), before anybody draws them; none while the effects panel hides the people (`switchedOff`).
+      if (effectSwitches.people) agents.renderPalettes(renderer);
       {
         // DO NOT keep the eight point lights in the scene unlit (R18): three counts every visible light and each lit fragment evaluates it; shown together, so they make one variant (compiled ahead, `lightVariants`).
         const pointsOn = fxLights.muzzle.intensity > 0 || fxLights.blast.intensity > 0 || roomLights.some((light) => light.intensity > 0);
