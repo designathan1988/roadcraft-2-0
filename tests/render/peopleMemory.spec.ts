@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BoxGeometry, Float32BufferAttribute, InstancedMesh, MeshBasicMaterial, type Camera, type Group, type Scene, type WebGLRenderer } from 'three';
-import { dropFaceShapesOnceDrawn, keepPartOnGpu, partArrays } from '@render/riggedCitizens';
+import { dropFaceShapesOnceDrawn, growLevel, keepPartOnGpu, partArrays, setFacialExpression } from '@render/riggedCitizens';
+import { SkinnedMesh } from 'three';
 import { countMemory } from '@render/memoryCounters';
 import { BufferAttribute as Attribute, Group as Holder, InstancedBufferAttribute } from 'three';
 
@@ -65,5 +66,33 @@ describe("the people's memory", () => {
     expect(Array.from(geometry.getAttribute('position').array as Float32Array)).toEqual(positions);
     expect((geometry.getAttribute('position') as Attribute).version).toBeGreaterThan(version);
     expect(coarse.array).not.toBeNull();
+  });
+
+  it("sizes a level's rows and faces by the figures it has room for, grown with them, never for the most it may hold (MISSION.md item 6)", () => {
+    const geometry = new BoxGeometry();
+    const count = geometry.getAttribute('position').count;
+    geometry.morphAttributes['position'] = [new Float32BufferAttribute(new Float32Array(count * 3), 3), new Float32BufferAttribute(new Float32Array(count * 3), 3)];
+    const rows = new InstancedBufferAttribute(new Float32Array(16), 1);
+    geometry.setAttribute('citizenRow', rows);
+    const mesh = new InstancedMesh(geometry, new MeshBasicMaterial(), 16);
+    mesh.count = 0;
+    const level = { mesh, rows, count: 0, colourChanged: false, impostor: false };
+    // The body the faces are read from: two shapes.
+    const source = new SkinnedMesh(new BoxGeometry(), new MeshBasicMaterial());
+    source.morphTargetInfluences = [0, 0];
+    source.morphTargetDictionary = { faceBlink: 0, faceSmile: 1 };
+    setFacialExpression(mesh, source, 0, {});
+    // A row of the faces' texture for each instance it has room for: 16, not a thousand.
+    expect(mesh.morphTexture!.image.height).toBe(16);
+    (mesh.morphTexture!.image.data as Float32Array)[0] = 0.5;
+    rows.array[3] = 7;
+    // Room for the seventeenth: doubled, what was written kept.
+    growLevel(level, 17);
+    expect(mesh.instanceMatrix.count).toBe(32);
+    expect(level.rows.count).toBe(32);
+    expect(geometry.getAttribute('citizenRow')).toBe(level.rows);
+    expect(level.rows.array[3]).toBe(7);
+    expect(mesh.morphTexture!.image.height).toBe(32);
+    expect((mesh.morphTexture!.image.data as Float32Array)[0]).toBe(0.5);
   });
 });
