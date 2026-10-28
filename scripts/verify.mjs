@@ -5,9 +5,7 @@
 //     and always the goldens: the city a seed makes and the driving and walking of a seed, bit for bit (Factorio's per-tick CRC, in seconds),
 //     and the census of the derived world (tests/scale/census/worldCensus: what the buildings' layer, the gardens and the trees make of the small city, in Node, no GPU);
 //     and the census of the scene (tests/scale/census/sceneCensus: the real scene renderer on a null GPU opening the small city, what the district and street views would draw);
-//  4. the code graph's rules (`scripts/codegraph/rules.mjs`): the uploads outside the queue, the scene walks and recompiles on the frame and the
-//     whole-map work, each under its ceiling;
-//  5. the game itself: the small city opened in headless Chrome (`scripts/look/verify.json`), map, district and street photographed,
+//  4. the game itself: the small city opened in headless Chrome (`scripts/look/verify.json`), map, district and street photographed,
 //     failing on any page error, console error or lost WebGL context, each photo compared with the reference (`lab-reports/verify-ref`).
 // `--game`: also step 4 (the browser, the photos); `--ref` with it: the photos taken now become the reference (after a change seen and approved).
 // The big city, the timings and the whole suite are not here: they are for the milestones, not for every change; nor the tiers' draws,
@@ -52,9 +50,6 @@ steps.push(run('goldens (city, driving, walking)', bin('vitest'), ['run', 'tests
 // The large city's golden, the derived world (7-8 s alone, past the quick suite's 10 s under its load) and the scene drawn take their seconds:
 // with the counting suites' configuration (`tests/scale`).
 steps.push(run('golden of the large city, census of the derived world and of the scene drawn', bin('vitest'), ['run', '-c', 'vitest.scale.config.ts', 'tests/scale/world/cityGoldenLarge.spec.ts', 'tests/scale/census/worldCensus.spec.ts', 'tests/scale/census/sceneCensus.spec.ts']));
-// The code graph's permanent rules (`scripts/codegraph/rules.mjs`): no new upload outside the queue, scene walk or recompile on the frame, or
-// whole-map work; the counts may only fall.
-steps.push(run('code-graph rules', process.execPath, [join(ROOT, 'scripts', 'codegraph', 'rules.mjs')]));
 if (specs.length) steps.push(run('specs of the change', bin('vitest'), ['related', '--run', '--bail', '1', '--passWithNoTests', ...specs]));
 const results = await Promise.all(steps);
 let failed = false;

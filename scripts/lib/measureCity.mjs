@@ -54,10 +54,7 @@ const LEAST_FREE_BYTES = 3 * 2 ** 30;
 /** A browser and page with the small city of `seed` open at `zoom` times the whole city's view, the measure mode on, the scene settled.
  *  DO NOT measure with another process drawing on the GPU: the game left open in the app's browser pane held 99 % of the 3D engine and the
  *  district view's GPU time came out 17, 22 or 37 ms by its load, the same scene to the triangle (2026-10-18). `--shared-gpu` measures anyway; the CPU and the memory likewise (`cpuNeighbours`, `--shared-machine`). */
-/** `profile`: a folder kept between runs (Playwright's persistent context): what the game stores in the page (a generated city in its derived
- *  store) is read back by the next run; `browser` is then that context, closed the same way. `beforeGoto(page)`: run on the page before it
- *  navigates (a CDP session's precise coverage started before any of the game's code runs). */
-export async function openCity({ base = arg('--base', 'http://127.0.0.1:5300/'), seed = Number(arg('--seed', '7')), zoom = Number(arg('--zoom', '4')), width = 1600, height = 900, init = null, free = true, headless = true, settle = true, city = true, profile = null, beforeGoto = null } = {}) {
+export async function openCity({ base = arg('--base', 'http://127.0.0.1:5300/'), seed = Number(arg('--seed', '7')), zoom = Number(arg('--zoom', '4')), width = 1600, height = 900, init = null, free = true, headless = true, settle = true, city = true } = {}) {
   const busy = gpuNeighbours();
   if (free && busy.length && !process.argv.includes('--shared-gpu')) {
     console.error(`MEASUREMENT REFUSED: another process is using the GPU: ${busy.map((b) => `${b.name} (pid ${b.pid}) ${b.percent}%`).join(', ')}. Close it (a game open in the browser pane, another tab) or pass --shared-gpu.`);
@@ -71,19 +68,11 @@ export async function openCity({ base = arg('--base', 'http://127.0.0.1:5300/'),
     console.error(`MEASUREMENT REFUSED: the machine is busy: ${why.join(', ')}. Close what is yours (tests, builds, another Chrome) or pass --shared-machine.`);
     process.exit(2);
   }
-  let browser, page;
-  if (profile) {
-    // A window of a fixed size (the bench's runs compare at one resolution), its page the context's first.
-    browser = await chromium.launchPersistentContext(profile, { channel: 'chrome', headless, args: [...CHROME_ARGS, `--window-size=${width},${height + 140}`], viewport: { width, height } });
-    page = browser.pages()[0] ?? await browser.newPage();
-  } else {
-    browser = await chromium.launch({ channel: 'chrome', headless, args: headless ? CHROME_ARGS : [...CHROME_ARGS, '--start-maximized'] });
-    // With a window (a player playing while the probe records): the window's own size.
-    page = await browser.newPage({ viewport: headless ? { width, height } : null });
-  }
+  const browser = await chromium.launch({ channel: 'chrome', headless, args: headless ? CHROME_ARGS : [...CHROME_ARGS, '--start-maximized'] });
+  // With a window (a player playing while the probe records): the window's own size.
+  const page = await browser.newPage({ viewport: headless ? { width, height } : null });
   // What must run before the game's code (the probe's counters on WebGL, workers, timers...).
   if (init) await page.addInitScript(init);
-  if (beforeGoto) await beforeGoto(page);
   await page.goto(base);
   await page.waitForFunction(() => window.__roadcraft?.scene?.().buildingLevels && window.__roadcraft.measure, null, { timeout: 180000 });
   await page.waitForTimeout(2000);

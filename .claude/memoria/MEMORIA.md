@@ -18,24 +18,24 @@ One line per memory file in this folder. New learnings go in a new file here (fr
 - [Duro com os agentes](harsh-with-agents.md) — tom grosso e severo com subagentes que travam, não entregam ou fraudam; ordem permanente do dono
 - [Avaliar bibliotecas sem viés](library-eval-unbiased.md) — nunca usar o jogo como gabarito; protótipo do melhor uso de cada uma, imagens, o dono decide
 - [Reaproveitar agentes, poucos em paralelo](reuse-agents-few-parallel.md) — retomar o agente que já fez o assunto (SendMessage), não abrir novo; ~2 de pesquisa por vez
-- [Navegador visível só a janela do jogo](no-visible-browser.md) — PARTLY SUPERSEDED 2026-10-27 by the mission: the bench and runtime runs open their own visible window for a run
+- [Navegador visível só a janela do jogo](no-visible-browser.md) — No visible browser window, ever: the measures run headless on the real GPU (owner, 2026-10-27 late evening)
 - [Trocar agente que não evolui](replace-failing-agent-with-brief.md) — estudar as causas no código e lançar agente NOVO com prompt certo; não assumir o trabalho
 - [Finalizar é finalizar](finish-means-finish.md) — depois de "manda finalizar", não devolver o agente para polir; avisar o dono
 - [Redesenho da UI rejeitado](ui-redesign-rejected.md) — agente de UI cancelado: v1–v3 repetiam a interface atual recolorida
 - [Steam: qualquer GPU](ships-on-steam-any-gpu.md) — jogo vai para a Steam; erro de shader/limite de textura em qualquer GPU é bug a corrigir
 - [Achar lendo, não com suítes](find-by-reading-not-suites.md) — ler o código, tsc/eslint, só o spec do ponto; suíte lenta só confirma lote, em segundo plano
-- [Arquitetura se julga pelo código](architecture-judged-by-code.md) — PARTLY SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): judged through the code graph; measures only at the mission's points
+- [Arquitetura se julga pelo código](architecture-judged-by-code.md) — trabalho da página proporcional ao mapa inteiro = errado; nada de medições para diagnosticar
 - [Eu faço, sem agentes](do-the-work-yourself.md) — o dono quer que eu mesmo faça o trabalho; nada de subagentes
-- [Uma medição F7](f7-single-measurement.md) — SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): code graph, camera bench, far sheet at the marked points
+- [Uma medição F7](f7-single-measurement.md) — uma só medição no F7, registrar todos os problemas, corrigir, testar no jogo só no fim
 - [Nunca perguntar, decidir](never-ask-decide.md) — não parar para perguntar nem pedir autorização; decidir e seguir, commit e push incluídos
 - [Estado da rearquitetura 2026-10-26](architecture-state-2026-10-26.md) — tabelas e save prontos; falta o worker da simulação (grafos de mapa inteiro na gaiola da página)
 - [Sem elementos falsos na cidade](no-fake-city-elements.md) — cidade de 10 km com todos os elementos reais e funcionais; caixa/plano no lugar de prédio/via é fraude
 - [Dizer o tamanho da cidade e o que falta](say-the-city-size-and-what-is-unmet.md) — cada verificação nomeia a cidade (10 km vs 1,6 km); geração lenta é meta não atingida, não "pendência"
 - [Sem cidade cozida como atalho](no-cooked-city-shortcut.md) — o caminho do jogador (criar, salvar, reabrir, jogar 10 km) tem de ser rápido de verdade; arquivo pronto é maquiagem
-- [Corrigir no código, testar no jogo](fix-in-code-test-in-app.md) — PARTLY SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): its measures at the marked points; tsc/eslint/point spec while implementing
+- [Corrigir no código, testar no jogo](fix-in-code-test-in-app.md) — regra inviolável: sem suítes/medições/processos lentos; foto na janela aberta após cada mudança; script pontual < 30 s
 - [Meta: 10 km com código correto](goal-10km-correct-code.md) — criar/abrir/salvar/jogar 10 km rápido em PC mediano; tudo real; código correto é a única métrica; passo a passo com fotos
-- [Não reabrir o jogo para investigar](no-relaunch-to-investigate.md) — PARTLY SUPERSEDED 2026-10-27 by the mission: runs only at its marked points
+- [Não reabrir o jogo para investigar](no-relaunch-to-investigate.md) — causas conhecidas: corrigir no código em lote; abrir o jogo uma vez por lote, só para a foto
 - [Sem edição em etapas com a janela viva](no-multistep-edits-under-live-window.md) — a janela recarrega e salva: código do save/boot em uma escrita só, ou fechar o jogo; backup dos saves antes
-- [Jogo fechado até a arquitetura acabar](no-game-until-architecture-done.md) — SUPERSEDED 2026-10-27 by the mission (docs/agent/STATE.md): the game opens at the mission's marked points
+- [Jogo fechado até a arquitetura acabar](no-game-until-architecture-done.md) — ordem do dono: não abrir o jogo até refazer toda a arquitetura no código; só tsc/eslint/specs
 - [Desfazer edição de teste antes de recarregar](test-edit-undo-before-reload.md) — Ctrl+Z no mesmo script; a janela recarrega a cada mudança em src e salva no pagehide
 - [Interface nunca gerada ao vivo](ui-never-generated-live.md) — menus mostram fotos prontas (PNG no projeto); nada de render/canvas na UI; regra de lint bloqueia

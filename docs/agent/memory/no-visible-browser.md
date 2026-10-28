@@ -8,7 +8,7 @@ metadata:
   modified: 2026-10-26T20:44:07.046Z
 ---
 
-**PARTLY SUPERSEDED 2026-10-27 (evening) by the owner's mission (docs/agent/STATE.md): the camera bench and the code graph's runtime layer open their own visible Chrome window, in the foreground, at a fixed size, for the length of a run.**
+**UPDATED 2026-10-27 (late evening), the owner: "PARA DE JOGAR ESSA JANELA NA MINHA CARA". The mission's measuring tools (camera bench, code graph runtime layer, far sheet) run in HEADLESS Chrome on the real GPU (scripts/lib/cameraPath.mjs default headless: true); never a visible window on the owner's screen.**
 
 
 On 2026-10-25 the owner complained about Chrome windows popping up on the owner's screen from agents' runs: "NÃO ABRIREM CHROME NA MINHA CARA".

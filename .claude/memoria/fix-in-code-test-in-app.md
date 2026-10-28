@@ -8,7 +8,6 @@ metadata:
   modified: 2026-10-26T20:50:28.061Z
 ---
 
-**PARTLY SUPERSEDED 2026-10-27 (evening) by the owner's mission (docs/agent/STATE.md): the mission's measures (code graph runtime layer, camera bench, far-building sheet) run at the points it marks, in a Playwright Chrome window on the dev server (not scripts/inGame.mjs, which does not see the Electron page); during implementation only tsc, eslint and the spec of the point changed. Still standing: fix in the code, never by trial runs.**
 
 
 The owner's inviolable rule, pasted 2026-10-26 after the page-window batch broke the roads in the desktop app while every headless pass and suite was green:

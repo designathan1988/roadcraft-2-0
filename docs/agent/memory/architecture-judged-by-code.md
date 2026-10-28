@@ -8,7 +8,6 @@ metadata:
   modified: 2026-10-26T14:30:05.184Z
 ---
 
-**PARTLY SUPERSEDED 2026-10-27 (evening) by the owner's mission (docs/agent/STATE.md): the code is still the criterion, now read through the code graph (static index joined to the runtime layer's exact counts and times on the bench path); measures run at the points the mission marks. Still standing: never state a number not measured or read; a page path that scales with the whole map is wrong.**
 
 
 The criterion for right/wrong architecture is the code, not measurements. A code path on the page that walks, builds or keeps something for the WHOLE map (every node, lot, tile or block of the map, the whole network's extent) instead of only what is near the camera is wrong architecture for 10 km cities. Find these by reading, list them with file:line, fix them.

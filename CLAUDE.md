@@ -39,7 +39,7 @@ Suíte lenta nunca acha problema; ela só confirma uma correção já feita.
 1. Ache o problema lendo o código no caminho dele: siga as chamadas, a config e os dados até a origem. Exemplo: a falta de memória da suíte de escala vinha do `run-limited.mjs`, que passava `VITEST_MAX_WORKERS=6`. O Vitest 4.1 aplica essa variável depois da config e anula o "um arquivo por vez" da suíte, e aí 6 testes pesados rodavam juntos e estouravam os 8 GB. Dava para ver isso só lendo, sem as duas rodadas de 25 minutos.
 2. Primeiro as checagens estáticas rápidas: `tsc` e `eslint` levam de segundos a 1–2 minutos e pegam erros de tipo, código morto e erros engolidos.
 3. Depois de corrigir, rode só o teste daquele ponto. O `buildingEdit`, por exemplo, roda sozinho em 0,7 s, contra uns 25 minutos da suíte inteira. Suíte lenta (`test:scale`, verificação completa) só como confirmação final de um lote terminado, em segundo plano e sem ficar esperando.
-4. Uma passada no jogo com fotos, para o visual e as funcionalidades, como as regras exigem.
+4. Nada de medir, rodar bench ou abrir o jogo para achar ou confirmar problema. O jogo só é aberto quando eu pedir.
 
 ## Testes como usuário
 Quando eu pedir para testar a aplicação, o teste é do jeito que eu mandar. Se eu pedir para testar como usuário, abrir a aplicação, usar gestos reais, tirar fotos ou achar erros na interface:
@@ -56,3 +56,18 @@ Quando eu pedir para testar a aplicação, o teste é do jeito que eu mandar. Se
 
 ## Ao terminar
 - Diga o que foi feito, o que não foi feito e o que você não verificou.
+
+## Project memory (migrated from the user-level auto memory)
+- Auto memory is off for this project (`autoMemoryEnabled: false` in `.claude/settings.json`). The memory lives in the repository, in `.claude/memoria/`, so it works the same under any account.
+- Record every new learning there: one file per fact in `.claude/memoria/` (frontmatter `name`, `description`, `metadata.type`), plus one line in `.claude/memoria/MEMORIA.md`. Update an existing file instead of duplicating it. Never write to `~/.claude/projects/.../memory/`.
+
+@.claude/memoria/MEMORIA.md
+
+# Compact instructions
+
+When compacting (auto or /compact; https://code.claude.com/docs/en/costs#reduce-token-usage), the summary MUST keep, word for word where they are orders:
+- Every order and complaint of the owner in this session, verbatim, the latest first, with what was done about each (done / not done / partly, and why).
+- The current mission and its stop condition exactly as the owner wrote it (the /goal text if any), and how far it stands (numbers, last commit hash).
+- Everything broken or reported broken by the owner and not yet confirmed fixed; every change not committed (files); every claim not verified in the game.
+- The standing rules that the owner repeated: no measuring, find by reading, no subagents, never ask, commit per item, chat in Brazilian Portuguese.
+After compacting, read docs/agent/STATE.md in full before anything else, and keep it current with each of the owner's new orders (it is re-injected at every compaction, under 9,000 characters).

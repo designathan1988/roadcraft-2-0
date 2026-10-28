@@ -8,7 +8,6 @@ metadata:
   modified: 2026-10-26T22:28:44.182Z
 ---
 
-**PARTLY SUPERSEDED 2026-10-27 (evening) by the owner's mission (docs/agent/STATE.md): the mission's runs (bench, runtime layer, far sheet) happen at its marked points only; no other relaunch loops.**
 
 
 On 2026-10-26 the owner protested at my repeated reloads of the 10 km save (each ~3 min) to trace phases and queues: "Vai ficar insistindo em ficar subindo o jogo até que horas? Por que não corrige de uma vez por todas o código?"

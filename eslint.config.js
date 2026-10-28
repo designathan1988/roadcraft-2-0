@@ -192,10 +192,6 @@ export default tseslint.config(
       'scripts/diagnose/*.mjs',
       'scripts/optimization-sheet.mjs',
       'scripts/people-sheet.mjs',
-      'scripts/lib/cameraPath.mjs',
-      'scripts/lib/measureCity.mjs',
-      'scripts/bench-camera.mjs',
-      'scripts/codegraph/runtime.mjs',
     ],
     languageOptions: {
       globals: {
@@ -218,17 +214,6 @@ export default tseslint.config(
         Event: 'readonly',
         Image: 'readonly',
       },
-    },
-  },
-  {
-    // The code graph's indexer (`scripts/codegraph/index.cjs`): Node tooling in CommonJS (the compiler API loaded with require).
-    files: ['scripts/codegraph/*.cjs'],
-    languageOptions: {
-      sourceType: 'commonjs',
-      globals: { require: 'readonly', process: 'readonly', console: 'readonly' },
-    },
-    rules: {
-      '@typescript-eslint/no-require-imports': 'off',
     },
   },
   {
