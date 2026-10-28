@@ -24,5 +24,7 @@ The reading that wrote the mission is done (249 of 249 documents, `reading.md`, 
 
 - 1e terrain DONE, massing base already fixed (skill cycle 6: terrainLod.ts 416 lines read whole; also read massCells.ts 220-250 and massBase.ts 1-45): the patch and rim models are four bytes a corner (terrainLod.ts:39-70, CORNER_BYTES; ANGLE R8G8B8_USCALED is VERTEX_CONVERT_BOTH, R8G8B8A8_USCALED VERTEX_CONVERT_GPU). The massing base's USHORT x3 in the move reports (14:01, 2026-10-27) is gone since fe0b4e42 (16:37 that day): the base is the plate's own mass on its square's grid, four shorts a vertex (massBase.ts joinBase -> massOnGrid, massCells.ts:236 cellMesh place ? 4 : FLOAT x3). Spec tests/render/terrainVertexFormat.spec.ts (fails with the fix undone); 15 terrain specs pass; typecheck, eslint clean. Item 1e complete: the four formats the reports listed.
 
+- 1f cellKeeps DONE (skill cycle 7: cellKeeps.ts 214 lines read whole): settle ranked every waiting block at every call (cellKeeps.ts:160); the ranking is kept with its focus and made again only when the focus moves or a block comes (cellKeeps.ts:57-62/89/125/170-186), the same order (stable sort). Spec tests/render/cellKeepsRank.spec.ts (fails with the fix undone); cellKeeps, coverSweep, elementCells pass; typecheck, eslint clean.
+
 ## Next
-MISSION.md item 1f (page work on the frame path, each made proportional to what changed).
+MISSION.md item 1f, the next causes: casterChanges (renderer.ts:748), syncBases (massCells.ts:767), pole stores (poleStores.ts), viewCells.make, lookProps/ringsIn, cellInstances visit, lot overlay (lotOverlay.ts), cameraSolids floors, bay layouts, network rebuild, warmRoadShaders elevation, scene walked three times, rows copied to the job processes.

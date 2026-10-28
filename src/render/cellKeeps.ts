@@ -51,6 +51,15 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   private changed: Set<number> | null = null;
   /** Places tested since the keeps were made: the work, for the specs. */
   tested = 0;
+  /** The queued blocks nearest the focus first, as `settle` last ranked them, and the focus they were ranked for: ranked again only when the
+   *  focus moved or a block came (`enqueue`, `clear`); a block gone leaves the others' order as it was and is skipped. DO NOT rank every waiting
+   *  block at every frame: the six keeps ranked their thousands of blocks again each frame of a still view while cells waited. */
+  private ranked: number[] = [];
+  private rankedX = Number.NaN;
+  private rankedY = Number.NaN;
+  private rankStale = true;
+  /** Rankings made: the work, for the specs. */
+  rankings = 0;
   private readonly counted = (c: C): number | null => {
     this.tested++;
     return this.test(c);
@@ -76,7 +85,8 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
   private enqueue(key: number): void {
     const block = blockOf(key);
     const cells = this.queued.get(block);
-    if (cells) cells.add(key); else this.queued.set(block, new Set([key]));
+    if (cells) cells.add(key);
+    else { this.queued.set(block, new Set([key])); this.rankStale = true; }
   }
 
   private dequeue(key: number): void {
@@ -112,6 +122,7 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     this.waiting.clear();
     this.stale.clear();
     this.queued.clear();
+    this.rankStale = true;
     this.changed = null;
   }
 
@@ -156,15 +167,23 @@ export class CellKeeps<C extends { readonly x: number; readonly y: number }> {
     // the same few cover cells in flight, and each frame of a street's view spent its whole budget asking them again (1.3 s of the city tour's
     // 3.8 min in `settle`, the lab's tour, 2026-10-27).
     let probes = 0;
-    const span = RANK_CELLS * KEEP_CELL;
-    const blocks = [...this.queued.keys()].map((block) => {
-      const [i, j] = keepCellOf(block);
-      return { block, d: Math.hypot((i + 0.5) * span - x, (j + 0.5) * span - y) };
-    }).sort((a, b) => a.d - b.d);
+    if (this.rankStale || x !== this.rankedX || y !== this.rankedY) {
+      const span = RANK_CELLS * KEEP_CELL;
+      this.ranked = [...this.queued.keys()].map((block) => {
+        const [i, j] = keepCellOf(block);
+        return { block, d: Math.hypot((i + 0.5) * span - x, (j + 0.5) * span - y) };
+      }).sort((a, b) => a.d - b.d).map((one) => one.block);
+      this.rankedX = x;
+      this.rankedY = y;
+      this.rankStale = false;
+      this.rankings++;
+    }
     let first = true;
     let unready = false;
-    for (const { block } of blocks) {
-      const cells = this.queued.get(block)!;
+    for (const block of this.ranked) {
+      // Gone since the ranking (its cells all tested or let go).
+      const cells = this.queued.get(block);
+      if (!cells) continue;
       for (const key of cells) {
         if (!first && performance.now() >= deadline) return true;
         // What its test reads not in yet (asked by `ready`): left waiting, the next cell taken.
