@@ -36,33 +36,38 @@ export interface LandGrid {
  *  drew, from four ([meshoptimizer: vertex reuse](https://github.com/zeux/meshoptimizer); CDLOD's indexed grid,
  *  [Strugar 2010](https://github.com/fstrugar/CDLOD/blob/master/cdlod_paper_latest.pdf)). DO NOT go back to six: a third more corners read the land. */
 function patchCells(): { position: BufferAttribute; index: BufferAttribute } {
-  const data = new Uint8Array(LOD_PATCH * LOD_PATCH * 4 * 3);
+  const data = new Uint8Array(LOD_PATCH * LOD_PATCH * 4 * CORNER_BYTES);
   const index = new Uint16Array(LOD_PATCH * LOD_PATCH * 6);
   let o = 0, k = 0, v = 0;
   for (let j = 0; j < LOD_PATCH; j++) {
     for (let i = 0; i < LOD_PATCH; i++) {
-      for (let role = 0; role < 4; role++) { data[o++] = i; data[o++] = j; data[o++] = role; }
+      for (let role = 0; role < 4; role++) { data[o++] = i; data[o++] = j; data[o++] = role; data[o++] = 0; }
       for (const r of [0, 1, 2, 0, 2, 3]) index[k++] = v + r;
       v += 4;
     }
   }
-  return { position: new BufferAttribute(data, 3), index: new BufferAttribute(index, 1) };
+  return { position: new BufferAttribute(data, CORNER_BYTES), index: new BufferAttribute(index, 1) };
 }
+
+/** Bytes a corner of the patch and rim models: its three and one left over (never read: the shader takes `ivec3(position)`). DO NOT give it three:
+ *  D3D11 has no three-byte format, and ANGLE copies such a buffer to four bytes a vertex on the CPU (`formatutils11.cpp`: R8G8B8_USCALED
+ *  VERTEX_CONVERT_BOTH), every plate's models as it comes in (the move reports' "UBYTE x3" terrain-ground and terrain-rim, 2026-10-27). */
+const CORNER_BYTES = 4;
 
 /** A rim's strip along ONE side, both ways round: (corner k along the side, 0, 6 + bottom); the side is the instance's (`aLodPatch.w` >> 4,
  *  `LandLod.add`), one instance a side that hangs. DO NOT lay the four sides in one model: on a patch at the plate's edge three of them hung
  *  nothing and were 120 of its 160 triangles. */
 function patchRim(): { position: BufferAttribute; index: BufferAttribute } {
-  const data = new Uint8Array((LOD_PATCH + 1) * 2 * 3);
+  const data = new Uint8Array((LOD_PATCH + 1) * 2 * CORNER_BYTES);
   let o = 0;
-  for (let k = 0; k <= LOD_PATCH; k++) for (const bottom of [0, 1]) { data[o++] = k; data[o++] = 0; data[o++] = 6 + bottom; }
+  for (let k = 0; k <= LOD_PATCH; k++) for (const bottom of [0, 1]) { data[o++] = k; data[o++] = 0; data[o++] = 6 + bottom; data[o++] = 0; }
   const index = new Uint16Array(LOD_PATCH * 12);
   let i = 0;
   for (let k = 0; k < LOD_PATCH; k++) {
     const top0 = k * 2, bottom0 = top0 + 1, top1 = top0 + 2, bottom1 = top0 + 3;
     for (const v of [top0, bottom0, top1, top1, bottom0, bottom1, top0, top1, bottom0, top1, bottom1, bottom0]) index[i++] = v;
   }
-  return { position: new BufferAttribute(data, 3), index: new BufferAttribute(index, 1) };
+  return { position: new BufferAttribute(data, CORNER_BYTES), index: new BufferAttribute(index, 1) };
 }
 
 /** A patch's level in `aLodPatch.w`; a rim's side above it (`LandLod.add`). */
@@ -268,7 +273,7 @@ export class LandLod {
     const cells = patchCells(), rimStrip = patchRim();
     this.patches = new InstancedBufferAttribute(new Float32Array(most * 4), 4).setUsage(DynamicDrawUsage);
     this.rims = new InstancedBufferAttribute(new Float32Array((4 * grid.seg) / LOD_PATCH * 4), 4).setUsage(DynamicDrawUsage);
-    // The patch's grid is a plate's own (1.8 kB, its rim 1.4 kB): no buffer shared between plates to outlive one.
+    // The patch's grid is a plate's own (2.3 kB, its rim 1.4 kB): no buffer shared between plates to outlive one.
     this.geometry.setAttribute('position', cells.position);
     this.geometry.setIndex(cells.index);
     this.geometry.setAttribute('aLodPatch', this.patches);

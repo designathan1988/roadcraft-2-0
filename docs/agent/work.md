@@ -22,5 +22,7 @@ The reading that wrote the mission is done (249 of 249 documents, `reading.md`, 
 
 - 1e tints DONE (skill cycle 5: cellArrays.ts 708, partFiling.ts 235, partCells.ts 611, farParts.ts 448 lines read whole; buildingMesh.ts read only 24-33 and 4940-4979 of 5,097, the one binding changed): ANGLE's own table (formatutils11.cpp) converts R16G16B16_FLOAT on the CPU (VERTEX_CONVERT_CPU to R16G16B16A16) and takes R16G16B16A16_FLOAT as it is. The tints are now TINT_HALVES = 4 halves an instance from the cell job (cellArrays.ts:589-607) through partFiling.ts, partCells.ts, farParts.ts to buildingMesh.ts:4955. cellArrays.spec.ts asserts the 8 bytes and each channel (fails with the fix undone); 24 specs of the chain pass; typecheck, eslint clean.
 
+- 1e terrain DONE, massing base already fixed (skill cycle 6: terrainLod.ts 416 lines read whole; also read massCells.ts 220-250 and massBase.ts 1-45): the patch and rim models are four bytes a corner (terrainLod.ts:39-70, CORNER_BYTES; ANGLE R8G8B8_USCALED is VERTEX_CONVERT_BOTH, R8G8B8A8_USCALED VERTEX_CONVERT_GPU). The massing base's USHORT x3 in the move reports (14:01, 2026-10-27) is gone since fe0b4e42 (16:37 that day): the base is the plate's own mass on its square's grid, four shorts a vertex (massBase.ts joinBase -> massOnGrid, massCells.ts:236 cellMesh place ? 4 : FLOAT x3). Spec tests/render/terrainVertexFormat.spec.ts (fails with the fix undone); 15 terrain specs pass; typecheck, eslint clean. Item 1e complete: the four formats the reports listed.
+
 ## Next
-MISSION.md item 1e, the last two formats: USHORT x3 normalised massing base (massCells.ts cellMesh / the base), UBYTE x3 terrain ground/rim (terrain.ts).
+MISSION.md item 1f (page work on the frame path, each made proportional to what changed).
