@@ -220,8 +220,17 @@ export function decodeCookedPerson(buffer: ArrayBuffer): { person: DecodedPerson
   // The face's moves added once more on the radius: the sphere stays round what the morphs can reach.
   let reach = 0;
   for (const morph of morphs) for (let i = 0; i < morph.length; i++) reach = Math.max(reach, Math.abs(morph[i]!));
+  // THE POSITION DRAWN FOUR WIDE (w 0, never read: the shader's `position` is a vec3), the file's three: D3D11 has no three-component 16-bit
+  // format and ANGLE converts one on the CPU (ANGLE wiki, "Getting Good Performance From ANGLE": SHORT with 3 components, use 4). DO NOT
+  // draw the file's array as it is: every level of every body is SHORT x3 (the move reports' vertex formats, 2026-10-27). Widened here, off the page.
+  const drawn = new Int16Array(m.vertexCount * 4);
+  for (let v = 0; v < m.vertexCount; v++) {
+    drawn[v * 4] = position[v * 3]!; drawn[v * 4 + 1] = position[v * 3 + 1]!; drawn[v * 4 + 2] = position[v * 3 + 2]!;
+  }
+  transfer[transfer.indexOf(position.buffer as ArrayBuffer)] = drawn.buffer;
+  const drawnAttributes = [drawn, ...attributes.slice(1)];
   return {
-    person: { header, attributes, index, morphs, bounds: [minX, minY, minZ, maxX, maxY, maxZ, cx, cy, cz, radius + reach * norm] },
+    person: { header, attributes: drawnAttributes, index, morphs, bounds: [minX, minY, minZ, maxX, maxY, maxZ, cx, cy, cz, radius + reach * norm] },
     transfer,
   };
 }
@@ -235,7 +244,8 @@ export function assemblePerson(person: DecodedPerson): Group {
     if (n.kind === 'bone') o = new Bone();
     else if (n.kind === 'skinned' && at === m.node) {
       const g = new BufferGeometry();
-      VERTEX_LAYOUT.forEach((layout, k) => g.setAttribute(layout.name, new BufferAttribute(attributes[k]!, layout.itemSize, layout.normalized)));
+      // Each as wide as the decode drew it (the position four, `decodeCookedPerson`).
+      VERTEX_LAYOUT.forEach((layout, k) => g.setAttribute(layout.name, new BufferAttribute(attributes[k]!, attributes[k]!.length / m.vertexCount, layout.normalized)));
       // The nearest level is the geometry's own index; the coarser ones views on the same buffer (`userData.levels`).
       const first = m.levels[0]!;
       g.setIndex(new BufferAttribute(index.subarray(first.start, first.start + first.count), 1));
