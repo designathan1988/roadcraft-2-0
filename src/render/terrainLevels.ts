@@ -28,6 +28,8 @@ export class LandLevels {
   /** How far the cut cells' terrain (`terrainSeams.ts`) stands off the grid in each node of level 0 (metres): level 0 draws it, every coarser level
    *  draws the grid, so each is off by it besides its own parting (`measure`). */
   readonly seams: Float32Array;
+  /** Moves whenever the nodes' bounds and errors are written (`take`, `measure`): what a selection of the patches was made with (`LandLod.select`). */
+  version = 0;
   private readonly first: number[] = [];
   private readonly dirty: Uint8Array[] = [];
   private readonly seg: number;
@@ -71,6 +73,7 @@ export class LandLevels {
 
   /** The nodes as measured elsewhere (the plate's worker, `plateMesh.ts`), every mark cleared. */
   take(data: Float32Array): void {
+    this.version++;
     this.data.set(data);
     for (const d of this.dirty) d.fill(0);
     this.sumUp();
@@ -101,6 +104,7 @@ export class LandLevels {
 
   /** The marked nodes measured again from the drawn corners and diagonals, and each level's worst error with them. */
   measure(heights: ArrayLike<number>, flip: ArrayLike<number>): void {
+    this.version++;
     const n = this.n;
     for (let level = 0; level < LOD_LEVELS; level++) {
       const side = nodesAt(this.seg, level);

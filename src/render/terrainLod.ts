@@ -262,6 +262,13 @@ export class LandLod {
   /** The first patch and rim this selection wrote anew (Infinity: none). */
   private patchesFrom = Infinity;
   private rimsFrom = Infinity;
+  /** What the last selection was made with (`select`): the camera, its view and projection, its depth's sense, the screen and the levels. */
+  private selectedCamera: object | null = null;
+  private readonly selectedView = new Matrix4();
+  private readonly selectedProjection = new Matrix4();
+  private selectedReversed = false;
+  private selectedPixels = Number.NaN;
+  private selectedLevels = -1;
 
   constructor(
     private readonly levels: LandLevels,
@@ -289,8 +296,20 @@ export class LandLod {
 
   /** The patches the camera needs, nearest levels where its error would show; returns how many. */
   select(camera: PerspectiveCamera | OrthographicCamera, pixels: number): number {
-    this.ranges(camera, pixels);
     camera.getWorldPosition(eye);
+    // DO NOT visit the plate's patch tree again for a still view: the same camera, screen and levels select the same patches (every write would
+    // compare equal), and every shown plate is asked at every frame.
+    if (camera === this.selectedCamera && pixels === this.selectedPixels && this.levels.version === this.selectedLevels
+      && camera.reversedDepth === this.selectedReversed && this.selectedView.equals(camera.matrixWorldInverse) && this.selectedProjection.equals(camera.projectionMatrix)) {
+      return this.count;
+    }
+    this.selectedCamera = camera;
+    this.selectedPixels = pixels;
+    this.selectedLevels = this.levels.version;
+    this.selectedReversed = camera.reversedDepth;
+    this.selectedView.copy(camera.matrixWorldInverse);
+    this.selectedProjection.copy(camera.projectionMatrix);
+    this.ranges(camera, pixels);
     viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     frustum.setFromProjectionMatrix(viewProjection, WebGLCoordinateSystem, camera.reversedDepth);
     this.count = 0;
