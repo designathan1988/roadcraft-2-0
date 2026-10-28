@@ -26,10 +26,6 @@ interface Batch {
 
 const ADOPTED = 'farBlockBatched';
 
-/** Whether a far level is drawn by its batch (`FarBlockBatches.adopt`): nothing to upload or warm for it. */
-export function batchedFar(level: Object3D): boolean {
-  return level.userData[ADOPTED] === true;
-}
 
 /** The batch's storage left out of the memory counters (`memoryCounters.ts`): its bytes are counted on the far levels it holds, as
  *  `gpuOnly.ts` keeps them, which the road residency's budget reads (`roadResidency.ts`). */

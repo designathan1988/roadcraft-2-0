@@ -453,7 +453,7 @@ const cellY = (key: number): number => (key % 8192) - 4096;
 
 /** Numbers of a building's solid volume as it stands on no floor (`solidRowsOf`): the building's centre and turn, the volume's box in its frame,
  *  its top over the floor (with `CLEARANCE`), the bottom and top of its walls over the floor (NaN: it hides nothing for sure), their inset. */
-export const SOLID_ROW = 12;
+const SOLID_ROW = 12;
 const R_BX = 0, R_BY = 1, R_COS = 2, R_SIN = 3, R_X0 = 4, R_Y0 = 5, R_X1 = 6, R_Y1 = 7, R_TOP = 8, R_WALL0 = 9, R_WALL1 = 10, R_INSET = 11;
 
 /**

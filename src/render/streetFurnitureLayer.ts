@@ -225,7 +225,7 @@ const MEADOW_STORES = (kit: SceneryKit): RunStore[] => [
 ];
 
 /** The long grass's things standing about a rectangle: each clump placed within reach of it (`grassClump`), the layer keeping the tufts in the cell (`propCells.ts` within). */
-export function grassAbout(source: FurnitureSource, stores: readonly RunStore[], rect: ChangeRect): PropPlacement {
+function grassAbout(source: FurnitureSource, stores: readonly RunStore[], rect: ChangeRect): PropPlacement {
   const builder = new RunBuilder(stores);
   for (const item of source.net.doc.landscapeIn(grow(rect, CLUMP_READ_REACH))) {
     if (item.kind !== 'meadow') continue;

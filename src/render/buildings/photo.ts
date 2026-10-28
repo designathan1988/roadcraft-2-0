@@ -16,7 +16,7 @@ import { type BuildingKit, createBuildingKit } from './kit';
  */
 
 /** The photos' side, px. */
-export const PHOTO_SIZE = 224;
+const PHOTO_SIZE = 224;
 
 /** How a photo frames its subject: a roof from above, a wall part on two bays of its ground storey, any other thing whole. */
 export type PhotoView = 'roof' | 'wall' | 'model';

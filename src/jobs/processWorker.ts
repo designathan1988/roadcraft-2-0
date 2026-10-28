@@ -98,8 +98,8 @@ export function restoreKept(value: unknown, keep: Map<number, ArrayBuffer>): unk
 }
 
 /** A message's ports taken out of it for the shell's port (`ProcessWorker.send`): each top-level field holding a port, or a list of ports, emptied (null, or []) and named once a port in `portFields`, in the order the ports go in the transfer list; the job process puts each back where its name says (`desktop/jobs.cjs` withPorts). DO NOT leave a port in the message: the shell's deserializer reads none in it (Blink writes one as a host object, `shell/common/v8_util.cc` V8Deserializer knows only its NativeImage), and the message came out null (2026-10-22). */
-export interface PortFields { readonly portFields: readonly string[] }
-export function withPortFields<T>(message: T): { readonly message: T | (T & PortFields); readonly ports: MessagePort[] } {
+interface PortFields { readonly portFields: readonly string[] }
+function withPortFields<T>(message: T): { readonly message: T | (T & PortFields); readonly ports: MessagePort[] } {
   if (typeof MessagePort === 'undefined' || typeof message !== 'object' || message === null || Array.isArray(message)) return { message, ports: [] };
   const ports: MessagePort[] = [];
   const fields: string[] = [];

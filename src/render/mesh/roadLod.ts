@@ -50,7 +50,7 @@ export const LOD_KEY = 'lod';
 export const levelsOf = (mesh: Mesh): BlockLevels | undefined => mesh.userData[LOD_KEY] as BlockLevels | undefined;
 
 /** The arrays of a mesh's attributes and index let go (made again by `refillArrays`). */
-export function giveBackArrays(mesh: Mesh): void {
+function giveBackArrays(mesh: Mesh): void {
   const geometry = mesh.geometry as BufferGeometry;
   // Its size forgotten with it (`gpuOnly.ts` keptBytes): the geometry is disposed below, nothing of it stays on the GPU. DO NOT keep it: the memory counters and the ledger counted every far block's full level as held (`memoryCounters.ts`).
   const letGo = (attribute: BufferAttribute): void => {

@@ -62,7 +62,7 @@ export interface TileGrown {
 }
 
 /** A tile's phase: its column's and row's parity, a 2 x 2 checkerboard (two tiles of one phase are a tile apart at least). */
-export const phaseOf = (key: number): number => {
+const phaseOf = (key: number): number => {
   const { i, j } = tileOfKey(key);
   return (i & 1) + 2 * (j & 1);
 };

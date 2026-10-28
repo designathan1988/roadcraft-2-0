@@ -27,7 +27,7 @@ const HASH_MOST = 32 * 1048576;
 type Attr = BufferAttribute | InterleavedBufferAttribute;
 
 /** Something sent to the GPU again in the frames watched. */
-export interface Resend {
+interface Resend {
   readonly kind: 'buffer' | 'texture';
   readonly name: string;
   readonly holder: string;
@@ -40,10 +40,10 @@ export interface Resend {
   readonly hidden: boolean;
 }
 
-export interface LayerCount { readonly layer: string; readonly objects: number }
-export interface Held { readonly kind: 'geometry' | 'texture'; readonly name: string; readonly holder: string; readonly layer: string; readonly bytes: number; readonly why: 'hidden' | 'not drawn' }
-export interface Copies { readonly kind: 'geometry' | 'texture'; readonly names: readonly string[]; readonly copies: number; readonly bytes: number; readonly wasted: number }
-export interface Dense {
+interface LayerCount { readonly layer: string; readonly objects: number }
+interface Held { readonly kind: 'geometry' | 'texture'; readonly name: string; readonly holder: string; readonly layer: string; readonly bytes: number; readonly why: 'hidden' | 'not drawn' }
+interface Copies { readonly kind: 'geometry' | 'texture'; readonly names: readonly string[]; readonly copies: number; readonly bytes: number; readonly wasted: number }
+interface Dense {
   readonly name: string; readonly layer: string; readonly kind: string;
   readonly triangles: number; readonly instances: number;
   /** Its radius on the screen, px (an instanced model's median instance). */
@@ -55,7 +55,7 @@ export interface Dense {
 }
 
 /** A banded rung (`farLadders.ts`): every instance sent, those outside its band of sizes thrown away in the vertex shader. */
-export interface Thrown { readonly name: string; readonly layer: string; readonly instances: number; readonly thrown: number; readonly triangles: number }
+interface Thrown { readonly name: string; readonly layer: string; readonly instances: number; readonly thrown: number; readonly triangles: number }
 
 export interface Waste {
   readonly frames: number;

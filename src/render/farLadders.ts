@@ -113,7 +113,7 @@ export const unsorted = (): Float64Array => new Float64Array(SORTED_AT).fill(Num
 
 /** A rung's things for the view of elements `e` and `per` pixels a unit at w 1: their poses and tints in order, a whole buffer's worth, and
  *  their count. A thing's size is the band's own measure (`BAND_GLSL`: clip w at its foot, its largest scale). None before any sort. */
-export function rungArrays(sort: LadderSort, rung: SortedRung, e: ArrayLike<number>, per: number): { poses: Float32Array; tints: Float32Array | null; count: number } {
+function rungArrays(sort: LadderSort, rung: SortedRung, e: ArrayLike<number>, per: number): { poses: Float32Array; tints: Float32Array | null; count: number } {
   const { stride, scales, reach } = sort;
   const n = scales.length;
   const poses = new Float32Array(n * stride), tints = sort.tints ? new Float32Array(n * 3) : null;

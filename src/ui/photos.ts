@@ -9,7 +9,7 @@ const FILES = import.meta.glob<string>('./photos/*/*.png', { eager: true, query:
 export type PhotoShelf = 'builder' | 'finish' | 'plan' | 'roadClass' | 'road';
 
 /** An option's file name: its id with the characters a file name cannot hold written out (`lot:`, `city:`). */
-export const photoFile = (id: string): string => `${id.replace(/[^A-Za-z0-9_-]/g, (c) => `~${c.charCodeAt(0).toString(16)}`)}.png`;
+const photoFile = (id: string): string => `${id.replace(/[^A-Za-z0-9_-]/g, (c) => `~${c.charCodeAt(0).toString(16)}`)}.png`;
 
 /** The URL of an option's photo; none for an option with nothing to photograph (it keeps its glyph). */
 export function interfacePhoto(shelf: PhotoShelf, id: string): string | undefined {

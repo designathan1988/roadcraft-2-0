@@ -134,28 +134,6 @@ export async function readDerivedSome<T>(prefix: string, keys: readonly string[]
   });
 }
 
-/** Every entry whose key starts with `prefix`, by the rest of its key. */
-export async function readDerivedAll<T>(prefix: string): Promise<Map<string, T>> {
-  const out = new Map<string, T>();
-  const db = await database();
-  if (!db) return out;
-  return new Promise((resolve) => {
-    try {
-      const name = storeOf(prefix);
-      const store = db.transaction(name, 'readonly').objectStore(name);
-      const keys = store.getAllKeys(prefixRange(prefix));
-      const values = store.getAll(prefixRange(prefix));
-      values.onsuccess = () => {
-        const list = keys.result ?? [];
-        list.forEach((key, i) => out.set(String(key).slice(prefix.length), values.result[i] as T));
-        resolve(out);
-      };
-      values.onerror = () => resolve(out);
-    } catch {
-      resolve(out);
-    }
-  });
-}
 
 /** Keeps a value under `key`. */
 async function keepDerived(key: string, value: unknown): Promise<void> {

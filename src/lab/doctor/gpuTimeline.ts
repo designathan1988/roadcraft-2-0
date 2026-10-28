@@ -19,22 +19,22 @@ import type { LabContext } from '../labTypes';
 
 interface TimerExtension { readonly TIME_ELAPSED_EXT: number; readonly GPU_DISJOINT_EXT: number }
 
-export interface Spread { readonly p50: number; readonly p95: number; readonly max: number }
+interface Spread { readonly p50: number; readonly p95: number; readonly max: number }
 /** A frame of the game as it went: from the last frame to it, its own work on the page, its draws' GPU time and their page time. */
-export interface TimelineFrame { readonly intervalMs: number; readonly cpuMs: number; readonly gpuMs: number; readonly drawCpuMs: number; readonly draws: number; readonly waitedOn: 'gpu' | 'cpu' | 'neither' }
+interface TimelineFrame { readonly intervalMs: number; readonly cpuMs: number; readonly gpuMs: number; readonly drawCpuMs: number; readonly draws: number; readonly waitedOn: 'gpu' | 'cpu' | 'neither' }
 /** A draw that held the GPU far longer than its kind does: the queue was behind, or it is that heavy. */
-export interface Stall { readonly draw: string; readonly gpuMs: number; readonly cpuMs: number; readonly typicalMs: number }
-export interface DrawTotal { readonly draw: string; readonly gpuMsPerFrame: number; readonly maxMs: number; readonly calls: number }
-export interface RenderCaller { readonly caller: string; readonly inFrame: boolean; readonly target: string; readonly calls: number; readonly gpuMs: number; readonly cpuMs: number; readonly maxGpuMs: number }
-export interface UploadCaller { readonly caller: string; readonly call: string; readonly calls: number; readonly mb: number; readonly maxMb: number }
-export interface Format { readonly format: string; readonly converted: boolean; readonly binds: number; readonly draws: readonly string[] }
-export interface SyncCall { readonly call: string; readonly caller: string; readonly calls: number; readonly ms: number }
+interface Stall { readonly draw: string; readonly gpuMs: number; readonly cpuMs: number; readonly typicalMs: number }
+interface DrawTotal { readonly draw: string; readonly gpuMsPerFrame: number; readonly maxMs: number; readonly calls: number }
+interface RenderCaller { readonly caller: string; readonly inFrame: boolean; readonly target: string; readonly calls: number; readonly gpuMs: number; readonly cpuMs: number; readonly maxGpuMs: number }
+interface UploadCaller { readonly caller: string; readonly call: string; readonly calls: number; readonly mb: number; readonly maxMb: number }
+interface Format { readonly format: string; readonly converted: boolean; readonly binds: number; readonly draws: readonly string[] }
+interface SyncCall { readonly call: string; readonly caller: string; readonly calls: number; readonly ms: number }
 /** A shader program made while the game ran, by the draw that asked it (three makes it at a material's first draw): a compile the frame waited on. */
 /** The page's own work in the frames it made late: a long frame's scripts by function and line (W3C Long Animation Frames, `PerformanceScriptTiming`), the game's timed steps (`core/hitch.ts`, `hitch:` measures). https://w3c.github.io/long-animation-frames/ */
-export interface PageWork { readonly what: string; readonly where: string; readonly calls: number; readonly ms: number; readonly maxMs: number }
+interface PageWork { readonly what: string; readonly where: string; readonly calls: number; readonly ms: number; readonly maxMs: number }
 /** A function of the page's CPU profile during the watch (JS Self-Profiling API): its own time and its time with what it called. */
-export interface CpuFunction { readonly name: string; readonly where: string; readonly selfMs: number; readonly totalMs: number }
-export interface ProgramMade { readonly draw: string; readonly caller: string; readonly programs: number }
+interface CpuFunction { readonly name: string; readonly where: string; readonly selfMs: number; readonly totalMs: number }
+interface ProgramMade { readonly draw: string; readonly caller: string; readonly programs: number }
 
 export interface GpuTimeline {
   readonly seconds: number;

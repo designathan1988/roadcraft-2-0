@@ -6,7 +6,7 @@ import { samePlain } from '@core/plain';
 import { ForkMap } from '@core/forkMap';
 import { inheritStoredBounds, storedBounds } from './geometry';
 import { BuildingGrid } from './grid';
-import { BuildingItems } from './items';
+import { TableItems } from './items';
 import type { RecordRef, RecordTable } from './recordTable';
 import { SUMMARY_BUILT_AT, SUMMARY_WIDTH } from './summary';
 import type { TableRows } from './tableRows';
@@ -34,8 +34,8 @@ function rectOf(b: Building): ChangeRect {
 
 /** DO NOT copy a record on the way in again "to be safe": the deep copy of every record added or replaced */
 export class BuildingStore {
-  /** @mapWide Every building of the map: the table the map was opened from, read when asked, and the records written over it (`BuildingItems`). A working copy's lies over the original's (`forkFrom`). */
-  private items: Map<BuildingId, Building> = new BuildingItems();
+  /** @mapWide Every building of the map: the table the map was opened from, read when asked, and the records written over it (`TableItems`). A working copy's lies over the original's (`forkFrom`). */
+  private items: Map<BuildingId, Building> = new TableItems<BuildingId, Building>();
   /** The store a working copy lies over (`forkFrom`) while it has written nothing: its questions by place are that store's. */
   private below: BuildingStore | null = null;
   private ids = new IdAllocator(1);
@@ -61,7 +61,7 @@ export class BuildingStore {
 
   /** Told each building's record before it is written (an edit being recorded, `RoadDoc.beginEdit`); null: nobody listens. */
   watch(before: ((id: BuildingId, was: Building | undefined) => void) | null): void {
-    if (this.items instanceof BuildingItems) this.items.before = before;
+    if (this.items instanceof TableItems) this.items.before = before;
   }
 
   /** The serial of the latest change of the buildings in the diary (their shape, place or use; not their wear). */
@@ -106,13 +106,13 @@ export class BuildingStore {
 
   /** Where a worker reads a building's record without decoding it on the page (`recordTable.ts` `RecordRef`): its table's buffer and row while the record is the table's own; null for one written since (read it and take `refOf`). */
   tableRef(id: BuildingId): RecordRef | null {
-    if (this.items instanceof BuildingItems) return this.items.tableRef(id);
+    if (this.items instanceof TableItems) return this.items.tableRef(id);
     return null;
   }
 
   /** The record table the map was opened from (null: none, every record written here): its columns are read without decoding a record. */
   get table(): TableRows | null {
-    if (this.items instanceof BuildingItems) return this.items.table;
+    if (this.items instanceof TableItems) return this.items.table;
     return this.below?.table ?? null;
   }
 
@@ -140,7 +140,7 @@ export class BuildingStore {
 
   /** Where a building stands: the table's columns for one of the table (nothing decoded), its record's x and y else; undefined when it is not here. */
   placeOf(id: BuildingId): { readonly x: number; readonly y: number } | undefined {
-    if (this.items instanceof BuildingItems) return this.items.placeOf(id);
+    if (this.items instanceof TableItems) return this.items.placeOf(id);
     const b = this.items.get(id);
     return b ? { x: b.x, y: b.y } : undefined;
   }
@@ -153,7 +153,7 @@ export class BuildingStore {
   eachSummarised(row: (id: BuildingId, table: RecordTable, at: number, wear: number) => void, record: (b: Building) => void): void {
     if (this.below) { this.below.eachSummarised(row, record); return; }
     const items = this.items;
-    if (!(items instanceof BuildingItems)) { for (const b of items.values()) record(b); return; }
+    if (!(items instanceof TableItems)) { for (const b of items.values()) record(b); return; }
     items.eachRow((rows, r, wear) => {
       // Its columns in its own table (a square's, `TableRows.tableOf`), at its row there.
       const table = rows.tableOf(r), at = rows.localRow(r);
@@ -165,7 +165,7 @@ export class BuildingStore {
   /** Each building's place: a row of the table from its place columns (`TableItems.eachPlace`), nothing decoded. */
   eachPlace(visit: (x: number, y: number) => void): void {
     if (this.below) { this.below.eachPlace(visit); return; }
-    if (this.items instanceof BuildingItems) { this.items.eachPlace(visit); return; }
+    if (this.items instanceof TableItems) { this.items.eachPlace(visit); return; }
     for (const b of this.items.values()) visit(b.x, b.y);
   }
 
@@ -187,7 +187,7 @@ export class BuildingStore {
   eachBox(visit: (minX: number, minY: number, maxX: number, maxY: number) => void): void {
     if (this.below) { this.below.eachBox(visit); return; }
     const items = this.items;
-    if (items instanceof BuildingItems) { items.eachBox((b) => storedBounds(b), visit); return; }
+    if (items instanceof TableItems) { items.eachBox((b) => storedBounds(b), visit); return; }
     for (const b of items.values()) { const box = storedBounds(b); visit(box.minX, box.minY, box.maxX, box.maxY); }
   }
 
@@ -195,7 +195,7 @@ export class BuildingStore {
   eachStanding(row: (id: BuildingId, table: TableRows, at: number) => void, record: (b: Building) => void): void {
     if (this.below) { this.below.eachStanding(row, record); return; }
     const items = this.items;
-    if (!(items instanceof BuildingItems)) { for (const b of items.values()) record(b); return; }
+    if (!(items instanceof TableItems)) { for (const b of items.values()) record(b); return; }
     items.eachRow((rows, at) => row(rows.idAt(at), rows, at), record);
   }
 
@@ -203,7 +203,7 @@ export class BuildingStore {
   standing(id: BuildingId): { readonly table: TableRows; readonly row: number } | null {
     if (this.below) return this.below.standing(id);
     const items = this.items;
-    if (!(items instanceof BuildingItems) || !items.table) return null;
+    if (!(items instanceof TableItems) || !items.table) return null;
     const row = items.standing(id);
     return row ? { table: items.table, row: row.row } : null;
   }
@@ -213,7 +213,7 @@ export class BuildingStore {
   recordRow(b: Building): { readonly table: TableRows; readonly row: number } | null {
     if (this.below) return this.below.recordRow(b);
     const items = this.items;
-    if (!(items instanceof BuildingItems) || !items.table) return null;
+    if (!(items instanceof TableItems) || !items.table) return null;
     const row = items.standing(b.id);
     return row && items.holdsRow(row.row, b) ? { table: items.table, row: row.row } : null;
   }
@@ -222,7 +222,7 @@ export class BuildingStore {
   standingRow(id: BuildingId): { readonly table: TableRows; readonly row: number } | null {
     if (this.below) return this.below.standingRow(id);
     const items = this.items;
-    if (!(items instanceof BuildingItems) || !items.table) return null;
+    if (!(items instanceof TableItems) || !items.table) return null;
     const row = items.standing(id);
     return row ? { table: items.table, row: row.row } : null;
   }
@@ -244,8 +244,8 @@ export class BuildingStore {
   private gridOf(): BuildingGrid<Building> {
     const grid = new BuildingGrid<Building>([], (b) => storedBounds(b));
     const items = this.items;
-    const table = items instanceof BuildingItems ? items.table : null;
-    if (!(items instanceof BuildingItems) || !table) {
+    const table = items instanceof TableItems ? items.table : null;
+    if (!(items instanceof TableItems) || !table) {
       for (const b of items.values()) grid.insert(b);
       return grid;
     }
@@ -298,10 +298,10 @@ export class BuildingStore {
     if (!this.items.has(id) || this.decayOf(id) === decay) return;
     this.leaveBelow();
     const items = this.items;
-    const row = items instanceof BuildingItems ? items.standing(id) : null;
+    const row = items instanceof TableItems ? items.standing(id) : null;
     // The row's box from the table's columns (the wear moves nothing), nothing decoded.
-    const box = row && items instanceof BuildingItems ? items.table?.boxAt(row.row) ?? null : null;
-    if (box && items instanceof BuildingItems && items.writeField(WEAR, id, decay)) {
+    const box = row && items instanceof TableItems ? items.table?.boxAt(row.row) ?? null : null;
+    if (box && items instanceof TableItems && items.writeField(WEAR, id, decay)) {
       this.journal.record('buildingWear', [[box.minX, box.minY, box.maxX, box.maxY]], { ids: [id as number] });
       return;
     }
@@ -320,7 +320,7 @@ export class BuildingStore {
   summaryOf(id: BuildingId): { readonly table: RecordTable; readonly at: number; readonly wear: number } | null {
     if (this.below) return this.below.summaryOf(id);
     const items = this.items;
-    if (!(items instanceof BuildingItems) || !items.table) return null;
+    if (!(items instanceof TableItems) || !items.table) return null;
     const row = items.standing(id);
     if (!row) return null;
     // Its own table (a square's, `TableRows.tableOf`), at its row there.
@@ -333,8 +333,8 @@ export class BuildingStore {
   decayOf(id: BuildingId): number {
     if (this.below) return this.below.decayOf(id);
     const items = this.items;
-    const row = items instanceof BuildingItems ? items.standing(id) : null;
-    if (row && items instanceof BuildingItems && items.table) {
+    const row = items instanceof TableItems ? items.standing(id) : null;
+    if (row && items instanceof TableItems && items.table) {
       if (!Number.isNaN(row.field)) return row.field;
       const decay = items.table.field(row.row, WEAR);
       return typeof decay === 'number' ? decay : 0;
@@ -466,18 +466,18 @@ export class BuildingStore {
   }
 
   /** New items told of their writes as the ones they replace were (an edit being recorded, `watch`). */
-  private withWatch(items: BuildingItems): BuildingItems {
-    if (this.items instanceof BuildingItems) items.before = this.items.before;
+  private withWatch(items: TableItems<BuildingId, Building>): TableItems<BuildingId, Building> {
+    if (this.items instanceof TableItems) items.before = this.items.before;
     return items;
   }
 
   /** A map opened, or a whole map put back by undo (`RoadDoc.replaceWhole`): the other store's buildings taken as they are, one change of the whole map - DO NOT compare them record by record. */
   takeWhole(source: BuildingStore): void {
     this.below = null;
-    if (source.items instanceof BuildingItems) {
+    if (source.items instanceof TableItems) {
       this.items = this.withWatch(source.items.copy());
     } else {
-      const items = this.withWatch(new BuildingItems());
+      const items = this.withWatch(new TableItems<BuildingId, Building>());
       for (const [id, b] of source.items) items.set(id, b);
       this.items = items;
     }
@@ -507,7 +507,7 @@ export class BuildingStore {
     this.leaveBelow();
     this.grid = null;
     // The same table and records written: a copy of what was written, never of the table (`BuildingItems.copy`).
-    if (source.items instanceof BuildingItems) {
+    if (source.items instanceof TableItems) {
       this.items.clear();
       this.items = this.withWatch(source.items.copy());
     } else {
@@ -561,7 +561,7 @@ export class BuildingStore {
     /** Records that differ in their wear alone (`wear`): written as `buildingWear`, never as a change of shape. */
     const worn: Building[] = [];
     const mine = this.items, theirs = source.items;
-    const shared = mine instanceof BuildingItems && theirs instanceof BuildingItems && mine.table !== null && mine.table === theirs.table;
+    const shared = mine instanceof TableItems && theirs instanceof TableItems && mine.table !== null && mine.table === theirs.table;
     const take = (id: BuildingId): void => {
       // One table under both, the record written by neither: the very same, known without decoding it.
       if (shared && mine.sameUnwritten(theirs, id)) return;

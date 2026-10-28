@@ -57,7 +57,7 @@ function blank(): Building | null {
 }
 
 /** The record a part is photographed from */
-export function partSample(id: string): Building | null {
+function partSample(id: string): Building | null {
   // A lot of the lot lab, once read (`photographAll` reads every lot first).
   if (id.startsWith('lot:')) {
     const lot = loadedLot(id.slice(4));

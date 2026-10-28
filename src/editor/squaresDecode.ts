@@ -42,7 +42,7 @@ export interface SavedLayout {
 }
 
 /** A square stored before its kind's columns, written again in this format: its layer, its key and its frame (`squareFrame`). */
-export interface UpgradedSquare {
+interface UpgradedSquare {
   readonly layer: KeyedName;
   readonly square: string;
   readonly frame: ArrayBuffer;

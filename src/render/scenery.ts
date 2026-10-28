@@ -45,9 +45,8 @@ import {
   type BushKind,
   type TreeSpecies,
 } from './propGeometry';
-import { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, POOL_ALONG } from './lampMeasures';
+import { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS } from './lampMeasures';
 
-export { LAMP_HEIGHT, LAMP_OUTREACH } from './propGeometry';
 
 /** Everything standing on the ground that is not a road: street furniture, street trees, vegetation and grass. */
 
@@ -58,7 +57,7 @@ const BUSH_WIND: WindResponse = { sway: 0.05, flutter: 0.014 };
 const GRASS_WIND: WindResponse = { sway: 0.22, flutter: 0.04 };
 
 // The lamp's pool and cone (`lampMeasures.ts`): what the furniture is placed by, on the page and off it.
-export { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS, POOL_ALONG };
+export { LAMP_BEAM_RADIUS, LAMP_POOL_RADIUS };
 /** Radius of the cut apex, over the radius at the ground: the lens (about 0.28 m of 3.7). */
 const BEAM_SOURCE = 0.075;
 /** Sides and segments of the cone (VLB: 18 sides; 3 segments at least, for a smooth falloff). */
@@ -363,4 +362,3 @@ export const SHADOW_REACH = m(28);
 export const PLANT_MAP_ZOOM = perM(2.5);
 
 // A near-white multiplier, so no two plants of one species are identical (`plantKinds.ts`).
-export { foliageTint } from './plantKinds';

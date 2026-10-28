@@ -24,7 +24,7 @@ type FurnitureModel = (typeof FURNITURE_MODELS)[number];
 const MODEL = Object.fromEntries(FURNITURE_MODELS.map((model, i) => [model, i])) as Record<FurnitureModel, number>;
 
 /** One instance of a placed item: its store, where, how turned and sized, its tint. */
-export interface Placed {
+interface Placed {
   readonly store: number;
   readonly x: number;
   readonly y: number;

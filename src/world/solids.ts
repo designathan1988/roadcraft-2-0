@@ -14,7 +14,7 @@ import { m } from './units';
  * spine's `allKeys`: every barrier, pole and bench of a 10 km city for one body falling, MISSION.md item 5). The posts of a building's lot
  * (its trees and lamps) are the ragdoll's, with the walls of the buildings near it (`playEffects.ts` wallsNear).
  */
-export type Solid =
+type Solid =
   | { readonly kind: 'capsule'; readonly a: Vec2; readonly b: Vec2; readonly r: number; readonly box: Box }
   | { readonly kind: 'disc'; readonly c: Vec2; readonly r: number; readonly box: Box };
 type Box = readonly [number, number, number, number];
@@ -39,7 +39,7 @@ export interface Solids {
 }
 
 /** A source item's key: its store and its id. */
-export type SourceKey = `r${number}` | `p${number}` | `l${number}`;
+type SourceKey = `r${number}` | `p${number}` | `l${number}`;
 
 const disc = (c: Vec2, r: number): Solid => ({ kind: 'disc', c, r, box: [c.x - r, c.y - r, c.x + r, c.y + r] });
 const boxOf = (pts: readonly Vec2[], grow = 0): Box => {

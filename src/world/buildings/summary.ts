@@ -19,7 +19,7 @@ export const MARK_FLIES = 1;
 export const MARK_SIGNATURE = 2;
 
 /** The summary columns, in their order: the height, the module, the two digests, the marks, the box of the ground the building reads (`storedBounds(b, b.module * 2)`: grown in the building's own frame, then turned), and its `builtAt` (NaN: none). */
-export const SUMMARY_HEIGHT = 0, SUMMARY_MODULE = 1, SUMMARY_SIG = 2, SUMMARY_MASS_SIG = 3, SUMMARY_MARKS = 4;
+export const SUMMARY_HEIGHT = 0, SUMMARY_SIG = 2, SUMMARY_MASS_SIG = 3, SUMMARY_MARKS = 4;
 export const SUMMARY_GROUND_MIN_X = 5, SUMMARY_GROUND_MIN_Y = 6, SUMMARY_GROUND_MAX_X = 7, SUMMARY_GROUND_MAX_Y = 8, SUMMARY_BUILT_AT = 9;
 /** How many summary columns a building's table holds. */
 export const SUMMARY_WIDTH = 10;
@@ -70,7 +70,7 @@ export function wornDigest(massSig: number, decay: number | null): number {
 }
 
 /** A building's summary columns (`SUMMARY_*`). */
-export function buildingSummary(b: Building, members: WeakMap<object, number>): number[] {
+function buildingSummary(b: Building, members: WeakMap<object, number>): number[] {
   const { sig, massSig } = recordDigests(b, members);
   const ground = storedBounds(b, b.module * 2);
   return [buildingHeight(b), b.module, sig, massSig, (fliesFlag(b) ? MARK_FLIES : 0) | (isSignature(b) ? MARK_SIGNATURE : 0),

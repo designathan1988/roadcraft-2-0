@@ -14,7 +14,7 @@ export const LOT_ZONED = 0, LOT_BUILDING = 1;
 export const LOT_SUMMARY_WIDTH = 2;
 
 /** A lot's summary columns (`LOT_*`). */
-export const lotSummary = (lot: Lot): number[] => [lot.use ? 1 : 0, lot.building ?? Number.NaN];
+const lotSummary = (lot: Lot): number[] => [lot.use ? 1 : 0, lot.building ?? Number.NaN];
 
 /** The lots' summary as a table writer takes it (`TableWriter` summary). */
 export function lotSummaryColumns(): RowSummary<Lot> {

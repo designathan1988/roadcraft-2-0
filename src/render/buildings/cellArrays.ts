@@ -258,7 +258,7 @@ export function indexArray(vertices: number, indices: number): Uint16Array | Uin
 export interface MassSquare { readonly i0: number; readonly j0: number; readonly n: number }
 
 /** A square's grid for its masses (as `cellShellGrid` for a cell's shells): the square and its margins in an unsigned short, every axis alike, its height from its lowest point; a cell's step 5.65 mm, a tile's 17.1 mm, a plate's 32.3 mm (a point within half of it, a hundredth of the level's error). */
-export function massGrid(square: MassSquare, lowest: number): ShellGrid {
+function massGrid(square: MassSquare, lowest: number): ShellGrid {
   const span = square.n * CELL + 2 * SHELL_GRID_MARGIN;
   return { x: square.i0 * CELL - SHELL_GRID_MARGIN, y: lowest, z: -(square.j0 + square.n) * CELL - SHELL_GRID_MARGIN, step: span / 65535 };
 }
@@ -639,7 +639,7 @@ const SHELL_BOX = new Float64Array(7);
 
 /** A shell's box and sphere as three's `BufferGeometry.computeBoundingBox` and `computeBoundingSphere` work them out */
 /** DO NOT work the box's centre and radius out after its loops in one function: entered on the stack (OSR), its code never saw them run and left there for each shell (`instanceBounds`). */
-export function shellBounds(position: Float32Array): Bounds {
+function shellBounds(position: Float32Array): Bounds {
   boxOfPoints(position, SHELL_BOX);
   const minX = SHELL_BOX[0]!, minY = SHELL_BOX[1]!, minZ = SHELL_BOX[2]!, maxX = SHELL_BOX[3]!, maxY = SHELL_BOX[4]!, maxZ = SHELL_BOX[5]!;
   const cx = (minX + maxX) * 0.5, cy = (minY + maxY) * 0.5, cz = (minZ + maxZ) * 0.5;
