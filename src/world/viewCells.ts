@@ -107,6 +107,14 @@ export class ViewCells<V> {
   readonly work: ViewCellsWork = { derived: 0, evicted: 0, invalidated: 0 };
   /** Moves whenever a held product is dropped for a change of the document (`invalidate`): what the products answer may differ since. */
   version = 0;
+  /** Moves with every change what `trim` lets go reads: a cell held or dropped, a product's bytes, the cells the view wants. */
+  private serial = 0;
+  /** The serial and the budgets a `trim(null)` last ended over a budget at, every cell it may let go let go. DO NOT walk every held cell again
+   *  for the same nothing: while the cells the view wants held more than a budget (a weak tier's GPU share), each frame's look and pump copied
+   *  and walked them all to let none go. */
+  private stuckAt = -1;
+  private stuckCpu = Number.NaN;
+  private stuckGpu = Number.NaN;
 
   constructor(readonly spec: ViewCellsSpec<V>) {
     this.side = spec.side ?? CELL;
@@ -201,22 +209,31 @@ export class ViewCells<V> {
     consider(eye, 0);
     // The cells ahead of the motion, asked after the ones at the eye at the same distance.
     if (ahead.x !== eye.x || ahead.y !== eye.y) consider(ahead, this.side / 2);
-    this.wanted = [...score.keys()].sort((a, b) => score.get(a)! - score.get(b)! || a - b);
+    const next = [...score.keys()].sort((a, b) => score.get(a)! - score.get(b)! || a - b);
+    if (this.sameWanted(next)) return;
+    this.wanted = next;
     this.wantedSet.clear();
     for (const key of this.wanted) this.wantedSet.add(key);
+    this.serial++;
+  }
+
+  /** Whether `keys` are the cells wanted now, in their order. */
+  private sameWanted(keys: readonly CellKey[]): boolean {
+    const wanted = this.wanted;
+    return keys.length === wanted.length && keys.every((key, i) => key === wanted[i]);
   }
 
   /** The cells the view wants given as they are (a layer that chooses its own: a square round the eye, the blocks a frustum sees), in the order they are asked. */
   want(keys: readonly CellKey[]): void {
     // Copied into its own list, kept from look to look (asked every frame of a move): never a new array each time.
     const wanted = this.wanted;
-    // Its own list handed back (`wantedKeys`): nothing to copy, and emptying it first would empty what it reads.
-    if (keys !== wanted) {
-      wanted.length = 0;
-      for (const key of keys) wanted.push(key);
-    }
+    // Its own list handed back (`wantedKeys`), or the same keys as before (a view that stands or barely moves): nothing changed.
+    if (keys === wanted || this.sameWanted(keys)) return;
+    wanted.length = 0;
+    for (const key of keys) wanted.push(key);
     this.wantedSet.clear();
     for (const key of this.wanted) this.wantedSet.add(key);
+    this.serial++;
   }
 
   /** A held product's bytes set again: what it holds on the CPU and the GPU now (its arrays let go once on the GPU, `mesh/gpuOnly.ts`). */
@@ -227,6 +244,7 @@ export class ViewCells<V> {
     this.gpuBytes += gpuBytes - (known.product.gpuBytes ?? 0);
     known.product = { value: known.product.value, cpuBytes, gpuBytes };
     known.stage = gpuBytes > 0 ? CellStage.resident : CellStage.derived;
+    this.serial++;
   }
 
   /** These cells dropped, made again when next wanted or asked (what they answer changed without an entry of the diary: the city's hour). The cells dropped. */
@@ -246,6 +264,7 @@ export class ViewCells<V> {
     this.held.set(key, { product, version: this.spec.version, stage: gpu > 0 ? CellStage.resident : CellStage.derived });
     this.cpuBytes += product.cpuBytes + ENTRY_BYTES;
     this.gpuBytes += gpu;
+    this.serial++;
     this.trim(new Set([key]));
   }
 
@@ -307,6 +326,8 @@ export class ViewCells<V> {
   /** Keeps the products to the budgets: the least recently used out first, never a cell the view wants nor one of `keep`. `cpuBudget`: a lower one to rest at (after a build swept the map). */
   trim(keep: ReadonlySet<CellKey> | null, cpuBudget = this.spec.cpuBudget): void {
     const gpuBudget = (this.spec.gpuBudget ?? Infinity) * ViewCells.gpuShare;
+    // Nothing changed since a trim that could let nothing more go: it would let nothing go.
+    if (keep === null && this.stuckAt === this.serial && this.stuckCpu === cpuBudget && this.stuckGpu === gpuBudget) return;
     if (this.gpuBytes > gpuBudget) {
       for (const [key, held] of this.held) {
         if (this.gpuBytes <= gpuBudget) break;
@@ -316,16 +337,24 @@ export class ViewCells<V> {
           this.gpuBytes -= held.product.gpuBytes ?? 0;
           held.product = { value: held.product.value, cpuBytes: held.product.cpuBytes };
           held.stage = CellStage.derived;
+          this.serial++;
         } else this.drop(key);
         this.work.evicted++;
       }
     }
-    if (this.cpuBytes <= cpuBudget) return;
-    for (const key of [...this.held.keys()]) {
-      if (this.cpuBytes <= cpuBudget) break;
-      if (keep?.has(key) || this.wantedSet.has(key)) continue;
-      this.drop(key);
-      this.work.evicted++;
+    if (this.cpuBytes > cpuBudget) {
+      for (const key of [...this.held.keys()]) {
+        if (this.cpuBytes <= cpuBudget) break;
+        if (keep?.has(key) || this.wantedSet.has(key)) continue;
+        this.drop(key);
+        this.work.evicted++;
+      }
+    }
+    // Still over a budget: every cell it may let go is gone, until something changes.
+    if (keep === null && (this.gpuBytes > gpuBudget || this.cpuBytes > cpuBudget)) {
+      this.stuckAt = this.serial;
+      this.stuckCpu = cpuBudget;
+      this.stuckGpu = gpuBudget;
     }
   }
 
@@ -338,6 +367,7 @@ export class ViewCells<V> {
     this.held.set(key, { product, version: this.spec.version, stage: gpu > 0 ? CellStage.resident : CellStage.derived });
     this.cpuBytes += product.cpuBytes + ENTRY_BYTES;
     this.gpuBytes += gpu;
+    this.serial++;
     return product.value;
   }
 
@@ -345,6 +375,7 @@ export class ViewCells<V> {
     const known = this.held.get(key);
     if (!known) return;
     this.held.delete(key);
+    this.serial++;
     this.cpuBytes -= known.product.cpuBytes + ENTRY_BYTES;
     this.gpuBytes -= known.product.gpuBytes ?? 0;
     this.spec.release?.(key, known.product.value);
