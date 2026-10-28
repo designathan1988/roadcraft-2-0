@@ -31,7 +31,6 @@ const FIELDS: Readonly<Record<Field, FieldSpec>> = {
   anisotropy: { system: 'textures', kind: 'choice', values: [1, 2, 4, 8, 16], title: 'Anisotropy (exact)', what: "Every texture in the scene with exactly this anisotropy, set straight on the uploaded texture (the tier's field is read only when the renderer is created).", affects: ['textures', 'all'] },
   detailProps: { system: 'vegetation', kind: 'bool', title: 'Street furniture', what: 'Benches, props and footway details drawn.', affects: ['layer:furniture'] },
   vegetation: { system: 'vegetation', kind: 'number', title: 'Vegetation (amount)', what: 'The amount of vegetation: distant forests and wild trees.', affects: ['layer:vegetation', 'name:far-forest*'] },
-  grassBlades: { system: 'vegetation', kind: 'number', unread: true, title: 'Grass blades', what: 'Blades in the GPU grass field.', affects: ['layer:vegetation'] },
   surfaceDetail: { system: 'textures', kind: 'bool', title: 'Surface detail layer', what: 'The close-up detail texture on asphalt and footways (materials.setDetail).', affects: ['layer:roads', 'textures'] },
   detailCutoffZoom: { system: 'people', kind: 'number', title: 'Detail minimum zoom', what: 'The zoom below which markings, furniture and agents stop being drawn.', affects: ['layer:people', 'layer:furniture', 'layer:roads', 'layer:signals'] },
   pedestrianDetail: { system: 'people', kind: 'choice', values: [0, 1, 2], title: 'People detail', what: '0 silhouette, 1 clothes, 2 animated face.', affects: ['layer:people', 'name:procedural-people', 'name:person'] },
@@ -39,13 +38,9 @@ const FIELDS: Readonly<Record<Field, FieldSpec>> = {
   vehicleErrorPixels: { system: 'vehicles', kind: 'number', title: 'Vehicle part screen error', what: 'Pixels of error the level of each part accepts.', affects: ['layer:people'] },
   vehicleWholeCap: { system: 'vehicles', kind: 'number', title: 'Whole vehicles', what: 'How many vehicles are drawn whole, at most.', affects: ['layer:people'] },
   airPass: { system: 'post', kind: 'bool', title: 'Air pass', what: 'Builds the air pass: the backdrop round the map and the haze by distance.', affects: ['post', 'pass:atmosphere'] },
-  vegetationDistance: { system: 'vegetation', kind: 'number', unread: true, title: 'Vegetation range', what: "Distance of the ecosystem's vegetation.", affects: ['layer:vegetation'] },
-  impostors: { system: 'vegetation', kind: 'bool', unread: true, title: 'Plant impostors', what: 'Distant plants as impostors.', affects: ['layer:vegetation'] },
-  birds: { system: 'particles', kind: 'number', unread: true, title: 'Birds', what: 'Birds in the air at once.', affects: ['layer:particles'] },
-  rain: { system: 'particles', kind: 'bool', unread: true, title: 'Raindrops', what: 'The drops in the air.', affects: ['layer:weather', 'name:rain'] },
+  rain: { system: 'particles', kind: 'bool', title: 'Raindrops', what: 'The drops in the air (`rain.ts`); the wet ground on every tier.', affects: ['layer:weather', 'name:rain'] },
   triangleScale: { system: 'buildings', kind: 'number', title: 'Triangle budget share', what: "The share of the view's triangle budget the building levels may add up to (above it the error scale rises).", affects: ['layer:buildings'] },
   detailMemoryMB: { system: 'buildings', kind: 'number', title: 'Building detail memory (MB)', what: "The most the building cells' detail keeps on the GPU.", affects: ['layer:buildings'] },
-  waterfalls: { system: 'water', kind: 'bool', unread: true, title: 'Waterfall spray', what: 'Spray and mist at the foot of the waterfalls.', affects: ['layer:water'] },
 };
 
 export type QualityOptId = `q.${Field}`;

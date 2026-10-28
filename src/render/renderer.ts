@@ -3944,7 +3944,8 @@ export function createSceneRenderer(
         const storm = Math.min(1, weather.lightning / 8);
         environment.setWeather(Math.max(weather.rain * 0.85, storm * 0.6), flash);
         rainWind.set(wind.x, -wind.y);
-        rain.update(weather.rain, target, span, rainWind, step);
+        // The drops in the air on the tiers that draw them (`QualitySettings.rain`); the wet ground on every one (`environment.setWeather`).
+        rain.update(quality.rain ? weather.rain : 0, target, span, rainWind, step);
         sceneryKit.setHaze(Math.max(weather.rain, storm));
         weatherActive = weather.rain > 0 || weather.lightning > 0 || flash > 0 || (weather.wind > 0 && effectsShown);
       }
