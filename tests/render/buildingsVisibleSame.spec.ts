@@ -23,7 +23,7 @@ interface Measured {
   partKinds: string[];
   kit: Record<string, { box: Box; triangles: string }>;
   furniture: Record<string, string>;
-  views: Record<string, { parts: Record<string, number>; finishes: Record<string, Box>; shell: string; flat?: string }>;
+  views: Record<string, { parts: Record<string, number>; finishes: Record<string, Box>; shell: string }>;
 }
 
 /** 0.1 mm steps; -0 as 0 (a box's side at the origin is either). */
@@ -80,18 +80,16 @@ function measure(): Measured {
     const parts: Record<string, number> = {};
     for (const kind of PART_KINDS) if (chunk.parts[kind]?.count) parts[kind] = chunk.parts[kind].count;
     const finishes: Record<string, Box> = {};
-    const shell: number[] = [], flat: number[] = [];
+    const shell: number[] = [];
     for (const [finish, s] of Object.entries(chunk.shells)) {
       finishes[finish] = boxOf(s!.position);
       for (let t = 0; t < s!.index.length; t += 3) {
         const c: number[] = [];
         for (let k = 0; k < 3; k++) { const v = s!.index[t + k]! * 3; c.push(s!.position[v]!, s!.position[v + 1]!, s!.position[v + 2]!); }
         shell.push(triangleHash(c));
-        // Level (its corners at one height, 0.1 mm): a floor, a roof's flat, a wall's top.
-        if (r4(c[1]!) === r4(c[4]!) && r4(c[4]!) === r4(c[7]!)) flat.push(triangleHash(c));
       }
     }
-    return { parts, finishes, shell: pack(shell), flat: pack(flat) };
+    return { parts, finishes, shell: pack(shell) };
   };
   for (const key of PRESETS) {
     const i = BLUEPRINTS.findIndex((bp) => bp.key === key);
@@ -106,14 +104,10 @@ function measure(): Measured {
 
 /** The members of `now` not in `head`, as multisets: what was added or moved. */
 function notIn(now: number[], head: number[]): number {
-  return extrasOf(now, head).length;
-}
-/** Those members themselves. */
-function extrasOf(now: number[], head: number[]): number[] {
   const left = new Map<number, number>();
   for (const h of head) left.set(h, (left.get(h) ?? 0) + 1);
-  const extra: number[] = [];
-  for (const h of now) { const n = left.get(h) ?? 0; if (n > 0) left.set(h, n - 1); else extra.push(h); }
+  let extra = 0;
+  for (const h of now) { const n = left.get(h) ?? 0; if (n > 0) left.set(h, n - 1); else extra++; }
   return extra;
 }
 
@@ -172,11 +166,7 @@ describe('the buildings draw what HEAD drew, its hidden faces left out', () => {
   it('lays every shell triangle where HEAD laid it, each finish over the same box', () => {
     for (const key of Object.keys(HEAD_.views)) {
       expect(now.views[key]!.finishes, key).toEqual(HEAD_.views[key]!.finishes);
-      const extra = extrasOf(unpack(now.views[key]!.shell), unpack(HEAD_.views[key]!.shell));
-      // Cut open: the tops of the cut floor's back walls, added after HEAD (50cbe59f, the player, 2026-10-27: the walls stood as sheets of
-      // paper round the floor cut open), level and nothing else; anywhere else nothing added.
-      if (/\/cut\d$/.test(key)) expect(notIn(extra, unpack(now.views[key]!.flat!)), `${key}: shell triangles not in HEAD's and not a wall's level top`).toBe(0);
-      else expect(extra.length, `${key}: shell triangles not in HEAD's`).toBe(0);
+      expect(notIn(unpack(now.views[key]!.shell), unpack(HEAD_.views[key]!.shell)), `${key}: shell triangles not in HEAD's`).toBe(0);
     }
   });
 

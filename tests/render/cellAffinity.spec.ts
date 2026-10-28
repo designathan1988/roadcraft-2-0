@@ -37,9 +37,6 @@ describe("a cell's jobs on the worker of its last", () => {
   });
 
   it("runs a square's masses at every level on one worker, each building walked once (`JobSpec.affinity`)", async () => {
-    // Three workers: the derived cache's writer kept clear of queued jobs (`jobPool.ts` KEPT_CLEAR, its lane opened by the pool's kept
-    // store), two for the cells. With two, the writer's worker took no job and every square's went to the other: no affinity to keep.
-    vi.stubGlobal('navigator', { hardwareConcurrency: 5 });
     const { CellPool, affinityOf } = await import('@render/buildings/cellPool');
     const { tileOf } = await import('@render/buildings/levelKeys');
     // Two cells in two squares of the base (`levelKeys.ts` baseOf): cell 0,0 in square 0,0, cell 8,0 in square 1,0.
@@ -56,11 +53,9 @@ describe("a cell's jobs on the worker of its last", () => {
     // The cells' masses: one worker each.
     run('mass', '0,0', a);
     run('mass', '8,0', b);
-    expect(CellWorker.made).toHaveLength(3);
+    expect(CellWorker.made).toHaveLength(2);
     await drain();
-    // The writer's worker ran no cell's job; the cells' two, one square each.
-    expect(CellWorker.made.filter((w) => (w as CellWorker).ran.length === 0)).toHaveLength(1);
-    const [w0, w1] = CellWorker.made.filter((w) => (w as CellWorker).ran.length > 0) as [CellWorker, CellWorker];
+    const [w0, w1] = CellWorker.made as [CellWorker, CellWorker];
     expect(w0.ran).toEqual(['mass 0,0']);
     expect(w1.ran).toEqual(['mass 8,0']);
     const walks = (w: CellWorker): number => w.work!.keptPrograms().walks;

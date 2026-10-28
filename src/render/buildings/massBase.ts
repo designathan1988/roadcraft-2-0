@@ -7,8 +7,7 @@ import { type CellMass, type MassSquare, concatMass, massOnGrid } from './cellAr
  * the facade level's own format and materials (`buildingMesh.ts` massShells at `PLATE_DETAIL`): its own blocks and roofs, its paints and
  * finishes, its walls as the facade level's runs of bays. DO NOT give it a form of its own: its prisms, painted and with a window grid of their
  * own, stood as other buildings than the plate's and the detail's wherever nothing finer had landed (the owner, 2026-10-27: one form at a view).
- * Made first for the plates within a plate of the view and kept while they are (`massCells.ts` BASE_RING): drawn under every cell nothing finer
- * draws, so no view shows a hole in the town.
+ * Made first at the opening and never let go (`massCells.ts`): drawn under every cell nothing finer draws, so no view shows a hole in the town.
  * Its triangles run cell by cell (`BaseMass.cells`): the cells a finer level draws are left out of its draw (three's geometry groups), never
  * drawn twice.
  */

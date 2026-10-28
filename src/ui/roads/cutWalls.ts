@@ -3,7 +3,7 @@ const STORAGE_KEY = 'roadcraft.cutWalls';
 let chosen = read();
 
 function read(): boolean {
-  try { return globalThis.localStorage?.getItem(STORAGE_KEY) === '1'; } catch (error) { console.warn('[cut walls] blocked: the default', error); return false; }
+  try { return globalThis.localStorage?.getItem(STORAGE_KEY) === '1'; } catch { return false; }
 }
 
 export function cutWallsChosen(): boolean {
@@ -13,5 +13,5 @@ export function cutWallsChosen(): boolean {
 export function setCutWalls(on: boolean): void {
   if (on === chosen) return;
   chosen = on;
-  try { globalThis.localStorage?.setItem(STORAGE_KEY, on ? '1' : '0'); } catch (error) { console.warn('[cut walls] kept for this session', error); }
+  try { globalThis.localStorage?.setItem(STORAGE_KEY, on ? '1' : '0'); } catch { /* kept for this session */ }
 }

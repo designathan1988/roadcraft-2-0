@@ -104,21 +104,6 @@ export class PartCell {
   private faded = false;
   /** The view the levels were last chosen for: the same view chooses the same levels. */
   private readonly chosenFor = { x: NaN, y: NaN, z: NaN, pxAtMetre: NaN, orthoPx: null as number | null, shadowTexel: NaN };
-  /**
-   * How far the eye may go from where the levels were last chosen before any of them could change (`choose`): a sub-cell's level and a
-   * shell run's program turn only where a metre's pixels there cross one of the choice's bars, i.e. where the eye's distance to the
-   * sub-cell's box crosses that bar's distance; that distance moves at most as far as the eye does (a distance to a box is 1-Lipschitz), so
-   * nothing the choice reads turns while the eye stays nearer than the nearest bar. DO NOT walk every band's 64 sub-cells again at every
-   * frame of a drag for levels that cannot have changed (`docs/agent/optimization-solution.md`, step 1).
-   */
-  private slack = 0;
-  /** A level chosen at its model while its picture is not taken yet (`levelAt`): chosen again at every view until it is. */
-  private waiting = false;
-  /** The choice in progress notes its bars (`note`): the eye's distance to the sub-cell being chosen and a metre's pixels a metre off. */
-  private noting = false;
-  private noteD = 0;
-  private notePx = 0;
-  private slackNow = Infinity;
   /** The choices made so far: what a run's mesh kept out of the drawing is measured against (`EVICT_AFTER`). */
   private tick = 0;
   /** Scratch for one band's runs this frame: each run's first and last sub-cell, its level and its instances. */
@@ -159,16 +144,9 @@ export class PartCell {
   /** Each sub-cell of each band at the coarsest level whose error is under a pixel, none where an instance is; shadows cast where a piece spans a texel. */
   choose(view: PartView): void {
     const was = this.chosenFor;
-    // Nothing chosen can turn (`slack`): the eye nearer than the nearest bar, the screen's scale and the shadows' texel as they were.
-    if (was.pxAtMetre === view.pxAtMetre && was.orthoPx === view.orthoPx && was.shadowTexel === view.shadowTexel && !this.waiting
-      && Math.hypot(view.x - was.x, view.y - was.y, view.z - was.z) < this.slack) return;
+    if (was.x === view.x && was.y === view.y && was.z === view.z && was.pxAtMetre === view.pxAtMetre && was.orthoPx === view.orthoPx && was.shadowTexel === view.shadowTexel) return;
     Object.assign(was, view);
     this.tick++;
-    // From above (a metre's pixels the same everywhere) no eye's move turns anything: only the scale, the texel or a picture does.
-    this.noting = view.orthoPx === null;
-    this.notePx = view.pxAtMetre;
-    this.slackNow = Infinity;
-    this.waiting = false;
     for (const band of this.bands) {
       const runs = this.runsOf(band, view);
       if (Number.isNaN(band.widest)) {
@@ -223,18 +201,7 @@ export class PartCell {
     // A band drawn casts by a caster of its own (`castInto`), made here, outside the shadow passes. DO NOT make it with the cell: every cell's
     // casters went through the door with it, the district's frames p95 13 -> 93 ms (`npm run diagnose`, 2026-10-22); nor in a cascade's pass.
     for (const band of this.bands) if (!band.caster && band.drawn.size > 0 && this.kit.castsShadow.has(band.kind)) this.makeCaster(band);
-    // Short of the nearest bar by a hair, for the rounding of the distances.
-    this.slack = this.noting ? this.slackNow * (1 - 1e-9) - 1e-9 : Infinity;
-    this.noting = false;
     if (this.tick % 60 === 0) this.evictStale();
-  }
-
-  /** A bar of the choice in progress, `a * perMetre >= b` (or `<`): the eye's distance to the sub-cell where it turns, and how far it is from it. */
-  private note(a: number, b: number): void {
-    if (!this.noting) return;
-    // A metre spans `notePx / d` pixels at d: a notePx / d >= b where d <= a notePx / b.
-    const gap = Math.abs(this.noteD - (a * this.notePx) / b);
-    if (gap < this.slackNow) this.slackNow = gap;
   }
 
   /** The run meshes out of the drawing longer than `EVICT_AFTER` given back: their posed copies freed and the mesh taken out of the cell (a run wanted again is made anew). */
@@ -263,19 +230,11 @@ export class PartCell {
   private runsOf(band: Band, view: PartView): number {
     const { runFirst, runLast, runLevel, runCount } = this;
     const triangles = (k: number): number => band.screen.levels[k]!.triangles;
-    // A shell's part's run takes the far program by the most pixels a metre spans over its sub-cells (`choose`, `runPixels`): each
-    // sub-cell's crossing of those bars is one of the choice's.
-    const shell = SHELL_PARTS.has(band.kind) && !this.faded;
     let runs = 0;
     for (let m = 0; m < LEAVES; m++) {
       const count = band.start[m + 1]! - band.start[m]!;
       if (count === 0) continue;
-      this.noteD = this.distance(band, m, view);
-      if (shell) { this.note(1, LIGHT_PIXELS); this.note(1, LIGHT_BACK); }
-      const perMetre = this.perMetre(band, m, view);
-      const level = this.levelAt(band, m, perMetre, band.held[m]!);
-      // A level that moved holds by its own bars from now on (the hysteresis, `levelAt` `held`): those noted too.
-      if (this.noting && level !== band.held[m]) this.levelAt(band, m, perMetre, level);
+      const level = this.levelAt(band, m, this.perMetre(band, m, view), band.held[m]!);
       band.held[m] = level;
       const last = runs - 1;
       // A run's sub-cells are side by side in the buffer: those between with no instance of the band add none.
@@ -401,17 +360,12 @@ export class PartCell {
     return mesh;
   }
 
-  /** The levels chosen again at the next `choose`, whatever the eye: something they read changed besides the view (`setFaded`). */
-  forget(): void {
-    this.chosenFor.x = Number.NaN;
-  }
-
   /** Every kind drawn faded ("Ocultar outros") or not. */
   setFaded(faded: boolean): void {
     if (faded === this.faded) return;
     this.faded = faded;
     // Its levels chosen again at the next view: a picture is not drawn faded (`levelAt`).
-    this.forget();
+    this.chosenFor.x = Number.NaN;
     for (const band of this.bands) {
       const look = partLook(this.kit, band.kind, faded);
       for (const [key, mesh] of band.meshes) {
@@ -495,24 +449,15 @@ export class PartCell {
       const metres = next < count
         ? (shell ? shellPartError(band.scale, m * 3) : largest(levels[next]!.error, band.scale, m * 3))
         : bars ? barsAcross(band, m) : diagonal(extent, band.scale, m * 3);
-      const bar = (next < count ? PART_ERROR_PX : bars ? BAR_PIXELS : 1) * (next <= was ? 1 : COARSEN);
-      this.note(metres, bar);
-      if (metres * perMetre >= bar) break;
+      if (metres * perMetre >= (next < count ? PART_ERROR_PX : bars ? BAR_PIXELS : 1) * (next <= was ? 1 : COARSEN)) break;
     }
     // Under a pixel across its diagonal: not drawn, a shell's part too; nor a level of no triangles (a top-less part from afar, `kit.ts`).
     const level = k === count || levels[k]!.triangles === 0 ? NONE : k;
     // Its picture wherever it is drawn and its error (its diagonal's share `PART_ERROR_PX / PICTURE_PX`) spans under `PART_ERROR_PX`: under
     // `PICTURE_PX`, whatever its coarser models leave out there (a bike's coarsest leaves out 14 cm, its picture's bound 6). Entered under the
     // bound narrowed by `COARSEN`, held up to it; once its set's pictures are taken, and never faded (the faded material draws a model).
-    if (level === NONE || !pictured || !picture || this.faded) return level;
-    if (!picture.ready()) {
-      // Its picture comes later: the choice made again until it has (`waiting`).
-      this.waiting = true;
-      return level;
-    }
-    const metres = largest(levels[count]!.error, band.scale, m * 3), bar = PART_ERROR_PX * (count <= held ? 1 : COARSEN);
-    this.note(metres, bar);
-    return metres * perMetre < bar ? count : level;
+    if (level === NONE || !pictured || !picture || this.faded || !picture.ready()) return level;
+    return largest(levels[count]!.error, band.scale, m * 3) * perMetre < PART_ERROR_PX * (count <= held ? 1 : COARSEN) ? count : level;
   }
 
   /** The most pixels a metre spans over a run's sub-cells (its nearest). */
@@ -531,17 +476,12 @@ export class PartCell {
   /** The pixels a metre spans at a sub-cell's nearest point to the eye. */
   private perMetre(band: Band, m: number, view: PartView): number {
     if (view.orthoPx !== null) return view.orthoPx;
-    return view.pxAtMetre / this.distance(band, m, view);
-  }
-
-  /** The eye's distance to a sub-cell's box, a metre at least. */
-  private distance(band: Band, m: number, view: PartView): number {
     const b = band.box, o = m * 6;
     // Three's world: x, up, z; the map's y is -z.
     const dx = Math.max(b[o]! - view.x, 0, view.x - b[o + 3]!);
     const dy = Math.max(-b[o + 5]! - view.y, 0, view.y + b[o + 2]!);
     const dh = Math.max(b[o + 1]! - view.z, 0, view.z - b[o + 4]!);
-    return Math.max(Math.hypot(dx, dy, dh), 1);
+    return view.pxAtMetre / Math.max(Math.hypot(dx, dy, dh), 1);
   }
 
   /** A run's posed copy of a level of its kind's model, bound at the run's first instance (`partPose.ts`), made once a level. */

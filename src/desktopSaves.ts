@@ -146,8 +146,7 @@ function read<T>(db: IDBDatabase, run: (store: IDBObjectStore) => IDBRequest<T>)
       const request = run(db.transaction(SAVES_STORE, 'readonly').objectStore(SAVES_STORE));
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => resolve(null);
-    } catch (error) {
-      console.warn('[saves] not read: none', error);
+    } catch {
       resolve(null);
     }
   });

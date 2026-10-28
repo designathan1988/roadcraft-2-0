@@ -31,7 +31,7 @@ export interface TourStop {
 }
 
 /** One moment of a scene loading: what was still to land, what was drawn, and the photo taken then. */
-interface LoadSample {
+export interface LoadSample {
   readonly ms: number;
   readonly notLanded: number;
   readonly triangles: number;
@@ -40,7 +40,7 @@ interface LoadSample {
 }
 
 /** How a stop's scene came in: the photo before it was asked, a photo a second while it loaded, the one once it settled. */
-interface LoadTimeline {
+export interface LoadTimeline {
   readonly before: string | null;
   readonly samples: readonly LoadSample[];
   readonly after: string | null;

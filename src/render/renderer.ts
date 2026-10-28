@@ -17,6 +17,7 @@ import {
   Box3,
   DoubleSide,
   Float32BufferAttribute,
+  Color,
   ACESFilmicToneMapping,
   PointLight,
   Group,
@@ -62,11 +63,11 @@ import { createEnvironment, sunShadowChunks } from './environment';
 import type { Movers, SunCascades } from './sunCascades';
 import { createMaterials, type SceneMaterials } from './materials';
 import { PERSPECTIVE_FOV, createIsoRig } from './isoViewport';
-import { liveTargetCount, liveTargets, renderTargetsBytes } from './targetBytes';
+import { liveTargets, renderTargetsBytes } from './targetBytes';
 import { deviceGpuCap, gpuLedger, readGpuDevice } from './gpuLedger';
 import { screenSizer } from './screenSize';
 import { WEAK_MACHINE } from '@core/weakMachine';
-import { createPostChain, type PostChain } from './postprocess';
+import { DEFAULT_ATMOSPHERE, createPostChain, type Atmosphere, type PostChain } from './postprocess';
 import { solidsJobAsk } from './buildings/solidJobs';
 import { CANYON_WINDOW } from './canyonLight';
 import { OCCLUDERS_REACH } from './occlusion';
@@ -101,12 +102,12 @@ import { createGardenCells, type GardenCells } from './gardens';
 import { lookProps, propView } from './propCells';
 import { solidFootprints, storedBounds } from '@world/buildings/geometry';
 import { RoadDoc } from '@world/doc';
-import { compileAhead, drainCompiles, drainUploads, drainWarm, gateUntilBuilt, shadowStandIn, shadowStandIns, warmPending } from './uploads';
+import { compileAhead, drainCompiles, drainUploads, drainWarm, gateUntilBuilt, shadowStandIn, warmPending } from './uploads';
 import { partWarmMeshes } from './buildings/partWarm';
 import { advanceWind, setWindWeather, sways } from './wind';
 import { holdStill, updateMoving } from './stillTree';
 import { castCastersInto, castShadowKey } from './shadowCasters';
-import { type KeptFrustum, cullTogether, screenHalf, setShadowSun } from './cellInstances';
+import { type KeptFrustum, screenHalf, setShadowSun } from './cellInstances';
 import { createRain } from './rain';
 import { createLightning } from './lightning';
 import { windVector } from '@world/weather';
@@ -172,6 +173,7 @@ import { FOREST_SPECIES, createGroundCoverKit } from './groundCover';
 import type { PlantedTree } from '@world/trees';
 import { ClearingCells } from './clearingCells';
 import { buildNatureForest, loadNatureTrees, seedOfKind, type NatureTreeKit } from './natureTrees';
+import { createFogField, createFogTexture, type FogLayer } from './fogLayer';
 import { createElementLayer, loadElementKit, type ElementKit, type ElementLayer } from './elements';
 import { isCoverKind } from '@world/terrainPaint';
 import { CellKeeps, keepCellAt, keepCellRect, keepCellsOver } from './cellKeeps';
@@ -317,11 +319,13 @@ export interface SceneHandle {
   strikeAt(x: number, y: number): void;
   /** Called at every strike with where it fell and how far from the view's centre, world units (for the thunder). */
   onStrike(listener: (x: number, y: number, distance: number) => void): void;
+  /** How far the wind has carried the clouds, on the map (`world/clouds.ts` driftedCloud). */
+  cloudDrift(): { readonly x: number; readonly y: number };
   /** A lasting fire at world (x, y), height z (a building burning). */
   burn(x: number, y: number, z: number, size: number, seconds: number): void;
   /** Whether anything is still moving on its own (an explosion, bodies, debris): keep drawing. */
   busy(): boolean;
-  /** The elements' effects giving off smoke and the like, or the weather moving: worth a frame now and then even with nothing else moving. */
+  /** Clouds drifting over the map: worth a frame now and then even with nothing else moving. */
   drifting(): boolean;
   /** The bytes of the render targets and shadow maps alive (an estimate, `targetBytes.ts`): not in the scene, so not in `countMemory`. */
   targetBytes(): number;
@@ -335,6 +339,8 @@ export interface SceneHandle {
   setBuildingCutaway(spec: CutawaySpec | null): void;
   /** The sky: always day, always night, or the residents' own clock. */
   setSkyMode(mode: SkyMode): void;
+  /** Clouds and mist as the player set them (Landscape > Sky and weather). */
+  setAtmosphere(atmosphere: Atmosphere): void;
   /** Perspective camera on, or the orthographic (isometric) view. */
   setPerspective(on: boolean): void;
   /** A shot: a tracer from the muzzle to where it struck, and the muzzle's flash (world x, y, height). */
@@ -1604,8 +1610,6 @@ export function createSceneRenderer(
   let natureSweepState: NatureSweep | null = null;
   /** The sweep being worked towards (its key), whether plates still wait for it, and a count of the sweeps the trees were kept from. */
   let natureSweepWant = '';
-  /** The sweep's key and the numbers it was made of: made again only when one moves. */
-  const natureSweepParts = { ecology: Number.NaN, land: Number.NaN, vegetation: Number.NaN, key: '' };
   let natureSweepPending = false;
   /** The sweep the ecosystem's trees were last filed from (`fileNature`). */
   let natureFiledFrom: NatureSweep | null = null;
@@ -1643,6 +1647,7 @@ export function createSceneRenderer(
   /** The weather drawn (`world/weather.ts`) */
   const rain = createRain();
   const lightning = createLightning();
+  const cloudDrift = { x: 0, y: 0 };
   const canvasSize = new Vector2();
   const rainWind = new Vector2();
   let weatherActive = false;
@@ -1658,10 +1663,18 @@ export function createSceneRenderer(
   };
   /** The gully revision the relief was baked for. */
   let gulliesFor = -1;
-  /** The land's revision last taken by the elements: a land stroke under way holds them until its end. */
-  let elementsLandSeen = -1;
-  /** The elements give off smoke and the like (`elements.ts` hasEffects): the frame is drawn now and then. */
-  let effectsShown = false;
+  /** The painted fog's map (`fogLayer.ts`), and the fog and land it was built for. */
+  const fogTexture = createFogTexture();
+  let fogLayer: FogLayer | null = null;
+  const fogField = createFogField(fogTexture);
+  /** What the fog map follows in the diary, and how far it was read. */
+  const FOG_KINDS: readonly ChangeKind[] = ['fog', 'terrain', 'ground'];
+  let fogJournal: ChangeJournal | null = null;
+  let fogSeen = -1;
+  let fogTerrainSeen = -1;
+  let fogMoving = false;
+  /** Clouds placed on the map: they boil, so the frame is drawn now and then. */
+  let placedCloudsShown = false;
   let natureTreesStarted = false;
   /** @rebuild Once, when the first world is in (`draw`). */
   const startNatureTrees = (): void => {
@@ -1693,6 +1706,10 @@ export function createSceneRenderer(
   /** The buildings cut open, for the people drawn inside them (`indoors.ts`). */
   let cutSpec: CutawaySpec | null = null;
   let skyMode: SkyMode = 'day';
+  /** Clouds and mist as the player set them (`setAtmosphere`). */
+  let atmosphere: Atmosphere = DEFAULT_ATMOSPHERE;
+  /** The sun's colour times its strength, that the clouds are lit by. */
+  const sunLight = new Color();
   /** Towards the sun, for the relief's own shadows (`TerrainSurface.setSun`). */
   const sunTowards = new Vector3();
   const flatDirection = new Vector3();
@@ -1703,8 +1720,6 @@ export function createSceneRenderer(
     const light = new PointLight(0xffd6a0, 0, m(8), 2);
     light.name = 'room-light';
     light.castShadow = false;
-    // Moved only when a floor is cut open (`lampsKey`): its matrix composed there, not every frame.
-    light.matrixAutoUpdate = false;
     scene.add(light);
     roomLights.push(light);
   }
@@ -1812,8 +1827,6 @@ export function createSceneRenderer(
       if (!at) return undefined;
       return floors.floorKept(at.table, at.row) ?? (blocksAreVolumes ? buildings.knownFloor(id) : undefined);
     },
-    // A floor kept of a row, or the cells' jobs' floors learned: the waiting buildings asked again (`cameraSolids.ts` settleFootless).
-    footsVersion: () => floors.keptVersion + buildings.floorsLearned,
     arrived: () => onAssetsReady(),
   } : null);
   /** The roads watched for vanishing from the picture */
@@ -2605,57 +2618,12 @@ export function createSceneRenderer(
     onAssetsReady();
   }
 
-  /** Stand-ins of what comes into the scene after the opening (a layer's meshes made as cells land, a broken building's pieces, the tools'
-   *  previews): the programs they are drawn with, built from them. `depth`: shadow depth materials of their own, compiled as shadows. */
-  interface WarmSet { readonly group: Group; readonly depth: readonly Object3D[]; dispose(): void }
-  /** `set` compiled on its own (lit, and its casters into the shadow), let go once built: a set the opening's catalogue did not take in. */
-  const compileWarmSet = (set: WarmSet): void => {
-    const shadows = shadowStandIns(set.group);
-    void compileAhead(shadows, true).then(() => shadows.clear());
-    for (const depth of set.depth) void compileAhead(depth, true);
-    void compileAhead(set.group).then(() => set.dispose());
-  };
-  /** THE OPENING'S STAND-INS: every warm set in the scene, hidden, while the opening's catalogue is compiled (`programs.compile` walks the
-   *  scene, hidden things too, and casts every caster in it), let go once it is built. DO NOT ask them only after the first frame drawn: a
-   *  part, a sign or a road first drawn in a camera move before its stand-in was built had its program built in that frame (3-34 programs a
-   *  move, the page stopped up to 1 s, `lab-reports/move-*.md`, 2026-10-27). */
-  const openingWarm = (): void => {
-    const sets = [
-      roadShadersWarm === 'no' ? roadWarmSet() : null,
-      blastShadersWarm ? null : blastWarmSet(),
-      previewShadersWarm ? null : previewWarmSet(),
-    ].filter((set): set is WarmSet => set !== null);
-    roadShadersWarm = 'started';
-    blastShadersWarm = true;
-    previewShadersWarm = true;
-    const holder = new Group();
-    holder.name = 'opening-warm';
-    holder.visible = false;
-    for (const set of sets) {
-      holder.add(set.group);
-      for (const depth of set.depth) void compileAhead(depth, true);
-    }
-    scene.add(holder);
-    const ready = programs.ready;
-    void ready.finally(() => {
-      scene.remove(holder);
-      holder.clear();
-      for (const set of sets) set.dispose();
-    });
-  };
-
   /** The road shaders compiled before the first road is drawn. */
   let roadShadersWarm: 'no' | 'started' = 'no';
   /** @rebuild Once; every later frame returns at its first check. */
   const warmRoadShaders = (): void => {
     if (roadShadersWarm !== 'no') return;
     roadShadersWarm = 'started';
-    const set = roadWarmSet();
-    if (set) compileWarmSet(set);
-  };
-  /** The roads' meshes of each class, a junction, a crossing and a pole span, and the street furniture's, the long grass's and the signs'
-   *  meshes as their layers draw them; null where it could not be built (said). */
-  const roadWarmSet = (): WarmSet | null => {
     try {
       const doc = new RoadDoc();
       const centre = doc.addNode({ x: 0, y: 0 });
@@ -2677,12 +2645,19 @@ export function createSceneRenderer(
         buildUtilities(warmNet, poleGroundAt(warmElevation, flat), sceneryKit),
       ];
       for (const part of parts) group.add(part.group);
-      // And the street furniture's, the long grass's and the signs' meshes as their layers draw them (their shadows cast from them).
-      for (const mesh of [...furniture.warm(), ...signs.warm()]) group.add(mesh);
-      return { group, depth: [], dispose: () => { group.clear(); for (const part of parts) part.dispose(); } };
+      // And the street furniture's, the long grass's and the signs' meshes as their layers draw them, with their shadows
+      const placedShadows = new Group();
+      for (const mesh of [...furniture.warm(), ...signs.warm()]) {
+        group.add(mesh);
+        const standIn = shadowStandIn(mesh);
+        if (standIn) placedShadows.add(standIn);
+      }
+      void compileAhead(placedShadows, true).then(() => placedShadows.clear());
+      void compileAhead(group).then(() => {
+        for (const part of parts) part.dispose();
+      });
     } catch (error) {
       console.warn('road shader warm-up skipped', error);
-      return null;
     }
   };
 
@@ -2692,12 +2667,6 @@ export function createSceneRenderer(
   const warmBlastShaders = (): void => {
     if (blastShadersWarm) return;
     blastShadersWarm = true;
-    const set = blastWarmSet();
-    if (set) compileWarmSet(set);
-  };
-  /** A broken building's pieces (every material of the kit on a triangle) and every part and piece of furniture as the buildings' layer
-   *  draws them, instanced, each caster with its posed shadow (`partWarmMeshes`). */
-  const blastWarmSet = (): WarmSet | null => {
     const kit = buildings.kit;
     const tiny = new BufferGeometry();
     tiny.setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
@@ -2712,11 +2681,22 @@ export function createSceneRenderer(
       mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
       group.add(mesh);
     }
-    for (const mesh of partWarmMeshes(kit)) group.add(mesh);
-    // In the scene for its lights while it compiles, never drawn.
+    // In the scene for its lights, but never drawn
     group.visible = false;
     scene.add(group);
-    return { group, depth: [], dispose: () => { scene.remove(group); group.clear(); tiny.dispose(); } };
+    void compileAhead(group).then(() => { scene.remove(group); tiny.dispose(); });
+    // And every part as the layer draws it, instanced, with its shadow (`partWarmMeshes`)
+    const parts = new Group();
+    const partShadows = new Group();
+    for (const mesh of partWarmMeshes(kit)) {
+      parts.add(mesh);
+      const standIn = shadowStandIn(mesh);
+      if (standIn) partShadows.add(standIn);
+    }
+    parts.visible = false;
+    scene.add(parts);
+    void compileAhead(parts).then(() => { scene.remove(parts); parts.clear(); });
+    void compileAhead(partShadows, true).then(() => partShadows.clear());
   };
 
   /** The tools' previews compiled ahead, as the roads' and the blows' are */
@@ -2725,11 +2705,6 @@ export function createSceneRenderer(
   const warmPreviewShaders = (): void => {
     if (previewShadersWarm) return;
     previewShadersWarm = true;
-    const set = previewWarmSet();
-    if (set) compileWarmSet(set);
-  };
-  /** A blueprint building as a ghost, as grown and faded, the gardens' plants and their shadows, the train and metro tracks. */
-  const previewWarmSet = (): WarmSet | null => {
     try {
       const group = new Group();
       const done: (() => void)[] = [];
@@ -2752,6 +2727,7 @@ export function createSceneRenderer(
       // The gardens' plants and their shadows, the first lots painted grow them.
       const plants = plantSamples(sceneryKit);
       group.add(plants.group);
+      void compileAhead(plants.depth, true);
       done.push(() => plants.dispose());
       for (const mode of ['train', 'metro'] as const) {
         const track = buildTrackPreview([{ x: 0, y: 0 }, { x: m(60), y: 0 }], mode, () => 0);
@@ -2759,10 +2735,9 @@ export function createSceneRenderer(
         done.push(() => track.dispose());
       }
       // The lots need no program of their own: the ground's materials draw them (`lotOverlay.ts`).
-      return { group, depth: [plants.depth], dispose: () => { group.clear(); for (const finish of done) finish(); } };
+      void compileAhead(group).then(() => { for (const finish of done) finish(); });
     } catch (error) {
       console.warn('preview shader warm-up skipped', error);
-      return null;
     }
   };
 
@@ -2816,16 +2791,15 @@ export function createSceneRenderer(
   };
 
   let post: PostChain = createPostChain(renderer, scene, rig.camera, quality, tier, depthFirst);
-  /** The ledger charged for the chain's targets that hold memory on the GPU now: those bound at least once (three makes a target's framebuffer at its first `setRenderTarget`, r186 `WebGLTextures.setupRenderTarget`; a disposed one loses it). DO NOT charge the ledger for targets never drawn into (the clouds' with no cloud placed, the bloom's mips by day): ~40 MB at 1440p taken from the buildings' detail for nothing (RND-19). */
+  /** The chain's targets that hold memory on the GPU now: those bound at least once (three makes a target's framebuffer at its first `setRenderTarget`, r186 `WebGLTextures.setupRenderTarget`; a disposed one loses it). DO NOT charge the ledger for targets never drawn into (the clouds' with no cloud placed, the bloom's mips by day): ~40 MB at 1440p taken from the buildings' detail for nothing (RND-19). */
+  const livePostTargets = (): ReturnType<PostChain['targets']>[number][] => liveTargets(post.targets(), renderer.properties);
   /** How many were live when the ledger was last told: told again when that changes (a target drawn into for the first time, the bloom at nightfall). */
   let targetsTold = -1;
   const tellTargets = (): void => {
-    // Counted with no list made (each frame); the live list made only when the count moved.
-    const targets = post.targets();
-    const count = liveTargetCount(targets, renderer.properties);
-    if (count === targetsTold) return;
-    targetsTold = count;
-    gpuLedger.set('render targets', 'render targets', renderTargetsBytes(liveTargets(targets, renderer.properties)));
+    const live = livePostTargets();
+    if (live.length === targetsTold) return;
+    targetsTold = live.length;
+    gpuLedger.set('render targets', 'render targets', renderTargetsBytes(live));
   };
   renderer.setPixelRatio(Math.min(WEAK_MACHINE.pixelRatio ?? (window.devicePixelRatio || 1), quality.pixelRatio));
 
@@ -3244,8 +3218,7 @@ export function createSceneRenderer(
     gpu: gpuTimer,
     get stats(): RenderStats {
       return {
-        // Counted only when read (a walk of the buildings' cells): DO NOT count it for a reader of the timings (a road drag, each frame).
-        get builtTriangles() { return builtTriangles + buildings.triangles; },
+        builtTriangles: builtTriangles + buildings.triangles,
         drawnTriangles: frameDrawn.triangles,
         drawCalls: frameDrawn.calls,
         quality: tier,
@@ -3384,11 +3357,12 @@ export function createSceneRenderer(
     setSmog: (k) => environment.setSmog(k),
     strikeAt: (x, y) => strikeAt(x, y),
     onStrike(listener) { strikeListeners.push(listener); },
+    cloudDrift: () => cloudDrift,
     // A plate of the ground still on its way to the view (`flatAtlas.ts` waiting): drawn on until it is in, a still camera too.
     busy: () => (fx?.busy() ?? false) || natureTreesPending || keepsWaiting || cameraEasing || (terrain.waiting?.() ?? false),
     targetBytes: () => renderTargetsBytes([...post.targets(), ...environment.shadowMaps()]),
     buildingDetailBytes: () => buildings.residentBytes,
-    drifting: () => (effectsShown && post.enabled && quality.airPass) || weatherActive,
+    drifting: () => ((fogMoving || placedCloudsShown) && post.enabled && (quality.cloudShadows || quality.skyClouds)) || weatherActive,
     forgetRuin(id) { fx?.forgetRuin(id); },
     setTransitXray(on) {
       transitXray = on;
@@ -3440,6 +3414,9 @@ export function createSceneRenderer(
     setSkyMode(mode) {
       // Read by the next frame drawn.
       skyMode = mode;
+    },
+    setAtmosphere(next) {
+      atmosphere = next;
     },
     setBuildingCutaway(spec) {
       buildings.setCutaway(spec);
@@ -3616,13 +3593,7 @@ export function createSceneRenderer(
         }
         // The ecosystem's own trees.
         bringPlateLand(net.doc);
-        const ecologyNow = ecologySeen.follow(terrain.parts);
-        // The key's string made only when one of its parts moved, not at every frame.
-        if (ecologyNow !== natureSweepParts.ecology || landSerial !== natureSweepParts.land || quality.vegetation !== natureSweepParts.vegetation) {
-          natureSweepParts.ecology = ecologyNow; natureSweepParts.land = landSerial; natureSweepParts.vegetation = quality.vegetation;
-          natureSweepParts.key = `${ecologyNow}:${landSerial}:${quality.vegetation}`;
-        }
-        const natureSweepKey = natureSweepParts.key;
+        const natureSweepKey = `${ecologySeen.follow(terrain.parts)}:${landSerial}:${quality.vegetation}`;
         if (natureSweepWant !== natureSweepKey || natureSweepPending) {
           const at = performance.now();
           natureSweepWant = natureSweepKey;
@@ -3843,16 +3814,13 @@ export function createSceneRenderer(
         lookProps(props, view);
         utilities?.look(view, performance.now() + POLE_FRAME_MS);
       }
-      // Every layer kept cell by cell culled by ONE walk of the view (`cellInstances.ts` cullTogether), each laying its levels after it.
-      cullTogether(() => {
-        furniture.cull(crowdFrustum, crowdProjection);
-        signs.cull(crowdFrustum, crowdProjection);
-        barriers.cull(crowdFrustum, crowdProjection);
-        transit.cull(crowdFrustum, crowdProjection);
-        for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.cull(crowdFrustum, crowdProjection);
-        elementLayer?.cull(crowdFrustum, crowdProjection);
-        gardens?.cull(crowdFrustum, crowdProjection);
-      });
+      furniture.cull(crowdFrustum, crowdProjection);
+      signs.cull(crowdFrustum, crowdProjection);
+      barriers.cull(crowdFrustum, crowdProjection);
+      transit.cull(crowdFrustum, crowdProjection);
+      for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.cull(crowdFrustum, crowdProjection);
+      elementLayer?.cull(crowdFrustum, crowdProjection);
+      gardens?.cull(crowdFrustum, crowdProjection);
       transit.update(sim.trains, terrain.renderedHeightAt);
       frustumGroundBox(crowdFrustum, VEHICLE_REACH, VEHICLE_LOW, VEHICLE_HIGH, vehicleBox);
       agents.sync(sim, net, alpha, detailed, rig.viewport.zoom, {
@@ -3894,7 +3862,7 @@ export function createSceneRenderer(
         roomLights.forEach((light, i) => {
           const at = lamps[i];
           light.userData['used'] = !!at;
-          if (at) { light.position.set(at.x, at.z, -at.y); light.updateMatrix(); }
+          if (at) light.position.set(at.x, at.z, -at.y);
         });
       }
       // Falls off with the distance in world units: the same lamp in metres at any unit.
@@ -3918,10 +3886,13 @@ export function createSceneRenderer(
       const fixedHour = skyMode === 'day' ? 16 * 60 : skyMode === 'night' ? 22 * 60 : null;
       const clock = fixedHour === null ? sim.minutes : fixedHour;
       {
-        // THE WEATHER (`world/weather.ts`): the wind bends the plants and the smoke
+        // THE WEATHER (`world/weather.ts`): the wind carries the clouds and bends the plants and the smoke
         const weather = net.doc.weather;
         const step = Math.min(0.1, Math.max(0, delta));
         const wind = windVector(weather, m(1));
+        cloudDrift.x += wind.x * step;
+        cloudDrift.y += wind.y * step;
+        post.setCloudDrift(cloudDrift.x, cloudDrift.y);
         setWindWeather(wind.x, -wind.y, weather.wind);
         // The water: its waves run with the wind, rougher the harder it blows; its foam; how fast the rivers run.
         const windLength = Math.hypot(wind.x, wind.y);
@@ -3944,13 +3915,12 @@ export function createSceneRenderer(
         const storm = Math.min(1, weather.lightning / 8);
         environment.setWeather(Math.max(weather.rain * 0.85, storm * 0.6), flash);
         rainWind.set(wind.x, -wind.y);
-        // The drops in the air on the tiers that draw them (`QualitySettings.rain`); the wet ground on every one (`environment.setWeather`).
-        rain.update(quality.rain ? weather.rain : 0, target, span, rainWind, step);
+        rain.update(weather.rain, target, span, rainWind, step);
         sceneryKit.setHaze(Math.max(weather.rain, storm));
-        weatherActive = weather.rain > 0 || weather.lightning > 0 || flash > 0 || (weather.wind > 0 && effectsShown);
+        weatherActive = weather.rain > 0 || weather.lightning > 0 || flash > 0 || (weather.wind > 0 && placedCloudsShown);
       }
       const dark = environment.setTimeOfDay(clock);
-      // The street light's sun: its share of the light now.
+      // What a cloud's shadow can take: the sun's share of the light now.
       post.setDirectShare(environment.directShare());
       if (Math.abs(dark - lastDark) > 0.01) {
         lastDark = dark;
@@ -4078,10 +4048,32 @@ export function createSceneRenderer(
       // The far blocks' instances shown as their levels are (`mesh/farBlockBatches.ts`): every frame, after the levels were chosen.
       farBlocks.sync();
       {
+        // The painted fog: its map again when the fog or the land under it changed (never in the middle of a sculpting stroke).
         const doc = net.doc;
-        // A land stroke waits for its end.
-        const landHeld = !!options?.holdRoads && elementsLandSeen !== doc.terrainRevision;
-        if (!landHeld) elementsLandSeen = doc.terrainRevision;
+        // A fog stroke shows as it is painted; a land stroke waits for its end.
+        const landHeld = !!options?.holdRoads && fogTerrainSeen !== doc.terrainRevision;
+        const fogSerial = doc.changes.serialOf(...FOG_KINDS);
+        if ((fogJournal !== doc.changes || fogSerial !== fogSeen) && !landHeld) {
+          const startedAt = performance.now();
+          // Only where the fog, the land or the ground under it changed (`createFogField`)
+          const entries = fogJournal === doc.changes && fogSeen >= 0 ? doc.changes.since(fogSeen, FOG_KINDS) : null;
+          const ground = (x: number, y: number): number => terrain.renderedHeightAt(x, y);
+          const laid = !entries || entries.some((e) => e.rects === null)
+            ? fogField.whole(doc.fogDabs, ground)
+            : fogField.update(doc.fogDabs, ground, entries.flatMap((e) => e.rects!));
+          fogLayer = laid.any ? laid : null;
+          fogJournal = doc.changes;
+          fogSeen = fogSerial;
+          fogTerrainSeen = doc.terrainRevision;
+          measureHitch('hitch:fog', startedAt);
+        }
+        if (!landHeld) {
+          // The fog's window kept round where the view looks (`fogLayer.ts`): only the texels that came in written.
+          const followed = fogField.follow(rig.viewport.centre.x, rig.viewport.centre.y, doc.fogDabs, (x, y) => terrain.renderedHeightAt(x, y));
+          if (followed) fogLayer = followed.any ? followed : null;
+        }
+        const f = doc.fogSettings;
+        post.setPlacedClouds(doc.clouds);
         // The elements: again only in the cells where they or the ground under them changed (`elements.ts`).
         if (elementKit && !landHeld) {
           const startedAt = performance.now();
@@ -4100,15 +4092,21 @@ export function createSceneRenderer(
           measureHitch('hitch:elements', startedAt);
         }
         elementLayer?.emit(Math.min(0.1, Math.max(0, delta)), rig.camera.position, exhaust);
-        effectsShown = !!elementLayer?.hasEffects;
+        post.setGroundFog(fogLayer?.any ? { texture: fogLayer.texture, low: fogLayer.low, high: fogLayer.high, density: f.density, window: fogLayer.window } : null);
+        fogMoving = !!fogLayer?.any;
+        placedCloudsShown = doc.clouds.length > 0 || !!elementLayer?.hasEffects;
       }
+      // Rain thickens the air: a grey mist over the distance (`world/weather.ts`).
+      const rainNow = net.doc.weather.rain;
+      const air = rainNow > 0 ? { ...atmosphere, fog: Math.max(atmosphere.fog, rainNow * 0.2), fogHeight: Math.max(atmosphere.fogHeight, m(120)) } : atmosphere;
       // The orthographic camera stands far back by construction
       const eyeShift = rig.perspective ? 0
         : rig.camera.position.distanceTo(rig.target) - halfHeight / Math.tan((PERSPECTIVE_FOV * Math.PI) / 360);
-      post.setAtmosphere(sunTowards.copy(environment.sun.position).sub(environment.sun.target.position), eyeShift);
+      post.setAtmosphere(air, sunTowards.copy(environment.sun.position).sub(environment.sun.target.position), environment.skyColor,
+        sunLight.copy(environment.sun.color).multiplyScalar(environment.sun.intensity), eyeShift);
       const atRender = performance.now();
-      // The people's skeletons on the GPU (`people/crowdAnimation.ts`), before anybody draws them; none while the effects panel hides the people (`switchedOff`).
-      if (effectSwitches.people) agents.renderPalettes(renderer);
+      // The people's skeletons on the GPU (`people/crowdAnimation.ts`), before anybody draws them.
+      agents.renderPalettes(renderer);
       {
         // DO NOT keep the eight point lights in the scene unlit (R18): three counts every visible light and each lit fragment evaluates it; shown together, so they make one variant (compiled ahead, `lightVariants`).
         const pointsOn = fxLights.muzzle.intensity > 0 || fxLights.blast.intensity > 0 || roomLights.some((light) => light.intensity > 0);
@@ -4132,10 +4130,8 @@ export function createSceneRenderer(
         // THE MAP'S OWN ROADS (`mapRoadsIn`), not whatever stands: DO NOT take the last city's for this one's - the curtain fell on a town of buildings over grass, no street drawn (2026-10-21).
         // And every road past the opening's view at its far level (`networkFar`): DO NOT show a map whose streets stop at the view's edge.
         const roadsIn = roads !== null && mapRoadsIn && !networkFar.pending;
-        // And the people's bodies, every one asked at the start (`keepPeople`): DO NOT put a body together on the page once the town shows
-        // (its cook read, its materials and impostor made, its clips taken: a stall when a person first showed, MISSION.md item 6).
         const whole = roadsIn && !buildings.coarsePending && (mapView || !buildings.viewPending)
-          && natureTreesStarted && !natureTreesPending && !agents.peopleLoading();
+          && natureTreesStarted && !natureTreesPending;
         // DO NOT draw the unseen frame before the town's programs are built: drawn first, each program was built at its first use, one after the other, in that one frame (4.5 s of the opening's 62, 2026-10-16); asked together, the driver builds them in parallel (KHR_parallel_shader_compile).
         // The programs are asked once the BUILDINGS are in, not when every road tile and tree is: the town's cells are what bring every
         // material the reveal draws, and the driver builds the shaders while the last tiles stream (the compile was on the critical path
@@ -4144,8 +4140,6 @@ export function createSceneRenderer(
         if (openingPrograms === 'no' && (whole || drawablesIn)) {
           openingPrograms = 'asked';
           performance.mark('reveal:whole');
-          // What comes after the opening compiled with it (`openingWarm`), its stand-ins in the scene before the catalogue walks it.
-          if (roadShadersWarm === 'no' || !blastShadersWarm || !previewShadersWarm) openingWarm();
           programs.compile(scene);
           const ready = programs.ready;
           void ready.then(() => { if (programs.ready === ready) { openingPrograms = 'built'; performance.mark('reveal:programs'); onAssetsReady(); } });
@@ -4351,6 +4345,7 @@ export function createSceneRenderer(
       gardens?.dispose();
       for (const plants of [coverCells, natureCards, natureForest, paintedForest, plantedForest]) plants?.dispose();
       coverKit.dispose();
+      fogTexture.dispose();
       elementLayer?.dispose();
       elementKit?.dispose();
       paintedForest?.dispose();

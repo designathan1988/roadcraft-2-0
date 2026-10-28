@@ -177,14 +177,14 @@ function groupsOf(color: string, shapes: readonly MarkShape[]): MarkGroup[] {
 }
 
 /** A stop line (or any bar) as one group: its quad. */
-function barGroup(color: string, bar: Bar): MarkGroup | null {
+export function barGroup(color: string, bar: Bar): MarkGroup | null {
   const shape = quadShape(bar.a, bar.b, bar.width / 2);
   return shape ? { color, shapes: [shape], box: shape.box } : null;
 }
 
 /** A run of a crosswalk's bars as one shape (`ZebraStretch`): its quad from `from` to `from + used` along `nrm`, inked where its offset across from
  *  `from` falls under `bar` in `pitch`, as the zebra's paint inked it (offset `nrm . (p - a) - from`). */
-function zebraGroup(run: ZebraStretch): MarkGroup | null {
+export function zebraGroup(run: ZebraStretch): MarkGroup | null {
   const { a, b, nrm, from, used, bar, pitch } = run;
   const o = { x: a.x + nrm.x * from, y: a.y + nrm.y * from };
   const shape = parallelogram(o, { x: b.x - a.x, y: b.y - a.y }, { x: nrm.x * used, y: nrm.y * used }, { q0: 0, gx: nrm.x, gy: nrm.y, dash: bar, period: pitch });
@@ -192,7 +192,7 @@ function zebraGroup(run: ZebraStretch): MarkGroup | null {
 }
 
 /** A mini-roundabout's island as one regular polygon (`PaintedIsland`, a corner at angle 0). */
-function islandGroup(island: PaintedIsland): MarkGroup {
+export function islandGroup(island: PaintedIsland): MarkGroup {
   const corners = Array.from({ length: island.sides }, (_, i) => {
     const a = (i / island.sides) * Math.PI * 2;
     return { x: island.x + Math.cos(a) * island.radius, y: island.y + Math.sin(a) * island.radius };

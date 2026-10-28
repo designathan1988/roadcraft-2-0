@@ -93,8 +93,6 @@ export interface BuildingLayer {
   coverReady(rect: readonly [number, number, number, number]): boolean;
   /** A building's floor as the cells' jobs measured it on the ground and paving as they stand (`CellPool.floorKnown`); undefined where none did. */
   knownFloor(id: BuildingId): number | undefined;
-  /** Moves whenever the cells' jobs' floors are learned (`CellPool.floorsLearned`): what `knownFloor` answers may have changed since. */
-  readonly floorsLearned: number;
   /** The ground and paving its cells' jobs read, for another job to read them alike (`solidJobs.ts`): the shared ground, whether the natural
    *  ground is the drawn one, and the paving of a rectangle packed (null: none to read, or it cannot be handed over); null before the first update
    *  or where the ground is not shared. */

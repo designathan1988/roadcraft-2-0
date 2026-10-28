@@ -47,15 +47,5 @@ export function renderTargetsBytes(targets: Iterable<Parameters<typeof renderTar
 
 /** The targets that hold memory on the GPU now: those bound at least once, three having made their framebuffer (r186 `WebGLTextures.setupRenderTarget`; a disposed one loses its properties). A target made and never drawn into holds none (RND-19). */
 export function liveTargets<T extends object>(targets: readonly T[], properties: { get(object: object): unknown }): T[] {
-  return targets.filter((t) => isLive(t, properties));
+  return targets.filter((t) => (properties.get(t) as { __webglFramebuffer?: unknown }).__webglFramebuffer !== undefined);
 }
-
-/** How many of the targets are live (`liveTargets`), counted with no list made: what the frame compares. */
-export function liveTargetCount(targets: readonly object[], properties: { get(object: object): unknown }): number {
-  let n = 0;
-  for (let i = 0; i < targets.length; i++) if (isLive(targets[i]!, properties)) n++;
-  return n;
-}
-
-const isLive = (target: object, properties: { get(object: object): unknown }): boolean =>
-  (properties.get(target) as { __webglFramebuffer?: unknown }).__webglFramebuffer !== undefined;

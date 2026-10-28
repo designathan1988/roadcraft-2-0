@@ -18,8 +18,6 @@ interface Taken<S, K> {
 export class PlateFollow<S extends object, K = never> {
   private readonly taken = new Map<S, Taken<S, K>>();
   private readonly shown = new Set<S>();
-  /** The parts last followed: the atlas replaces its array when the plates shown change, never changes it in place (`flatAtlas.ts` refresh). */
-  private followed: readonly ShownPlate<S>[] | null = null;
   /** Moves whenever a plate came, changed or left: what a product keyed on the plates shown reads. */
   version = 0;
 
@@ -29,18 +27,14 @@ export class PlateFollow<S extends object, K = never> {
   /** Brought up to the plates shown now: `left` for each plate gone since the last look, then `took` for each come or changed (given what was kept of it); the version. */
   follow(parts: readonly ShownPlate<S>[], took?: (part: ShownPlate<S>, was: K | undefined) => K, left?: (part: ShownPlate<S>, kept: K | undefined) => void): number {
     let moved = false;
-    // The plates gone looked for only in another array of parts: the same one holds the same plates (asked at every frame).
-    if (parts !== this.followed) {
-      this.followed = parts;
-      const shown = this.shown;
-      shown.clear();
-      for (const part of parts) shown.add(part.surface);
-      for (const [surface, plate] of this.taken) {
-        if (shown.has(surface)) continue;
-        this.taken.delete(surface);
-        left?.(plate.part, plate.kept);
-        moved = true;
-      }
+    const shown = this.shown;
+    shown.clear();
+    for (const part of parts) shown.add(part.surface);
+    for (const [surface, plate] of this.taken) {
+      if (shown.has(surface)) continue;
+      this.taken.delete(surface);
+      left?.(plate.part, plate.kept);
+      moved = true;
     }
     for (const part of parts) {
       const seen = this.revisionOf(part.surface);

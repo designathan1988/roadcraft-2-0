@@ -31,21 +31,6 @@ describe('the level a body is drawn at', () => {
     }
   });
 
-  it('of a figure far off in a view that shows faces is its own size\'s, the whole body only where it stands as tall as a face is drawn', () => {
-    // A street view (40 px a metre at its point): the figures near it show their faces, those down the street are a few pixels tall.
-    const zoom = perM(40);
-    expect(citizenBandAt(zoom)).toBe(0);
-    for (const ratio of [1, 2]) {
-      for (let css = 1; css < 400; css *= 1.07) {
-        const level = citizenLevelOfFigure(ERRORS, css * ratio, ratio, zoom);
-        if (css >= m(1.9) * perM(20)) expect(level).toBe(0);
-        else expect(level).toBe(citizenLevelOf(ERRORS, css));
-      }
-    }
-    // Two pixels tall: its card, never its whole body (MISSION.md 3b).
-    expect(citizenLevelOfFigure(ERRORS, 2, 1, zoom)).toBe(ERRORS.length);
-  });
-
   it('never gets finer as the figure shrinks', () => {
     let last = 0;
     for (let pixels = 4000; pixels > 1; pixels /= 1.05) {

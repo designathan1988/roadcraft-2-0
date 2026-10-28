@@ -15,7 +15,9 @@ The game's code (src, tests, scripts, eslint.config.js, package, desktop) equals
 published to roadcraft-2-0 (publish cbda5016). The code-graph mission and everything after ca2bcf8e are reverted (history.md).
 
 ## TASKS, IN ORDER (the owner's words are in `docs/agent/orders.md`)
-0. NOW: `docs/agent/MISSION.md` (the owner, 2026-10-28; printed whole above by `mission.cjs`), items 1-6 in order, then its End.
+0. NOW: `docs/agent/MISSION.md` (the owner, 2026-10-28; printed whole above by `mission.cjs`), items 1-9 in order, then its End.
+   Where it stands (2026-10-28 evening): items 1-4 done; 5, 6, 9 done in part (the rest written in work.md with its design); 7 and 8
+   are visual rounds not started; the End under way (photos here and at 7c4de70f, `scratchpad/end`, `LOOK_HEADED=1 scripts/look.mjs`).
    Progress: `docs/agent/work.md`. The former goal (the solution's steps 0-6) ended: steps 0 (acc7debf), 1 (bd376121) and the far
    wall's cover material (f25d3285) done; steps 2, 3, 4, 6 proven not possible on three r186 + WebGL (`history.md`); step 5 withdrawn.
 1. DONE (b42f2003 and the notebook hook): the context lost at compaction (orders of 2026-10-28 02:00-02:20). Findings:

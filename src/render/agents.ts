@@ -184,8 +184,6 @@ export interface AgentMeshes {
   renderPalettes(renderer: WebGLRenderer): void;
   /** Every body of the vehicles' people loaded now and kept loaded (`riggedCitizens.keepAll`): asked once the page has a scene to draw. */
   keepPeople(): void;
-  /** Whether a body kept (`keepPeople`) is still being loaded: the opening's curtain waits for them. */
-  peopleLoading(): boolean;
   dispose(): void;
 }
 
@@ -1845,7 +1843,6 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
     },
     renderPalettes(renderer) { pedestrians.renderPalettes(renderer); },
     keepPeople: () => pedestrians.keepAll(),
-    peopleLoading: () => pedestrians.keptLoading > 0,
     sync(world, net, alpha, detailed, zoom = Number.POSITIVE_INFINITY, options = {}) {
       // A new document has a journal of its own: the sweep follows the one the world stands on.
       if (offRoadSweep?.journal !== net.doc.changes) offRoadSweep = new ChangeSweep(net.doc.changes, OFF_ROAD_GROUND);

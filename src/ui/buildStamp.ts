@@ -40,8 +40,7 @@ export async function refreshBuildStamp(): Promise<void> {
     if (next.hash === stamp.hash && next.branch === stamp.branch && next.dirty === stamp.dirty) return;
     stamp = next;
     for (const listener of listeners) listener(stamp);
-  } catch (error) {
-    console.warn('[build stamp] The server went away; keep the last stamp', error);
+  } catch {
     // The server went away; keep the last stamp.
   }
 }

@@ -234,7 +234,7 @@ export function wildflowerGeometry(): BufferGeometry {
 // ---------------------------------------------------------------- furniture
 
 // A lamp's column and outreach (`lampMeasures.ts`): what the furniture is placed by, on the page and off it.
-export { LAMP_HEIGHT };
+export { LAMP_HEIGHT, LAMP_OUTREACH };
 /** Galvanised grey, not near-black. */
 const LAMP_METAL = rgb(0x8a918e);
 const LAMP_PLINTH = rgb(0x5d6461);

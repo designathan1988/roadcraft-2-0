@@ -72,9 +72,6 @@ export class PoleCells implements Utilities {
   private readonly wantedPool: { key: CellKey; d: number }[] = [];
   private readonly wantedOrder: { key: CellKey; d: number }[] = [];
   private readonly wantedKeys: CellKey[] = [];
-  /** The blocks the view turns into next (`look`'s ring ahead), kept from look to look as the view's are. */
-  private readonly aheadPool: { key: CellKey; d: number }[] = [];
-  private readonly aheadOrder: { key: CellKey; d: number }[] = [];
   /** Blocks the view wants not made yet. */
   busy = false;
 
@@ -155,39 +152,26 @@ export class PoleCells implements Utilities {
         this.box.max.set(x1 + margin, view.ground + POLE_HIGH, -(y0 - margin));
         // Off the frame but under the near cascade (`KeptFrustum.keep`): held, its poles casting there. DO NOT drop a block for leaving the
         // frame: its shadow left the near cascade with it, and came back with it, at every frame of a flight (`utility-poles`, 2026-10-22).
-        const seen = view.frustum.intersectsBox(this.box) || (view.frustum as KeptFrustum).keep?.intersectsBox(this.box) === true;
-        // AHEAD: a block the view turns or pans into next (its box grown by a block meets the frustum), made with the frame's time left over
-        // and kept, so its poles are there when it comes in (Cesium's `loadSiblings`). DO NOT make a block only once it is in view: the poles
-        // and wires appeared block by block as the camera turned (MISSION.md 3b: a form by what has loaded).
-        if (!seen && !view.frustum.intersectsBox(this.box.expandByScalar(BLOCK))) continue;
-        const list = seen ? wanted : this.aheadOrder;
-        const pool = seen ? this.wantedPool : this.aheadPool;
-        const one = pool[list.length] ?? (pool[list.length] = { key: 0 as CellKey, d: 0 });
+        if (!view.frustum.intersectsBox(this.box) && !(view.frustum as KeptFrustum).keep?.intersectsBox(this.box)) continue;
+        const one = this.wantedPool[wanted.length] ?? (this.wantedPool[wanted.length] = { key: 0 as CellKey, d: 0 });
         one.key = this.cells.cellAt(x0 + BLOCK / 2, y0 + BLOCK / 2);
         one.d = d;
-        list.push(one);
+        wanted.push(one);
       }
     }
     wanted.sort((a, b) => a.d - b.d || a.key - b.key);
-    const ahead = this.aheadOrder;
-    ahead.sort((a, b) => a.d - b.d || a.key - b.key);
     const keys = this.wantedKeys;
     keys.length = 0;
     for (const w of wanted) keys.push(w.key);
-    for (const w of ahead) keys.push(w.key);
     this.cells.want(keys);
     this.busy = false;
     let first = true;
-    // The view's own first (one at least, the rest within the frame's time: `busy` while any is missing), then the ring ahead within it.
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i]!;
+    for (const key of this.cells.wantedKeys) {
       if (this.cells.has(key)) continue;
-      const own = i < wanted.length;
-      if ((!first || !own) && performance.now() > deadline) { if (own) this.busy = true; break; }
+      if (!first && performance.now() > deadline) { this.busy = true; break; }
       this.cells.ensure(key);
       first = false;
     }
-    ahead.length = 0;
     this.cells.trim(null);
   }
 

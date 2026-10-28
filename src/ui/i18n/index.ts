@@ -31,8 +31,7 @@ function detect(): LanguageCode {
   try {
     const saved = window.localStorage.getItem(STORAGE_KEY);
     if (isLanguage(saved)) return saved;
-  } catch (error) {
-    console.warn('[language] Private browsing denies storage; the browser\'s own language still applies', error);
+  } catch {
     // Private browsing denies storage; the browser's own language still applies.
   }
   // An empty list (some embedded browsers) is no choice: the single language then.
@@ -98,8 +97,7 @@ export function setLanguage(next: LanguageCode): void {
   current = next;
   try {
     window.localStorage.setItem(STORAGE_KEY, next);
-  } catch (error) {
-    console.warn('[language] Not being able to remember the choice is not a reason to refuse it', error);
+  } catch {
     // Not being able to remember the choice is not a reason to refuse it.
   }
   document.documentElement.lang = next;

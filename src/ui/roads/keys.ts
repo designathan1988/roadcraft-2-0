@@ -45,13 +45,13 @@ function load(): Record<RoadKeyAction, string> {
         if (typeof key === 'string' && key && !reserved(normaliseKey(key))) out[action] = normaliseKey(key);
       }
     }
-  } catch (error) { console.warn('[road keys] a broken or blocked store: the defaults', error); }
+  } catch { /* a broken or blocked store: the defaults */ }
   // Two actions on one key (a hand-edited store): the defaults.
   return new Set(Object.values(out)).size === ROAD_KEY_ACTIONS.length ? out : { ...DEFAULTS };
 }
 
 function save(): void {
-  try { globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(bindings)); } catch (error) { console.warn('[road keys] kept for this session', error); }
+  try { globalThis.localStorage?.setItem(STORAGE_KEY, JSON.stringify(bindings)); } catch { /* kept for this session */ }
   for (const listener of listeners) listener();
 }
 

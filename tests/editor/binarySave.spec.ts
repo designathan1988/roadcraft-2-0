@@ -146,9 +146,9 @@ describe('the JSON saves before the binary regions', () => {
       landscape: json['landscape'] as unknown[], barriers: json['barriers'] as unknown[], buildings: json['buildings'] as unknown[], lots: json['lots'] as unknown[],
     };
     const lists: Record<string, unknown[] | undefined> = {
-      stamps: json['terrain'] as unknown[], paint: json['paint'] as unknown[], trees: json['trees'] as unknown[],
+      stamps: json['terrain'] as unknown[], paint: json['paint'] as unknown[], trees: json['trees'] as unknown[], clouds: json['clouds'] as unknown[],
       elements: json['elements'] as unknown[], clearings: json['treeClearings'] as unknown[], zones: json['zones'] as unknown[], zoneMarks: json['zoneMarks'] as unknown[],
-      gullies: (json['gullies'] as { dabs?: unknown[] } | undefined)?.dabs,
+      fog: (json['fog'] as { dabs?: unknown[] } | undefined)?.dabs, gullies: (json['gullies'] as { dabs?: unknown[] } | undefined)?.dabs,
     };
     const put: [string, Blob][] = [];
     const squares: Record<string, string[]> = {};

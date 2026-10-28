@@ -26,6 +26,10 @@ interface Batch {
 
 const ADOPTED = 'farBlockBatched';
 
+/** Whether a far level is drawn by its batch (`FarBlockBatches.adopt`): nothing to upload or warm for it. */
+export function batchedFar(level: Object3D): boolean {
+  return level.userData[ADOPTED] === true;
+}
 
 /** The batch's storage left out of the memory counters (`memoryCounters.ts`): its bytes are counted on the far levels it holds, as
  *  `gpuOnly.ts` keeps them, which the road residency's budget reads (`roadResidency.ts`). */
@@ -176,8 +180,7 @@ export class FarBlockBatches {
   /** Room for a geometry and an instance, as the shell batches make it (`shellBatch.ts` ensure): packed when the holes are a quarter of what lives. */
   private ensure(batch: Batch, vertices: number, indices: number): void {
     const mesh = batch.mesh;
-    // Room at the end or where a block let go stood (`GpuBatchedMesh.fits`).
-    if (!mesh.fits(vertices, indices)) {
+    if (vertices > mesh.unusedVertexCount || indices > mesh.unusedIndexCount) {
       const used = mesh.usedCounts();
       const storedVertices = batch.vertices - mesh.unusedVertexCount, storedIndices = batch.indices - mesh.unusedIndexCount;
       const pack = storedVertices - used.vertices > used.vertices / 4 || storedIndices - used.indices > used.indices / 4;

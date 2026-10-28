@@ -10,6 +10,7 @@ function settings(mode: string): DabSettings {
     element: { mode: 'lay', kind: 'stones', brush: { density: 50, size: 50, variation: 30, spacing: 1, strength: 50, intensity: 50 } as never },
     tree: { mode: 'stand', kind: 'oak' as never, brush: { density: 100, height: 8, variation: 20, spacing: 4 } as never },
     gully: { strength: 60, erase: false },
+    fog: { strength: 50, height: 10, speed: 1, erase: false },
     paint: 'dirt' as never,
   };
 }

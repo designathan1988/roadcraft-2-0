@@ -3,17 +3,14 @@ import { cellHeight } from '@world/groundPatch';
 /** HOW FAR EACH LEVEL OF A TERRAIN PLATE STANDS OFF ITS FULL GROUND (CDLOD's quadtree, `terrainLod.ts`): no three.js, the plate's worker reads it too */
 
 /** Cells along a patch, the one grid a plate instances; a quadtree node is 2 x 2 patches, so its grid is even and its odd corners morph onto even ones.
- *  The root, a node of `LOD_NODE` x 2^(LOD_LEVELS - 1) = 512 cells, holds the plate (200 cells, `terrainGrid.ts`) from its low corner and reaches past its
+ *  The root, a node of `LOD_NODE` x 2^(LOD_LEVELS - 1) = 256 cells, holds the plate (200 cells, `terrainGrid.ts`) from its low corner and reaches past its
  *  far edges, as CDLOD lays a raster of any size ([Strugar](https://github.com/fstrugar/CDLOD): `CDLODQuadTree.cpp` counts the nodes by ceiling
  *  division and makes no child past the raster; `CDLODTerrain.vsh` getBaseVertexPos clamps a vertex onto its edge): a node or a patch wholly past the
  *  plate is never measured or drawn, one across its edge is drawn clamped onto it (`terrainLod.ts`). The level-0 patches tile the plate (200 = 25 x 8),
  *  so its cut cells are cut patch by patch (`terrainSeams.ts`). */
 export const LOD_PATCH = 8;
-/** Levels: 0 reads every corner of the plate, each next level every other corner of the one before. The last, the root of 512 cells, draws the whole
- *  plate as ONE patch (its first quarter, 256 cells at a step of 32; the other three past the plate, none): 128 triangles where a plate far off
- *  spans a few pixels. DO NOT stop at the 256-cell root: its four quarters were the coarsest a plate could be, 512 ground and 256 rim triangles
- *  drawn a few tenths of a pixel across at the horizon (the F7 audit, MISSION.md 3b). */
-export const LOD_LEVELS = 6;
+/** Levels: 0 reads every corner of the plate, each next level every other corner of the one before. */
+export const LOD_LEVELS = 5;
 /** Cells along a node of level 0. */
 export const LOD_NODE = 2 * LOD_PATCH;
 
@@ -31,8 +28,6 @@ export class LandLevels {
   /** How far the cut cells' terrain (`terrainSeams.ts`) stands off the grid in each node of level 0 (metres): level 0 draws it, every coarser level
    *  draws the grid, so each is off by it besides its own parting (`measure`). */
   readonly seams: Float32Array;
-  /** Moves whenever the nodes' bounds and errors are written (`take`, `measure`): what a selection of the patches was made with (`LandLod.select`). */
-  version = 0;
   private readonly first: number[] = [];
   private readonly dirty: Uint8Array[] = [];
   private readonly seg: number;
@@ -76,7 +71,6 @@ export class LandLevels {
 
   /** The nodes as measured elsewhere (the plate's worker, `plateMesh.ts`), every mark cleared. */
   take(data: Float32Array): void {
-    this.version++;
     this.data.set(data);
     for (const d of this.dirty) d.fill(0);
     this.sumUp();
@@ -107,7 +101,6 @@ export class LandLevels {
 
   /** The marked nodes measured again from the drawn corners and diagonals, and each level's worst error with them. */
   measure(heights: ArrayLike<number>, flip: ArrayLike<number>): void {
-    this.version++;
     const n = this.n;
     for (let level = 0; level < LOD_LEVELS; level++) {
       const side = nodesAt(this.seg, level);

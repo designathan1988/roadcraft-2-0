@@ -58,8 +58,10 @@ import {
   planPoleRun,
   type PoleRunPlan,
 } from '@editor/poles';
-import { blockGridChoice, createPoleChoices, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleToolMode, roadWidth, streetscapeKind, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
+import { blockGridChoice, createPoleChoices, onRoadGridChange, roadGridShown, signChoice, strikeChoice, zoneColoursShown, paintKind, poleToolMode, roadWidth, streetscapeKind, fogErase, fogBrush, setFogBrush, gullyErase, treeMode, treeKind, treeBrush, setTreeBrush, cloudMode, cloudBrush, setCloudBrush, elementKind, elementMode, elementBrush, setElementBrush } from '@ui/toolChoices';
 import { TERRAIN_MIN_MS, TerrainBrush, type DabSettings } from '@editor/terrainBrush';
+import { CLOUD_SPAN, scatterClouds } from '@world/clouds';
+import { CloudTool } from '@editor/cloudTool';
 import { playThunder } from '@ui/thunder';
 import { blockGridLines, commitBlockGrid } from '@editor/blocks';
 import { m, stepsIn } from '@world/units';
@@ -154,6 +156,7 @@ import { bulbClearing } from '@world/junction/bulb';
 import { createToolMachine, isTool, type Tool } from '@editor/toolMachine';
 import { createGameKeys } from '@editor/gameKeys';
 import { RoadTop } from '@editor/roadTop';
+import { editRandom } from '@editor/editStream';
 import { cpuPopulationShare } from '@sim/populationGovernor';
 import { WEAK_MACHINE } from '@core/weakMachine';
 
@@ -241,7 +244,7 @@ const keptZones = Promise.resolve(new Map<string, Float64Array | null>());
 clearOldMapsOnce();
 /** The mark a world by tiles left open at its last close: DO NOT open it again - the player, 2026-10-18: no city by tiles any more; the mark is let go, and the map saved as a map opens. */
 const STREAMED_MARK = 'roadcraft.streamedWorld';
-try { window.localStorage.removeItem(STREAMED_MARK); } catch (error) { console.warn('[storage] storage blocked', error); }
+try { window.localStorage.removeItem(STREAMED_MARK); } catch { /* storage blocked */ }
 const streamedAtBoot: string | null = null;
 // The autosave: the small key, or IndexedDB for a map too large for it (`Persistence.loadSessionAsync`); not read under a streamed world (its tiles are its save).
 /** Buildings from which a saved map is restored through one table (`prepareCity`): a small map loads as it did. */
@@ -309,8 +312,7 @@ function clearOldMapsOnce(): void {
     }
     for (const key of doomed) window.localStorage.removeItem(key);
     window.localStorage.setItem(MARK, '2026-10-04');
-  } catch (error) {
-    console.warn('[storage] Storage blocked: nothing was kept to clear', error);
+  } catch {
     // Storage blocked: nothing was kept to clear.
   }
 }
@@ -398,7 +400,7 @@ function worldBounds() {
 
 // ------------------------------------------------------------------ state The tool in hand, the pause
 /** The terrain brush: a land stamp (`TerrainMode`), or painting the ground (`terrainPaint.ts`). */
-type BrushMode = TerrainMode | 'paint' | 'elements' | 'gully' | 'trees' | 'weather' | Landform;
+type BrushMode = TerrainMode | 'paint' | 'fog' | 'cloud' | 'elements' | 'gully' | 'trees' | 'weather' | Landform;
 /** The landforms: a shape and its ROCK in one tool */
 type Landform = 'mesa' | 'canyon' | 'escarpment' | 'sugarloaf';
 const LANDFORMS: Readonly<Record<Landform, { readonly mode: 'raise' | 'lower'; readonly rock: GeologyKind; readonly hardness: number; readonly profile?: 'dome' }>> = {
@@ -464,6 +466,8 @@ const tools = createToolMachine(game.tool, {
 });
 /** The gully brush's strength, % (Paisagem > Relevo > Ravinas). */
 let gullyStrength = 60;
+/** How many clouds "spread over the sky" lays, and how much they vary, %. */
+const cloudScatter = { count: 8, variation: 40 };
 
 function sessionSettings(): SavedSettings {
   const centre = view.centre;
@@ -617,6 +621,7 @@ const terrainBrush = new TerrainBrush({
 });
 /** The brush in hand, as one dab reads it (`editor/terrainBrush.ts` `DabSettings`). */
 function dabSettings(): DabSettings {
+  const fog = fogBrush();
   return {
     mode: game.terrainMode,
     radius: game.terrainRadius,
@@ -626,6 +631,7 @@ function dabSettings(): DabSettings {
     element: { mode: elementMode(), kind: elementKind(), brush: elementBrush(elementKind()) },
     tree: { mode: treeMode(), kind: treeKind(), brush: treeBrush() },
     gully: { strength: gullyStrength, erase: gullyErase() },
+    fog: { strength: fog.strength, height: fog.height, speed: fog.speed, erase: fogErase() },
     paint: paintKind(),
   };
 }
@@ -1019,7 +1025,7 @@ function worldUnderScreen(px: number, py: number, heightOffset?: number): Vec2 {
 function groundHeightUnder(at: Vec2): number {
   const point = (h: number): Vec2 => view.toWorldAt(at.x, at.y, h, surface.cssW, surface.cssH);
   const below = (h: number): boolean => { const p = point(h); return scene.surfaceHeightAt(p.x, p.y) >= h; };
-  let above = Math.min(600, surfaceTopIn(rayFootprint(point, 600, -360)));
+  let above = Math.min(600, surfaceTop());
   for (let h = above - 8; h >= -360; h -= 8) {
     if (!below(h)) { above = h; continue; }
     let lo = h;
@@ -1038,18 +1044,12 @@ function sceneHeightAt(p: Vec2): number {
 const PICK_TOP = m(64);
 const PICK_STEP = m(0.8);
 
-/** DO NOT walk `doc.nodes` here on each road edit: `RoadTop` reads only the cells a rectangle reaches, again only where an edit reached. */
+/** DO NOT walk `doc.nodes` here on each road edit: `RoadTop` reads only the cells the edit reached. */
 const roadTop = new RoadTop(doc, net, (x, y) => scene.elevationAt(x, y));
-/** The highest surface over a rectangle of the map: the land as drawn (`SceneHandle.landTop`, read again by the renderer when it rewrites
- *  the ground) and the highest road meeting it (`RoadTop.heightIn`). DO NOT ask the whole city's highest road for one ray (MISSION.md item 5). */
-function surfaceTopIn(rect: ChangeRect): number {
-  const top = Math.max(scene.landTop(), roadTop.heightIn(rect));
+function surfaceTop(): number {
+  // The land as drawn (`SceneHandle.landTop`, read again by the renderer when it rewrites the ground)
+  const top = Math.max(scene.landTop(), roadTop.height());
   return Number.isFinite(top) ? top + 12 : PICK_TOP;
-}
-/** The rectangle of the map a ray crosses between heights `hi` and `lo` (`at`: where it is at a height). */
-function rayFootprint(at: (h: number) => Vec2, hi: number, lo: number): ChangeRect {
-  const a = at(hi), b = at(lo);
-  return [Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y)];
 }
 
 /** Where the ray under the cursor first meets what is drawn - a deck, or the ground - marched down from above. */
@@ -1059,7 +1059,7 @@ function firstSurfaceAt(px: number, py: number): Vec2 | null {
     const p = at(h);
     return scene.surfaceHeightAt(p.x, p.y) >= h;
   };
-  let above = Math.min(PICK_TOP, surfaceTopIn(rayFootprint(at, PICK_TOP, -PICK_TOP)));
+  let above = Math.min(PICK_TOP, surfaceTop());
   for (let h = above - PICK_STEP; h >= -PICK_TOP; h -= PICK_STEP) {
     if (!below(h)) { above = h; continue; }
     let lo = h;
@@ -1118,6 +1118,8 @@ function currentGesture(): string | null {
   if (barrier) return barrier;
   const bulldozing = bulldozer.gesture();
   if (bulldozing) return bulldozing;
+  const cloud = cloudTool.gesture();
+  if (cloud) return cloud;
   return lotTool.gesture();
 }
 function syncGesture(): void {
@@ -1180,6 +1182,23 @@ function cancelMove(): void {
 }
 
 
+// THE CLOUD TOOL (Paisagem > Terreno > Nuvens)
+/** A step the clouds' tool opened and its gesture has not closed yet. */
+let cloudStepOpen = false;
+const cloudTool = new CloudTool({
+  doc,
+  mode: () => cloudMode(),
+  brush: () => cloudBrush(),
+  drift: () => scene.cloudDrift(),
+  rayAt: (px, py, height) => view.toWorldAt(px, py, height, surface.cssW, surface.cssH),
+  record: () => { history.begin(doc); cloudStepOpen = true; },
+  changed: () => {
+    updateHistoryButtons();
+    persistence.saveSessionSoon(doc, sessionSettings);
+    requestDraw();
+  },
+  hint: (key) => flashHint(key),
+});
 /** Ends the brush stroke (`TerrainBrush.end`), warning when the land's stamps near their cap. */
 function endTerrainStroke(): void {
   const wasPainting = terrainBrush.end();
@@ -1307,8 +1326,9 @@ function pointerDown(e: PointerEvent, r: DOMRect): void {
       break;
 
     case 'terrain':
+      if (game.terrainMode === 'cloud') cloudTool.down(e.pointerId, e.clientX - r.left, e.clientY - r.top);
       // The weather tool: a click calls a lightning bolt down there.
-      if (game.terrainMode === 'weather') scene.strikeAt(world.x, world.y);
+      else if (game.terrainMode === 'weather') scene.strikeAt(world.x, world.y);
       else terrainBrush.begin(e.pointerId, world);
       break;
 
@@ -1486,6 +1506,11 @@ function pointerMove(e: PointerEvent, r: DOMRect, path: PointerSample[] | undefi
     terrainBrush.paint(world);
     return;
   }
+  if (cloudTool.pointer === e.pointerId) {
+    const rect = canvas.getBoundingClientRect();
+    cloudTool.move(e.clientX - rect.left, e.clientY - rect.top);
+    return;
+  }
 
   // The hover preview uses the same height-aware connection rule as the commit.
   const hovered = findAnchor(doc, net, world, view.zoom, undefined,
@@ -1516,6 +1541,9 @@ function endPointer(e: PointerEvent): void {
     return;
   }
   if (terrainBrush.pointer === e.pointerId) endTerrainStroke();
+  cloudTool.up(e.pointerId);
+  // Its step closed with the gesture (EDT-10, as the terrain's stroke).
+  if (cloudStepOpen) { cloudStepOpen = false; history.end(doc); updateHistoryButtons(); }
   if (game.tool === 'building') buildings.pointerUp(cancelled || wasPinching);
   bulldozer.up(e.pointerId, !cancelled && !wasPinching);
   lotTool.up(e.pointerId, !cancelled && !wasPinching);
@@ -1652,7 +1680,7 @@ function setZone(patch: ShellZonePatch): void {
 }
 
 /** Every brush of the terrain tool, in the order of its number keys. */
-const BRUSH_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'elements', 'gully', 'trees', 'weather'];
+const BRUSH_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'fog', 'cloud', 'elements', 'gully', 'trees', 'weather'];
 function setTerrainMode(next: BrushMode): void {
   gameState.set('terrainMode', next, 'terrain brush');
   // Each tool its own hardness: a chapada's cliff is not the hill's slope.
@@ -1673,7 +1701,7 @@ function setTerrainStrength(value: number): void {
   requestDraw();
 }
 
-/** A slider of the map's own settings (the weather, the gullies of the land) */
+/** A slider of the map's own settings (the fog over the map, the weather, the gullies of the land) */
 function mapSlider(min: number, max: number, step: number, get: () => number, set: (v: number) => void): ShellSlider {
   let recorded = false;
   return {
@@ -1696,6 +1724,42 @@ const brushSlider = (min: number, max: number, step: number, get: () => number, 
 scene.onStrike((_x, _y, distance) => playThunder(distance / UNITS_PER_METER, doc.weather.thunder));
 const weatherSlider = (key: keyof typeof doc.weather, min: number, max: number, step: number, scale: number): ShellSlider =>
   mapSlider(min, max, step, () => Math.round(doc.weather[key] * scale * 10) / 10, (v) => doc.setWeather({ [key]: v / scale }));
+
+// The sky the player sets: the mist over everything, and (from before every cloud was the map's) the cloud cover.
+const ATMOSPHERE_KEY = 'roadcraft.atmosphere.v5';
+const atmosphere = { atmoClouds: 40, atmoCloudBase: 180, atmoCloudThickness: 150, atmoFog: 0, atmoFogHeight: 60 };
+try {
+  const kept = JSON.parse(localStorage.getItem(ATMOSPHERE_KEY) ?? 'null') as Record<string, number> | null;
+  if (kept) {
+    for (const key of Object.keys(atmosphere) as (keyof typeof atmosphere)[]) {
+      const value = kept[key];
+      if (value !== undefined && Number.isFinite(value)) atmosphere[key] = value;
+    }
+  }
+} catch { /* storage blocked: the defaults */ }
+function applyAtmosphere(redraw = true): void {
+  scene.setAtmosphere({
+    clouds: atmosphere.atmoClouds / 100,
+    cloudBase: atmosphere.atmoCloudBase * UNITS_PER_METER,
+    cloudThickness: atmosphere.atmoCloudThickness * UNITS_PER_METER,
+    fog: atmosphere.atmoFog / 100,
+    fogHeight: atmosphere.atmoFogHeight * UNITS_PER_METER,
+  });
+  try { localStorage.setItem(ATMOSPHERE_KEY, JSON.stringify(atmosphere)); } catch { /* not kept */ }
+  // Not at boot: the frame loop is not set up yet then.
+  if (redraw) requestDraw();
+}
+// The sky made no clouds of its own any more (every cloud is the map's, to move or take away)
+if (atmosphere.atmoClouds > 0) {
+  if (doc.clouds.length === 0) {
+    doc.addClouds(scatterClouds(Math.round((atmosphere.atmoClouds / 100) * 12), {
+      size: Math.max(40, atmosphere.atmoCloudThickness * UNITS_PER_METER), height: atmosphere.atmoCloudBase * UNITS_PER_METER, density: 0.8,
+    }, 0.3, CLOUD_SPAN / 2, [], editRandom(doc, 0, 0)));
+    persistence.saveSessionSoon(doc, sessionSettings);
+  }
+  atmosphere.atmoClouds = 0;
+}
+applyAtmosphere(false);
 
 /** Every slider the interface shows, by name: its range and how the game reads and takes it. */
 const SLIDERS: Readonly<Record<string, ShellSlider>> = {
@@ -1732,6 +1796,20 @@ const SLIDERS: Readonly<Record<string, ShellSlider>> = {
   elSpacing: brushSlider(0, 20, 0.1, () => elementBrush().spacing, (v) => setElementBrush({ spacing: v })),
   elStrength: brushSlider(5, 100, 5, () => elementBrush().strength, (v) => setElementBrush({ strength: v })),
   elIntensity: brushSlider(0, 100, 5, () => elementBrush().intensity, (v) => setElementBrush({ intensity: v })),
+  // The cloud tool: the next cloud's size, base and density, and how many "spread over the sky" lays.
+  cloudSize: brushSlider(30, 600, 10, () => cloudBrush().size, (v) => setCloudBrush({ size: v })),
+  cloudHeight: brushSlider(40, 900, 10, () => cloudBrush().height, (v) => setCloudBrush({ height: v })),
+  cloudDensity: brushSlider(10, 100, 5, () => cloudBrush().density, (v) => setCloudBrush({ density: v })),
+  cloudCount: { min: 1, max: 24, step: 1, get: () => cloudScatter.count, set: (v) => { cloudScatter.count = v; } },
+  cloudVariation: { min: 0, max: 80, step: 5, get: () => cloudScatter.variation, set: (v) => { cloudScatter.variation = v; } },
+  // The fog brush: each bank keeps the thickness, height and drift it was laid with (`world/fogPaint.ts`).
+  fogStrength: brushSlider(5, 100, 5, () => fogBrush().strength, (v) => setFogBrush({ strength: v })),
+  fogHeight: brushSlider(2, 160, 2, () => fogBrush().height, (v) => setFogBrush({ height: v })),
+  fogSpeed: brushSlider(0, 24, 0.5, () => fogBrush().speed, (v) => setFogBrush({ speed: v })),
+  // The map's: every bank's thickness at once, and the mist over everything.
+  fogMapDensity: mapSlider(0, 200, 10, () => Math.round(doc.fogSettings.density * 100), (v) => doc.setFogSettings({ density: v / 100 })),
+  atmoFog: { min: 0, max: 100, step: 5, get: () => atmosphere.atmoFog, set: (v) => { atmosphere.atmoFog = v; applyAtmosphere(); } },
+  atmoFogHeight: { min: 5, max: 200, step: 5, get: () => atmosphere.atmoFogHeight, set: (v) => { atmosphere.atmoFogHeight = v; applyAtmosphere(); } },
   // The simulation: cars and people on foot as shares (%) of what the city's own density asks (`SimWorld.followCity`).
   trafficIntensity: { min: 0, max: MAX_INTENSITY * 100, step: 10, get: () => Math.round(sim.trafficIntensity * 100),
     set: (v) => { sim.trafficIntensity = v / 100; persistence.saveSettingsSoon(sessionSettings); } },
@@ -1770,10 +1848,22 @@ function wholeMapEdit(confirmKey: string | null, edit: () => void): void {
 const MAP_ACTIONS: Readonly<Record<string, () => void>> = {
   clearTerrain: () => wholeMapEdit('confirm.clearTerrain', () => doc.clearTerrain()),
   clearGullies: () => { if (doc.gullyDabs.length > 0) wholeMapEdit('confirm.clearGullies', () => doc.clearGullies()); },
+  clearFog: () => { if (doc.fogDabs.length > 0) wholeMapEdit('confirm.clearFog', () => doc.clearFog()); },
   clearTrees: () => {
     if (doc.trees.length > 0 || doc.treeClearings.length > 0) wholeMapEdit('confirm.clearTrees', () => doc.clearTrees());
   },
   clearElements: () => { if (doc.elements.length > 0) wholeMapEdit('confirm.clearElements', () => doc.clearElements()); },
+  clearClouds: () => {
+    if (doc.clouds.length > 0) wholeMapEdit('confirm.clearClouds', () => { for (const cloud of [...doc.clouds]) doc.removeCloud(cloud.id); });
+  },
+  // Spread clouds over the sky: as many as asked, about the tool's size, height and density, varied
+  scatterClouds: () => wholeMapEdit(null, () => {
+    const brush = cloudBrush();
+    const laid = scatterClouds(cloudScatter.count, {
+      size: brush.size * UNITS_PER_METER, height: brush.height * UNITS_PER_METER, density: brush.density / 100,
+    }, cloudScatter.variation / 100, CLOUD_SPAN / 2, doc.clouds, editRandom(doc, 0, 0));
+    if (doc.addClouds(laid) < cloudScatter.count) flashHint('hint.cloud.full');
+  }),
 };
 
 /** Puts a tool in hand: what it does to the game (gestures dropped, the selection let go, the Builder switched on or off). */
@@ -1832,7 +1922,6 @@ function mountInterface(): void {
     newMap,
     newWorld,
     newLargeWorld,
-    newWideWorld,
     openMap: () => void openMap(),
     saveMap,
     about: openAbout,
@@ -1999,12 +2088,6 @@ function newLargeWorld(): void {
   // The next large city's seed, made ahead (`cityAhead`).
   void openLargeCity(nextCitySeed('large', true));
 }
-/** A 10 KM CITY: the large city's generator over a 5 km radius, its density kept (`largeCityPlan`): the size the game is made to create, open, save and play. */
-const WIDE_CITY_RADIUS = m(5_000);
-function newWideWorld(): void {
-  if (!window.confirm(t('confirm.newWideWorld'))) return;
-  void openLargeCity(nextCitySeed('large', true), WIDE_CITY_RADIUS);
-}
 /** A city being made off the page (`cityGen.worker.ts`): the curtain over the map while the worker builds it, no frame of it on the page. */
 let generatingCity = false;
 /** The opening asked for while one is made: the same promise, never a second city over the first's answer. */
@@ -2037,7 +2120,7 @@ async function cityData(ask: CityGenAsk): Promise<OpenedCity> {
   // Being made ahead (`cityAhead`): that job's answer, never a second one for the same city.
   const making = key ? citiesAhead.get(key) : undefined;
   if (making) { performance.mark('city:ahead'); return openedOf(await making); }
-  const kept = key ? await readDerived<KeptCity>(key).catch((error: unknown) => { console.warn('[city ahead] its kept city not read: made again', error); return undefined; }) : undefined;
+  const kept = key ? await readDerived<KeptCity>(key).catch(() => undefined) : undefined;
   // A city kept with a buildings' table of the format before the box columns (`recordTable.ts` format 1) is not taken: the page would decode it whole to file it by place; the shipped or regrown one is kept in its stead.
   if (kept?.data && kept.buildings instanceof ArrayBuffer && tableFormat(kept.buildings) >= 2) { performance.mark('city:kept'); return preparedCity(kept.data, tableIn(kept.buildings), besideTables(kept, tableIn)); }
   // Shipped with the game (the first new city of its size, `cookedCities.ts`): read, and kept as one grown here would be.
@@ -2065,7 +2148,7 @@ async function cityJob(ask: CityGenAsk, key: string | null, priority: number): P
   // Laid out by one worker, its tiles grown by many at once, joined by one (`editor/cityInTiles.ts`): each step said on the console as it ends.
   const started = performance.now();
   const reply = await growCityInTiles(ask, priority, priority === 0 ? null : key, (step, detail) => {
-    console.info(`[city] ${step} after ${Math.round((performance.now() - started) / 100) / 10} s${detail ? ` (${detail})` : ''}`);
+    console.info(`[city] ${step} after ${((performance.now() - started) / 1000).toFixed(1)} s${detail ? ` (${detail})` : ''}`);
     // The step on the page's own timeline too, as the opening's are (`city:asked`, `city:applied`).
     performance.mark(`city:${step}`, { detail });
   });
@@ -2085,12 +2168,12 @@ const NEXT_CITY_KEY = 'roadcraft.nextCitySeed';
 const citiesAhead = new Map<string, Promise<CityGenReply>>();
 function nextCitySeed(kind: CityGenAsk['kind'], take = false): number {
   let seeds: Partial<Record<CityGenAsk['kind'], number>> = {};
-  try { seeds = JSON.parse(localStorage.getItem(NEXT_CITY_KEY) ?? '{}') as typeof seeds; } catch (error) { console.warn('[storage] none kept', error); }
+  try { seeds = JSON.parse(localStorage.getItem(NEXT_CITY_KEY) ?? '{}') as typeof seeds; } catch { /* none kept */ }
   const fresh = (): number => Math.floor(Math.random() * 0x7fff_ffff) || 1;
   // The first of a size is the city shipped with the game (`COOKED_CITY_SEEDS`): read, never grown in front of the player.
   const seed = Number.isInteger(seeds[kind]) && seeds[kind]! > 0 ? seeds[kind]! : (kind === 'large' || kind === 'small' ? COOKED_CITY_SEEDS[kind] : fresh());
   seeds[kind] = take ? fresh() : seed;
-  try { localStorage.setItem(NEXT_CITY_KEY, JSON.stringify(seeds)); } catch (error) { console.warn('[storage] not kept: a seed of its own next time', error); }
+  try { localStorage.setItem(NEXT_CITY_KEY, JSON.stringify(seeds)); } catch { /* not kept: a seed of its own next time */ }
   return seed;
 }
 async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
@@ -2100,7 +2183,7 @@ async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
   const seed = nextCitySeed(kind);
   const key = `${CITY_PREFIX}${kind}:${seed}`;
   if (citiesAhead.has(key)) return;
-  const kept = await readDerivedKeys(CITY_PREFIX).catch((error: unknown) => { console.warn('[city ahead] the kept cities not listed: none taken as kept', error); return new Set<string>(); });
+  const kept = await readDerivedKeys(CITY_PREFIX).catch(() => new Set<string>());
   // `readDerivedKeys` gives the keys without their prefix: DO NOT ask for the whole key, every kept city was grown again.
   if (kept.has(key.slice(CITY_PREFIX.length)) || citiesAhead.has(key)) return;
   // The city shipped with the game for this seed (`cookedCities.ts`): kept from its files, DO NOT grow it again.
@@ -2108,7 +2191,7 @@ async function cityAhead(kind: CityGenAsk['kind']): Promise<void> {
   if (cooked) { void keepDerivedDurably(key, cooked satisfies KeptCity); return; }
   const made = cityJob({ id: cityAskId++, kind, seed }, key, 1_000_000);
   citiesAhead.set(key, made);
-  void made.catch((error: unknown) => { console.warn('[city ahead] not made ahead: made when asked', error); }).finally(() => { if (citiesAhead.get(key) === made) citiesAhead.delete(key); });
+  void made.catch(() => {}).finally(() => { if (citiesAhead.get(key) === made) citiesAhead.delete(key); });
 }
 /** Both sizes' next cities made ahead, the large first, once the opening's work is behind (`cityAhead` waits for the world to stand). DO NOT wait a fixed 15 s more: on the first launch the empty map stands in seconds, and the player's first large city was grown from nothing in front of them (8.4 s of its 18 s, 2026-10-21). */
 function citiesAheadLater(): void {
@@ -2118,7 +2201,7 @@ function citiesAheadLater(): void {
 /** A city made off the page and put in place of the map: the curtain over the map while its worker builds it, then the real map opened whole. One at a time, in the order asked. */
 function openCityOffPage(ask: CityGenAsk): Promise<void> {
   const opened = (cityOpening ?? Promise.resolve()).then(() => openCityNow(ask));
-  cityOpening = opened.catch((error: unknown) => { console.warn('[city] its opening failed: the next one goes on', error); });
+  cityOpening = opened.catch(() => {});
   return opened;
 }
 
@@ -2211,12 +2294,12 @@ const SKY_MODES: readonly SkyMode[] = ['day', 'night', 'cycle'];
 function setSky(mode: string): void {
   if (!(SKY_MODES as readonly string[]).includes(mode)) return;
   gameState.set('sky', mode as SkyMode, 'sky chosen');
-  try { localStorage.setItem(SKY_KEY, mode); } catch (error) { console.warn('[storage] not kept', error); }
+  try { localStorage.setItem(SKY_KEY, mode); } catch { /* not kept */ }
 }
 try {
   const saved = localStorage.getItem(SKY_KEY);
   if (saved && (SKY_MODES as readonly string[]).includes(saved)) gameState.set('sky', saved as SkyMode, 'saved preference');
-} catch (error) { console.warn('[storage] storage blocked: day', error); }
+} catch { /* storage blocked: day */ }
 gameState.watch(['sky'], () => { scene.setSkyMode(game.sky); requestDraw(); });
 scene.setSkyMode(game.sky);
 
@@ -2270,7 +2353,7 @@ async function openMap(): Promise<void> {
 const PERSPECTIVE_KEY = 'roadcraft.perspective.v2';
 function setPerspective(on: boolean): void {
   gameState.set('perspective', on, 'camera');
-  try { localStorage.setItem(PERSPECTIVE_KEY, on ? '1' : '0'); } catch (error) { console.warn('[storage] not kept', error); }
+  try { localStorage.setItem(PERSPECTIVE_KEY, on ? '1' : '0'); } catch { /* not kept */ }
 }
 /** The camera as the game's state has it. */
 function showPerspective(): void {
@@ -2280,7 +2363,7 @@ gameState.watch(['perspective'], showPerspective);
 // At boot, once the whole file has run: switching the camera asks for a frame, and the frame loop is set up further down.
 queueMicrotask(() => {
   let kept: string | null = null;
-  try { kept = localStorage.getItem(PERSPECTIVE_KEY); } catch (error) { console.warn('[storage] storage blocked: the default', error); }
+  try { kept = localStorage.getItem(PERSPECTIVE_KEY); } catch { /* storage blocked: the default */ }
   gameState.set('perspective', kept !== '0', 'saved preference');
   showPerspective();
 });
@@ -2445,7 +2528,7 @@ function listenHint(listen: (text: string, flash: boolean) => void): void {
 if (bootFailed) flashHint('hint.bootFailed');
 
 /** The terrain brush's operations in the number row's order (1 = raise). */
-const TERRAIN_KEY_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'elements', 'gully', 'trees', 'weather'];
+const TERRAIN_KEY_MODES: readonly BrushMode[] = ['raise', 'lower', 'flatten', 'river', 'paint', 'mesa', 'canyon', 'escarpment', 'sugarloaf', 'fog', 'cloud', 'elements', 'gully', 'trees', 'weather'];
 /** Every key the game answers (`editor/gameKeys.ts`): one command a key. */
 const gameKeys = createGameKeys({
   tool: () => game.tool,
@@ -2717,7 +2800,7 @@ function frame(now: number): void {
   // Keep animating while anything is moving; otherwise settle.
   const simMoving = !game.paused && simShowsMotion();
   if (!pageHidden() && (measure.on || !effects.onDemand || simMoving || roadTool.draft || mover.dragging || cameraHand.active || cameraHand.coasting || cameraMotion.moving || scene.busy())) requestDraw();
-  // Only the elements' smoke or the weather moving, or the clock alone: a slower frame.
+  // Only the clouds moving (they drift, form and fade), or the clock alone: a slower frame.
   else if (!pageHidden() && (!game.paused || scene.drifting())) frameClock.drift();
 }
 
@@ -2735,23 +2818,10 @@ function screenReach(): ChangeRect {
   const c = view.centre;
   return [c.x - SCREEN_REACH, c.y - SCREEN_REACH, c.x + SCREEN_REACH, c.y + SCREEN_REACH];
 }
-/** The world's rectangle the screen can show: the ground up to the land's top, then up to the highest road standing over that ground, again
- *  while a road higher still stands over the ground it adds (a deck seen over the screen's edge). */
+/** The world's rectangle the screen can show */
 function groundOnScreen(w: number, h: number): ChangeRect {
-  const land = scene.landTop();
-  let top = Number.isFinite(land) ? land + 12 : PICK_TOP;
-  let rect = screenGround(w, h, top);
-  for (let again = 0; again < 4; again++) {
-    const higher = surfaceTopIn(rect);
-    if (higher <= top) break;
-    top = higher;
-    rect = screenGround(w, h, top);
-  }
-  return rect;
-}
-/** The world's rectangle the screen shows of the ground and of whatever stands on it up to `top`. */
-function screenGround(w: number, h: number, top: number): ChangeRect {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const top = surfaceTop();
   for (const [px, py] of [[0, 0], [w / 2, 0], [w, 0], [w, h / 2], [w, h], [w / 2, h], [0, h], [0, h / 2]] as const) {
     // The pixel's line of sight where the view has one: a ray level with or above the horizon meets no ground
     const ray = view.rayAt?.(px, py, w, h);
@@ -2894,7 +2964,7 @@ const CHANGE_SHOWN = 8000;
 const CHANGE_COLOURS: Record<ChangeKind, string> = {
   roads: '#ffd23f', traffic: '#fca311', clearings: '#95d5b2', terrain: '#c8823c', paint: '#9be564', buildings: '#ff8fab', zones: '#7bdff2', lots: '#b2f7ef', lotKeys: '#80cbc4', markingStyle: '#fff3b0',
   utilities: '#f7aef8', barriers: '#d0d0d0', landscape: '#6bd425', transit: '#4cc9f0', people: '#ffffff',
-  trees: '#2d6a4f', elements: '#e0aaff', weather: '#adb5bd', nature: '#52b788',
+  trees: '#2d6a4f', elements: '#e0aaff', fog: '#e9ecef', clouds: '#f8f9fa', weather: '#adb5bd', nature: '#52b788',
   gullies: '#8d5524', economy: '#2a9d8f', buildingWear: '#a26769', elevation: '#ff6b6b', ground: '#f4a261', light: '#ffe066', surfaces: '#4361ee',
 };
 
@@ -3479,6 +3549,8 @@ function buildSummary(stations: Parameters<typeof buildRuns>[0]): string {
 /** The brush's colour, by what it does to the ground. */
 const TERRAIN_BRUSH_COLOUR: Readonly<Record<BrushMode, string>> = {
   paint: '#f2d27a',
+  fog: '#e8eef4',
+  cloud: '#ffffff',
   elements: '#b8e07a',
   gully: '#c98a5a',
   trees: '#5fbf5a',
@@ -3495,6 +3567,8 @@ const TERRAIN_BRUSH_COLOUR: Readonly<Record<BrushMode, string>> = {
 
 const TERRAIN_BRUSH_FILL: Readonly<Record<BrushMode, string>> = {
   paint: 'rgba(242,210,122,0.10)',
+  fog: 'rgba(232,238,244,0.12)',
+  cloud: 'rgba(255,255,255,0)',
   elements: 'rgba(184,224,122,0.10)',
   gully: 'rgba(201,138,90,0.10)',
   trees: 'rgba(95,191,90,0.10)',

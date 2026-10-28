@@ -51,7 +51,7 @@ function textOf(args: readonly unknown[]): string {
   return args.map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === 'string' ? a : safeJSON(a))).join(' ').slice(0, 400);
 }
 function safeJSON(value: unknown): string {
-  try { return JSON.stringify(value)?.slice(0, 200) ?? String(value); } catch (error) { console.warn('[health] a value not written as JSON: its string', error); return String(value); }
+  try { return JSON.stringify(value)?.slice(0, 200) ?? String(value); } catch { return String(value); }
 }
 function stackOf(args: readonly unknown[]): string | undefined {
   const error = args.find((a): a is Error => a instanceof Error);
@@ -68,7 +68,7 @@ export function watchHealth(options: {
   const { log, frames, canvas, context } = options;
   const write = (kind: Parameters<HealthLog['record']>[0], severity: Parameters<HealthLog['record']>[1], message: string, detail?: string): void => {
     let where = '';
-    try { where = context(); } catch (error) { console.warn('[health] the context itself failed: the entry without it', error); }
+    try { where = context(); } catch { /* the context itself failed: the entry without it */ }
     log.record(kind, severity, message, { ...(detail ? { detail } : {}), ...(where ? { context: where } : {}) });
   };
 
@@ -76,12 +76,12 @@ export function watchHealth(options: {
   try {
     const kept = JSON.parse(localStorage.getItem(KEPT_KEY) ?? '[]') as HealthEntry[];
     if (Array.isArray(kept)) log.restore(kept);
-  } catch (error) { console.warn('[health] nothing kept, or storage blocked', error); }
+  } catch { /* nothing kept, or storage blocked */ }
   let saved = log.changes;
   const save = (): void => {
     if (log.changes === saved) return;
     saved = log.changes;
-    try { localStorage.setItem(KEPT_KEY, JSON.stringify(log.toJSON())); } catch (error) { console.warn('[health] storage full or blocked: kept in memory', error); }
+    try { localStorage.setItem(KEPT_KEY, JSON.stringify(log.toJSON())); } catch { /* storage full or blocked: kept in memory */ }
   };
   setInterval(save, 5000);
   window.addEventListener('pagehide', save);
@@ -147,7 +147,7 @@ export function watchHealth(options: {
         }
       }
     }).observe({ type: 'measure', buffered: false });
-  } catch (error) { console.warn('[health] no measure entries in this browser', error); }
+  } catch { /* no measure entries in this browser */ }
 
   const slowFrame = (start: number, end: number, scripts: string[], work = end - start): void => {
     const systems = systemsOf(frames.between(start, end));
@@ -157,7 +157,7 @@ export function watchHealth(options: {
     const top = systems[0];
     const message = top ? t('health.msg.slowFrame', { what: systemName(top[0]) }) : steps[0] ? t('health.msg.slowFrame', { what: steps[0].replace(/ \d+ ms$/, '') }) : t('health.msg.slowFrameOutside');
     let where = '';
-    try { where = context(); } catch (error) { console.warn('[health] without it', error); }
+    try { where = context(); } catch { /* without it */ }
     const detail = [...(steps.length ? [t('health.msg.steps', { list: steps.join(' · ') })] : []), ...(scripts.length ? [t('health.msg.scripts', { list: scripts.join(' · ') })] : [])].join('\n');
     log.record('slow-frame', 'slow', message, {
       ms: Math.round(work), systems, ...(detail ? { detail } : {}), ...(where ? { context: where } : {}),
@@ -183,7 +183,7 @@ export function watchHealth(options: {
         }
       }).observe({ type: 'long-animation-frame', buffered: true });
     }
-  } catch (error) { console.warn('[health] not available here', error); longFrames = false; }
+  } catch { longFrames = false; }
   // A hidden page draws no frames, so no long frame is reported for it; a task over 50 ms still is (MDN, Long Tasks)
   try {
     if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
@@ -192,7 +192,7 @@ export function watchHealth(options: {
         for (const entry of list.getEntries()) slowFrame(entry.startTime, entry.startTime + entry.duration, []);
       }).observe({ type: 'longtask', buffered: false });
     }
-  } catch (error) { console.warn('[health] no long tasks in this browser', error); }
+  } catch { /* no long tasks in this browser */ }
 
   return {
     longFrames,

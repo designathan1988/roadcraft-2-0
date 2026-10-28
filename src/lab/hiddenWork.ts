@@ -25,7 +25,7 @@ import { lookup, mapOfModule, type DecodedMap } from './code/sourceMap';
 const WINDOW_MS = 5000;
 const TELL_MS_PER_S = 1;
 
-type SiteKind =
+export type SiteKind =
   | 'frame' | 'timer' | 'interval' | 'idle' | 'event' | 'observer'
   | 'context' | 'canvas' | 'context2d' | 'encode'
   | 'buffer' | 'texture' | 'material' | 'geometry';

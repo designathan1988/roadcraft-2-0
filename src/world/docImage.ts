@@ -8,7 +8,7 @@ export const PARTS_OF_SAVED = {
   version: null, unit: null,
   nodes: 'nodes', segments: 'segments', terrain: 'terrainStamps', relief: 'terrainRelief',
   markingStyle: 'markingStyle', nature: 'nature', poles: 'poles', poleSpans: 'poleSpans', paint: 'terrainPaint',
-  gullies: ['gullyDabs', 'gullyAuto'], elements: 'elements', trees: 'trees',
+  fog: ['fogDabs', 'fogSettings'], gullies: ['gullyDabs', 'gullyAuto'], clouds: 'clouds', elements: 'elements', trees: 'trees',
   weather: 'weather', treeClearings: 'treeClearings', landscape: 'landscape', transit: 'transit', barriers: 'barriers',
   buildings: 'buildings', zones: 'zones', zoneMarks: 'zoneMarks', lots: 'lots', lotKeys: 'lotKeys', people: 'people', economy: 'economy', allocators: 'allocators',
 } as const satisfies Record<keyof SerializedDoc, RecordPart | ListPart | ValuePart | readonly (ListPart | ValuePart)[] | null>;

@@ -12,16 +12,4 @@ describe("a structure's sway", () => {
     expect(a.customProgramCacheKey()).toBe(b.customProgramCacheKey());
     expect(c.customProgramCacheKey()).not.toBe(a.customProgramCacheKey());
   });
-
-  it('keeps the patch a material had before it in its key: a patched lens and a plain housing are two programs', () => {
-    const housing = new MeshStandardMaterial(), lens = new MeshStandardMaterial(), other = new MeshStandardMaterial();
-    lens.onBeforeCompile = (shader) => { shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', 'lens glow'); };
-    other.onBeforeCompile = lens.onBeforeCompile;
-    applyStructureSway(housing, 3, 6, 0.1, 'signal-housing');
-    applyStructureSway(lens, 3, 6, 0.1, 'signal-lens');
-    applyStructureSway(other, 3, 6, 0.1, 'signal-lens-2');
-    expect(lens.customProgramCacheKey()).not.toBe(housing.customProgramCacheKey());
-    // The same patch is the same program.
-    expect(other.customProgramCacheKey()).toBe(lens.customProgramCacheKey());
-  });
 });

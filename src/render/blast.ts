@@ -28,7 +28,6 @@ import {
 
 import { TUNED_UNIT, m } from '@world/units';
 import { pullTowardEye } from './depthConvention';
-import { pinned } from './pinned';
 import type { Exhaust } from './exhaust';
 
 /** Explosions, and what they throw */
@@ -106,8 +105,6 @@ const WIRE_POINTS = 12;
 const GRAVITY = m(9.8);
 /** DO NOT make it endless: it sprayed 110 particles a second and kept `active()` - every frame drawn */
 const GEYSER_SECONDS = 45, GEYSER_FADE = 6;
-/** A crater's age at which it has grown to its full size (0.4 + age * 6 reaches 1). */
-const CRATER_GROWN = 0.1;
 
 interface Piece {
   readonly mesh: 'box' | 'cylinder' | 'car' | 'slab' | 'mesh';
@@ -209,8 +206,7 @@ function craterTexture(road: boolean): CanvasTexture | null {
 
 /** `light`: the flash, made by the renderer and in the scene since it opened (`PlayEffectsContext.lights`). */
 export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
-  // Never moved as objects: the group, the debris and crater meshes (placed by their instances), the wires (by their vertices); the ring and the wrecks move themselves.
-  const group = pinned(new Group());
+  const group = new Group();
   group.name = 'blast';
   const debrisMaterial = new MeshStandardMaterial({ roughness: 0.9, metalness: 0.05 });
   const boxes = new InstancedMesh(new BoxGeometry(1, 1, 1), debrisMaterial, MAX_PIECES);
@@ -236,7 +232,6 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
     .translate(0, 0, -0.5).rotateX(-Math.PI / 2);
   const slabs = new InstancedMesh(slabGeometry, debrisMaterial, MAX_PIECES);
   for (const mesh of [boxes, cylinders, shells, slabs]) {
-    pinned(mesh);
     mesh.name = 'blast-debris';
     mesh.instanceMatrix.setUsage(DynamicDrawUsage);
     mesh.count = 0;
@@ -270,13 +265,13 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   craterMaterials.push(soot);
   const craterMeshes = craterMaterials.map((material, i) => {
     if (i === 2) {
-      const mesh = pinned(new InstancedMesh(craterGeometry, material, MAX_SOOT));
+      const mesh = new InstancedMesh(craterGeometry, material, MAX_SOOT);
       mesh.name = 'blast-soot';
       mesh.count = 0; mesh.frustumCulled = false; mesh.renderOrder = 2; mesh.receiveShadow = true; mesh.visible = false;
       group.add(mesh);
       return mesh;
     }
-    const mesh = pinned(new InstancedMesh(craterGeometry, material, MAX_CRATERS));
+    const mesh = new InstancedMesh(craterGeometry, material, MAX_CRATERS);
     mesh.name = 'blast-craters';
     mesh.count = 0;
     mesh.frustumCulled = false;
@@ -298,7 +293,7 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   const wireGeometry = new BufferGeometry();
   const wirePositions = new Float32Array(MAX_WIRES * (WIRE_POINTS - 1) * 2 * 3);
   wireGeometry.setAttribute('position', new BufferAttribute(wirePositions, 3));
-  const wires = pinned(new LineSegments(wireGeometry, new LineBasicMaterial({ color: 0x141414 })));
+  const wires = new LineSegments(wireGeometry, new LineBasicMaterial({ color: 0x141414 }));
   wires.name = 'blast-wires';
   wires.frustumCulled = false;
   wires.visible = false;
@@ -310,8 +305,6 @@ export function createBlast(exhaust: Exhaust, light: PointLight): Blast {
   const soots: Crater[] = [];
   const geysers: { x: number; y: number; z: number; carry: number; until: number; weak?: boolean }[] = [];
   let sootDirty = false;
-  /** A crater added or all let go: the craters written again even when none grows. */
-  let craterDirty = false;
   const fires: { at: Vector3; until: number; rate: number; carry: number; piece?: Piece; size?: number; smoke?: number }[] = [];
   const arcs: { at: Vector3; until: number; next: number }[] = [];
   let time = 0;
@@ -536,7 +529,6 @@ ${shader.fragmentShader}`.replace('#include <color_fragment>', `#include <color_
       const road = ground === 'road';
       craters.push({ x, y, z, r: radius, road, age: 0, angle: Math.random() * Math.PI * 2 });
       if (craters.length > MAX_CRATERS) craters.shift();
-      craterDirty = true;
       // The broken rim: slabs of the surface heaved up and tilted round the hole.
       const slabs = Math.round(8 + radius * 0.8);
       for (let i = 0; i < slabs; i++) {
@@ -611,7 +603,6 @@ ${shader.fragmentShader}`.replace('#include <color_fragment>', `#include <color_
       for (const p of pieces) if (p.object) dropObject(p.object);
       pieces.length = 0; ropes.length = 0; craters.length = 0; soots.length = 0; geysers.length = 0; fires.length = 0; arcs.length = 0;
       sootDirty = true;
-      craterDirty = true;
       drawnPieces = -1;
       flash = 0; ringAge = Infinity; shakeAmp = 0;
     },
@@ -701,27 +692,23 @@ ${shader.fragmentShader}`.replace('#include <color_fragment>', `#include <color_
         boxes.count = nb; cylinders.count = nc; shells.count = ns; slabs.count = nl;
         for (const mesh of [boxes, cylinders, shells, slabs]) uploadWritten(mesh);
       }
-      // A crater is still once grown (full at CRATER_GROWN s): written again only while one grows or the set changed.
-      if (craterDirty || craters.some((c) => c.age < CRATER_GROWN)) {
-        craterDirty = false;
-        const counts = [0, 0];
-        for (const c of craters) {
-          c.age += wall;
-          const k = c.road ? 0 : 1;
-          const grow = Math.min(1, 0.4 + c.age * 6);
-          o.position.set(c.x, c.z + m(0.03), -c.y);
-          o.quaternion.setFromAxisAngle(tmp1.set(0, 1, 0), c.angle);
-          o.scale.set(c.r * 2 * grow, 1, c.r * 2 * grow);
-          o.updateMatrix();
-          craterMeshes[k]!.setMatrixAt(counts[k]!++, o.matrix);
-        }
-        // Only what was written goes up, and nothing when there are none
-        craterMeshes.forEach((mesh, k) => {
-          if (k >= 2 || (counts[k] === 0 && mesh.count === 0)) return;
-          mesh.count = counts[k]!;
-          uploadWritten(mesh);
-        });
+      const counts = [0, 0];
+      for (const c of craters) {
+        c.age += wall;
+        const k = c.road ? 0 : 1;
+        const grow = Math.min(1, 0.4 + c.age * 6);
+        o.position.set(c.x, c.z + m(0.03), -c.y);
+        o.quaternion.setFromAxisAngle(tmp1.set(0, 1, 0), c.angle);
+        o.scale.set(c.r * 2 * grow, 1, c.r * 2 * grow);
+        o.updateMatrix();
+        craterMeshes[k]!.setMatrixAt(counts[k]!++, o.matrix);
       }
+      // Only what was written goes up, and nothing when there are none
+      craterMeshes.forEach((mesh, k) => {
+        if (k >= 2 || (counts[k] === 0 && mesh.count === 0)) return;
+        mesh.count = counts[k]!;
+        uploadWritten(mesh);
+      });
       // Soot is still: written again only when some was added.
       if (sootDirty) {
         sootDirty = false;

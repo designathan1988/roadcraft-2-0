@@ -6,7 +6,7 @@ export type ChangeRect = readonly [number, number, number, number];
 /** What the player changes in the document. */
 export type DocChangeKind =
   | 'roads' | 'traffic' | 'terrain' | 'paint' | 'buildings' | 'zones' | 'lots' | 'utilities' | 'barriers' | 'landscape'
-  | 'transit' | 'people' | 'trees' | 'clearings' | 'elements' | 'weather' | 'nature' | 'gullies'
+  | 'transit' | 'people' | 'trees' | 'clearings' | 'elements' | 'fog' | 'clouds' | 'weather' | 'nature' | 'gullies'
   /** The balance (`economy.ts`): an edit paid for, or a demolition paid back. */
   | 'economy'
   /** The land already cut into lots (`LotStore.addKeys`): no lot came or went, so a reader of the lots by id */
@@ -18,7 +18,7 @@ export type DocChangeKind =
 /** Every kind of change to the document, listed once (checked complete by the type) */
 const DOC_KINDS = {
   roads: 1, traffic: 1, terrain: 1, paint: 1, buildings: 1, zones: 1, lots: 1, utilities: 1, barriers: 1, landscape: 1,
-  transit: 1, people: 1, trees: 1, clearings: 1, elements: 1, weather: 1, nature: 1, gullies: 1, economy: 1,
+  transit: 1, people: 1, trees: 1, clearings: 1, elements: 1, fog: 1, clouds: 1, weather: 1, nature: 1, gullies: 1, economy: 1,
   lotKeys: 1, markingStyle: 1, buildingWear: 1,
 } as const satisfies Record<DocChangeKind, 1>;
 export const DOC_CHANGE_KINDS = Object.keys(DOC_KINDS) as DocChangeKind[];

@@ -108,7 +108,7 @@ function towardStreet(net: Network, x: number, y: number): { x: number; y: numbe
  * street was not held found no kerb, turned by the arm's sign alone, and half the street lights of a district faced the houses (the owner's
  * photos, 2026-10-27).
  */
-function roadward(doc: RoadDoc, x: number, y: number, reach: number): { x: number; y: number } | null {
+export function roadward(doc: RoadDoc, x: number, y: number, reach: number): { x: number; y: number } | null {
   let best: { x: number; y: number } | null = null, bestD = reach;
   for (const tile of tilesMeeting([x - reach, y - reach, x + reach, y + reach])) {
     for (const id of doc.tileRoads(tile).segments) {

@@ -28,11 +28,13 @@ import { MAX_TERRAIN_STAMPS, RELIEF_LEGACY, readRelief, type ReliefVersion, type
 import { normalizeParking, sameParking, type SegmentParking } from './parking';
 import { type LandscapeItem, type LandscapeKind, type SignType, LANDSCAPE_KINDS, SIGN_TEXT_MAX, isLandscapeKind, isSignType } from './landscape';
 import { MAX_PAINT_DABS, type PaintDab, isPaintKind } from './terrainPaint';
+import { MAX_PLACED_CLOUDS, readCloud, type PlacedCloud } from './clouds';
 import { DEFAULT_WEATHER, readWeather, type Weather } from './weather';
 import { DEFAULT_ECONOMY, readEconomy, type Economy } from './economy';
 import { MAX_PLANTED_TREES, MAX_TREE_CLEARINGS, readPlantedTree, readTreeClearing, type PlantedTree, type TreeClearing } from './trees';
 import { MAX_ELEMENTS, readElement, type ElementItem, type ElementKind } from './elements';
 import { DEFAULT_GULLY_AUTO, MAX_GULLY_DABS, readGullyDab, type GullyDab } from './gullies';
+import { DEFAULT_FOG, MAX_FOG_DABS, readFogDab, readFogSettings, type FogDab, type FogSettings } from './fogPaint';
 import { isNatureSettings, type NatureSettings } from './ecology';
 import { type TransitData, emptyTransit, hasTransit, normalizeTransit } from './transit';
 import { type SegmentDirection, casingHalf, roadProfile } from './roadTypes';
@@ -208,9 +210,14 @@ export class RoadDoc {
   nature: NatureSettings | null = null;
   /** Ground painted over the terrain (`terrainPaint.ts`), oldest first. */
   readonly terrainPaint: PaintDab[] = [];
+  /** Fog painted over the land (`fogPaint.ts`), oldest first, and how it behaves. */
+  readonly fogDabs: FogDab[] = [];
+  fogSettings: FogSettings = DEFAULT_FOG;
   /** Gullies cut or wiped with the brush (`gullies.ts`), oldest first, and how much of the steep land carries them of itself (0..1). */
   readonly gullyDabs: GullyDab[] = [];
   gullyAuto = DEFAULT_GULLY_AUTO;
+  /** Clouds the player placed in the sky (`clouds.ts`). */
+  readonly clouds: PlacedCloud[] = [];
   /** The map's weather (`weather.ts`). */
   weather: Weather = DEFAULT_WEATHER;
   /** The money the roads are paid from (`economy.ts`). */
@@ -381,7 +388,9 @@ export class RoadDoc {
   get transitRevision(): number { return this.changes.serialOf('transit'); }
   get natureRevision(): number { return this.changes.serialOf('nature'); }
   get paintRevision(): number { return this.changes.serialOf('paint'); }
+  get fogRevision(): number { return this.changes.serialOf('fog'); }
   get gullyRevision(): number { return this.changes.serialOf('gullies'); }
+  get cloudRevision(): number { return this.changes.serialOf('clouds'); }
   get weatherRevision(): number { return this.changes.serialOf('weather'); }
   get treeRevision(): number { return this.changes.serialOf('trees'); }
   get clearingRevision(): number { return this.changes.serialOf('clearings'); }
@@ -1309,6 +1318,17 @@ export class RoadDoc {
   }
 
   /** False: its tile is full, nothing laid. */
+  addFogDab(dab: FogDab): boolean {
+    const { taken, counts } = this.withRoom('fogDabs', [dab]);
+    if (!taken.length) return false;
+    this.ownList('fogDabs');
+    this.fogDabs.push({ ...dab });
+    this.keepCounts('fogDabs', counts);
+    this.changes.record('fog', [circleRect(dab)]);
+    return true;
+  }
+
+  /** False: its tile is full, nothing laid. */
   addGullyDab(dab: GullyDab): boolean {
     const { taken, counts } = this.withRoom('gullyDabs', [dab]);
     if (!taken.length) return false;
@@ -1440,6 +1460,62 @@ export class RoadDoc {
     this.elements.length = 0;
     this.elementGrid = null;
     this.changes.record('elements', [where]);
+  }
+
+  /** A new cloud; null when the sky already holds as many as it may. */
+  addCloud(value: Omit<PlacedCloud, 'id'>): PlacedCloud | null {
+    if (this.clouds.length >= MAX_PLACED_CLOUDS) return null;
+    this.ownList('clouds');
+    const id = this.clouds.reduce((m, c) => Math.max(m, c.id), 0) + 1;
+    const cloud = placedCloud(value, id);
+    this.clouds.push(cloud);    this.changes.record('clouds', [rectAround([cloud], cloud.size)!], { ids: [id] });
+    return cloud;
+  }
+
+  /** Several clouds at once, as many as the sky has room for: how many were added. */
+  addClouds(values: readonly Omit<PlacedCloud, 'id'>[]): number {
+    this.ownList('clouds');
+    let id = this.clouds.reduce((m, c) => Math.max(m, c.id), 0);
+    let added = 0;
+    for (const value of values) {
+      if (this.clouds.length >= MAX_PLACED_CLOUDS) break;
+      this.clouds.push(placedCloud(value, ++id));
+      added++;
+    }
+    if (added > 0) {      const placed = this.clouds.slice(-added);
+      this.changes.record('clouds', [rectAround(placed, Math.max(...placed.map((c) => c.size)))!]);
+    }
+    return added;
+  }
+
+  updateCloud(id: number, change: Partial<Omit<PlacedCloud, 'id'>>): void {
+    const i = this.clouds.findIndex((c) => c.id === id);
+    if (i < 0) return;
+    this.ownList('clouds');
+    const was = this.clouds[i]!;
+    const now = { ...was, ...change, id };
+    this.clouds[i] = now;    this.changes.record('clouds', [rectAround([was, now], Math.max(was.size, now.size))!], { ids: [id] });
+  }
+
+  removeCloud(id: number): void {
+    const i = this.clouds.findIndex((c) => c.id === id);
+    if (i < 0) return;
+    this.ownList('clouds');
+    const [was] = this.clouds.splice(i, 1);    this.changes.record('clouds', [rectAround([was!], was!.size)!], { ids: [id] });
+  }
+
+  clearFog(): void {
+    if (this.fogDabs.length === 0) return;
+    this.ownList('fogDabs');
+    const where = circlesBox(this.fogDabs);
+    this.fogDabs.length = 0;
+    this.changes.record('fog', where);
+  }
+
+  setFogSettings(next: Partial<FogSettings>): void {
+    const merged = readFogSettings({ ...this.fogSettings, ...next });
+    if (JSON.stringify(merged) === JSON.stringify(this.fogSettings)) return;
+    this.fogSettings = merged;    this.changes.record('fog', null);
   }
 
   clearPaint(): void {
@@ -2017,6 +2093,7 @@ export class RoadDoc {
     copy.terrainRelief = this.terrainRelief;
     copy.markingStyle = this.markingStyle;
     copy.nature = this.nature;
+    copy.fogSettings = this.fogSettings;
     copy.gullyAuto = this.gullyAuto;
     copy.weather = this.weather;
     copy.economy = this.economy;
@@ -2072,6 +2149,7 @@ export class RoadDoc {
     this.terrainRelief = copy.terrainRelief;
     this.markingStyle = copy.markingStyle;
     this.nature = copy.nature;
+    this.fogSettings = copy.fogSettings;
     this.gullyAuto = copy.gullyAuto;
     this.weather = copy.weather;
     this.economy = copy.economy;
@@ -2158,8 +2236,11 @@ export class RoadDoc {
     copy.markingStyle = this.markingStyle;
     copy.nature = this.nature ? { ...this.nature } : null;
     pushAll(copy.terrainPaint, this.terrainPaint.map((dab) => ({ ...dab })));
+    pushAll(copy.fogDabs, this.fogDabs.map((dab) => ({ ...dab })));
+    copy.fogSettings = { ...this.fogSettings };
     pushAll(copy.gullyDabs, this.gullyDabs.map((dab) => ({ ...dab })));
     copy.gullyAuto = this.gullyAuto;
+    pushAll(copy.clouds, this.clouds.map((c) => ({ ...c })));
     pushAll(copy.elements, this.elements.map((e) => ({ ...e })));
     pushAll(copy.trees, this.trees.map((t) => ({ ...t })));
     pushAll(copy.treeClearings, this.treeClearings.map((c) => ({ ...c })));
@@ -2481,7 +2562,9 @@ export class RoadDoc {
     switch (part) {
       case 'terrainStamps': return this.terrainStamps;
       case 'terrainPaint': return this.terrainPaint;
+      case 'fogDabs': return this.fogDabs;
       case 'gullyDabs': return this.gullyDabs;
+      case 'clouds': return this.clouds;
       case 'trees': return this.trees;
       case 'treeClearings': return this.treeClearings;
       case 'elements': return this.elements;
@@ -2498,6 +2581,7 @@ export class RoadDoc {
       case 'terrainRelief': return this.terrainRelief;
       case 'markingStyle': return this.markingStyle;
       case 'nature': return this.nature;
+      case 'fogSettings': return this.fogSettings;
       case 'gullyAuto': return this.gullyAuto;
       case 'weather': return this.weather;
       case 'economy': return this.economy;
@@ -2514,6 +2598,7 @@ export class RoadDoc {
       case 'terrainRelief': this.terrainRelief = value as ReliefVersion; kinds.add('terrain'); return;
       case 'markingStyle': this.markingStyle = value as MarkingStyleId; kinds.add('markingStyle'); return;
       case 'nature': this.nature = value as NatureSettings | null; kinds.add('nature'); return;
+      case 'fogSettings': this.fogSettings = value as FogSettings; kinds.add('fog'); return;
       case 'gullyAuto': this.gullyAuto = value as number; kinds.add('gullies'); return;
       case 'weather': this.weather = value as Weather; kinds.add('weather'); return;
       case 'economy': this.economy = value as Economy; kinds.add('economy'); return;
@@ -2630,12 +2715,27 @@ export class RoadDoc {
       others.push('elements');
     }
 
+    if (moved('clouds') && (whole || !sameText(this.clouds, source.clouds))) {
+      this.ownList('clouds');
+      this.clouds.length = 0;
+      pushAll(this.clouds, source.clouds.map((c) => ({ ...c })));
+      others.push('clouds');
+    }
+
     if (moved('gullies') && (whole || this.gullyAuto !== source.gullyAuto || !sameText(this.gullyDabs, source.gullyDabs))) {
       this.ownList('gullyDabs');
       this.gullyDabs.length = 0;
       pushAll(this.gullyDabs, source.gullyDabs.map((dab) => ({ ...dab })));
       this.gullyAuto = source.gullyAuto;
       others.push('gullies');
+    }
+
+    if (moved('fog') && (whole || !sameText(this.fogDabs, source.fogDabs) || !sameText(this.fogSettings, source.fogSettings))) {
+      this.ownList('fogDabs');
+      this.fogDabs.length = 0;
+      pushAll(this.fogDabs, source.fogDabs.map((dab) => ({ ...dab })));
+      this.fogSettings = { ...source.fogSettings };
+      others.push('fog');
     }
 
     if (moved('paint') && (whole || !samePaint(this.terrainPaint, source.terrainPaint))) {
@@ -2741,6 +2841,7 @@ export class RoadDoc {
         ...(this.markingStyle !== 'classic' ? { markingStyle: this.markingStyle } : {}),
         ...(this.nature ? { nature: { ...this.nature } } : {}),
         ...(!samePlain(this.weather, DEFAULT_WEATHER) ? { weather: { ...this.weather } } : {}),
+        fogSettings: { ...this.fogSettings },
         gullyAuto: this.gullyAuto,
         ...(this.economy.balance !== DEFAULT_ECONOMY.balance ? { economy: { balance: this.economy.balance } } : {}),
       };
@@ -2750,7 +2851,7 @@ export class RoadDoc {
     }
   }
 
-  /** The map's parts no tile holds (CLAUDE.md, "Streaming world"): its terrain stamps, gullies, clearings, zones, people, transit, economy, weather and the like, as `toJSON` writes them - the streamed world's values (`editor/tileStore.ts` WorldMeta). */
+  /** The map's parts no tile holds (CLAUDE.md, "Streaming world"): its terrain stamps, fog, gullies, clouds, clearings, zones, people, transit, economy, weather and the like, as `toJSON` writes them - the streamed world's values (`editor/tileStore.ts` WorldMeta). */
   worldValues(): Omit<SerializedDoc, 'version' | 'nodes' | 'segments' | 'poles' | 'poleSpans' | 'landscape' | 'barriers' | 'buildings' | 'lots' | 'lotKeys' | 'paint' | 'trees' | 'elements'> {
     const { version: _v, nodes: _n, segments: _s, poles: _p, poleSpans: _ps, landscape: _l, barriers: _b, buildings: _bu, lots: _lo, lotKeys: _k, paint: _pa, trees: _t, elements: _e, ...rest } = this.serialized(false, false);
     // DO NOT start the map's own allocators at 1 again each session: a record made where no tile is loaded takes from them (`takeId`), and its id would meet an older one.
@@ -2779,7 +2880,9 @@ export class RoadDoc {
       ...this.worldPart('markingStyle'),
       ...this.worldPart('nature'),
       ...(withRecords && this.terrainPaint.length > 0 ? { paint: this.terrainPaint.map((dab) => ({ ...dab })) } : {}),
+      ...this.worldPart('fog'),
       ...this.worldPart('gullies'),
+      ...this.worldPart('clouds'),
       ...(withRecords && this.elements.length > 0 ? { elements: this.elements.map((e) => ({ ...e })) } : {}),
       ...(withRecords && this.trees.length > 0 ? { trees: this.trees.map((t) => ({ ...t })) } : {}),
       ...this.worldPart('weather'),
@@ -2809,8 +2912,11 @@ export class RoadDoc {
       case 'terrain': return { terrain: this.terrainStamps.map((stamp) => ({ ...stamp })), ...(this.terrainRelief !== RELIEF_LEGACY ? { relief: this.terrainRelief } : {}) };
       case 'markingStyle': return this.markingStyle !== 'classic' ? { markingStyle: this.markingStyle } : {};
       case 'nature': return this.nature ? { nature: { ...this.nature } } : {};
+      case 'fog': return this.fogDabs.length > 0 || JSON.stringify(this.fogSettings) !== JSON.stringify(DEFAULT_FOG)
+        ? { fog: { dabs: this.fogDabs.map((dab) => ({ ...dab })), settings: { ...this.fogSettings } } } : {};
       case 'gullies': return this.gullyDabs.length > 0 || this.gullyAuto !== DEFAULT_GULLY_AUTO
         ? { gullies: { dabs: this.gullyDabs.map((dab) => ({ ...dab })), auto: this.gullyAuto } } : {};
+      case 'clouds': return this.clouds.length > 0 ? { clouds: this.clouds.map((c) => ({ ...c })) } : {};
       case 'weather': return JSON.stringify(this.weather) !== JSON.stringify(DEFAULT_WEATHER) ? { weather: { ...this.weather } } : {};
       case 'clearings': return this.treeClearings.length > 0 ? { treeClearings: this.treeClearings.map((c) => ({ ...c })) } : {};
       case 'zones': return {
@@ -2909,7 +3015,15 @@ export class RoadDoc {
       if (item) doc.elements.push(item);
     }
     if (doc.elements.length) doc.changes.record('elements', null, loaded);
-    // An old map's placed clouds and painted fog (`clouds`, `fog`) are not read: they left the game (MISSION.md item 4, 2026-10-28), the map opens without them.
+    // Absent: a map with no clouds placed.
+    const cloudIds = new Set<number>();
+    for (const raw of data.clouds ?? []) {
+      const cloud = readCloud(raw);
+      if (!cloud || doc.clouds.length >= MAX_PLACED_CLOUDS || cloudIds.has(cloud.id)) continue;
+      cloudIds.add(cloud.id);
+      doc.clouds.push(cloud);
+    }
+    if (doc.clouds.length) doc.changes.record('clouds', null, loaded);
     // Absent: a map with no gullies laid and the land's own at the default.
     if (data.gullies) {
       for (const raw of data.gullies.dabs ?? []) {
@@ -2919,6 +3033,15 @@ export class RoadDoc {
       const auto = data.gullies.auto;
       if (typeof auto === 'number' && Number.isFinite(auto)) doc.gullyAuto = Math.min(1, Math.max(0, auto));
       doc.changes.record('gullies', null, loaded);
+    }
+    // Absent: a map with no fog painted.
+    if (data.fog) {
+      for (const raw of data.fog.dabs ?? []) {
+        const dab = readFogDab(raw);
+        if (dab) doc.fogDabs.push(dab);
+      }
+      doc.fogSettings = readFogSettings(data.fog.settings);
+      doc.changes.record('fog', null, loaded);
     }
     // Absent: a map from before the natural land, which stays on the old one.
     doc.terrainRelief = readRelief(data.relief) ?? RELIEF_LEGACY;
@@ -3066,20 +3189,20 @@ function coordinateKey(x: number, y: number): string {
 
 /** The document's keyed collections, its ordered lists and its single values, as undo restores them (`RoadDoc.restore`). */
 export type RecordPart = 'nodes' | 'segments' | 'poles' | 'poleSpans' | 'landscape' | 'barriers' | 'buildings' | 'lots';
-export type ListPart = 'terrainStamps' | 'terrainPaint' | 'gullyDabs' | 'trees' | 'treeClearings' | 'elements'
+export type ListPart = 'terrainStamps' | 'terrainPaint' | 'fogDabs' | 'gullyDabs' | 'clouds' | 'trees' | 'treeClearings' | 'elements'
   | 'zones' | 'zoneMarks' | 'lotKeys' | 'people';
-export type ValuePart = 'terrainRelief' | 'markingStyle' | 'nature' | 'gullyAuto' | 'weather' | 'economy' | 'transit'
+export type ValuePart = 'terrainRelief' | 'markingStyle' | 'nature' | 'fogSettings' | 'gullyAuto' | 'weather' | 'economy' | 'transit'
   | 'nextZoneId' | 'nextLotId' | 'allocators';
 /** The lists the document holds itself (the lots' keys are the lot store's): what a working copy shares until it writes (`RoadDoc.fork`). */
 type DocListPart = Exclude<ListPart, 'lotKeys'>;
 /** The lists with a cap, each item placed (`OWNER.at`). */
-type CappedPart = 'terrainStamps' | 'terrainPaint' | 'gullyDabs' | 'trees' | 'treeClearings' | 'elements';
+type CappedPart = 'terrainStamps' | 'terrainPaint' | 'fogDabs' | 'gullyDabs' | 'trees' | 'treeClearings' | 'elements';
 /** DECISION 5.1 (the player's, 2026-10-17): each list's cap is a TILE's, and past it the new item is refused with a word to the player; nothing is ever taken away for it. */
 const TILE_CAPS: Readonly<Record<CappedPart, number>> = {
-  terrainStamps: MAX_TERRAIN_STAMPS, terrainPaint: MAX_PAINT_DABS, gullyDabs: MAX_GULLY_DABS,
+  terrainStamps: MAX_TERRAIN_STAMPS, terrainPaint: MAX_PAINT_DABS, fogDabs: MAX_FOG_DABS, gullyDabs: MAX_GULLY_DABS,
   trees: MAX_PLANTED_TREES, treeClearings: MAX_TREE_CLEARINGS, elements: MAX_ELEMENTS,
 };
-const DOC_LISTS: readonly DocListPart[] = ['terrainStamps', 'terrainPaint', 'gullyDabs', 'trees', 'treeClearings', 'elements', 'zones', 'zoneMarks', 'people'];
+const DOC_LISTS: readonly DocListPart[] = ['terrainStamps', 'terrainPaint', 'fogDabs', 'gullyDabs', 'clouds', 'trees', 'treeClearings', 'elements', 'zones', 'zoneMarks', 'people'];
 /** The indices by place a working copy reads from the original until it writes their kind (`RoadDoc.ownIndex`). */
 type IndexKind = 'poles' | 'barriers' | 'landscape';
 const INDEX_KINDS: readonly IndexKind[] = ['poles', 'barriers', 'landscape'];
@@ -3087,7 +3210,7 @@ const INDEX_KINDS: readonly IndexKind[] = ['poles', 'barriers', 'landscape'];
 const ROAD_KINDS: readonly DocChangeKind[] = ['roads', 'traffic'];
 /** The diary kind each list is written under. */
 export const LIST_KINDS: Readonly<Record<ListPart, DocChangeKind>> = {
-  terrainStamps: 'terrain', terrainPaint: 'paint', gullyDabs: 'gullies', trees: 'trees',
+  terrainStamps: 'terrain', terrainPaint: 'paint', fogDabs: 'fog', gullyDabs: 'gullies', clouds: 'clouds', trees: 'trees',
   treeClearings: 'clearings', elements: 'elements', zones: 'zones', zoneMarks: 'zones', lotKeys: 'lotKeys', people: 'people',
 };
 /** What undo or redo puts back: records (undefined: none), stretches of lists (`splice`), values. */
@@ -3287,7 +3410,7 @@ export interface Restoration {
 }
 
 /** The map's parts no tile holds (`RoadDoc.worldPart`), each named as the diary's kind that changes it (`allocators`: the map's own id allocators). */
-export type WorldPart = 'terrain' | 'markingStyle' | 'nature' | 'gullies' | 'weather' | 'clearings' | 'zones' | 'people' | 'transit' | 'economy' | 'allocators';
+export type WorldPart = 'terrain' | 'markingStyle' | 'nature' | 'fog' | 'gullies' | 'clouds' | 'weather' | 'clearings' | 'zones' | 'people' | 'transit' | 'economy' | 'allocators';
 
 export interface SerializedDoc {
   readonly version: 1;
@@ -3337,7 +3460,9 @@ export interface SerializedDoc {
   readonly poleSpans?: readonly { id: number; a: number; b: number }[];
   /** Ground painted over the terrain (`terrainPaint.ts`); OPTIONAL. */
   readonly paint?: readonly { kind: string; x: number; y: number; radius: number; strength: number }[];
+  readonly fog?: { readonly dabs?: readonly unknown[]; readonly settings?: unknown };
   readonly gullies?: { readonly dabs?: readonly unknown[]; readonly auto?: unknown };
+  readonly clouds?: readonly unknown[];
   readonly elements?: readonly unknown[];
   readonly trees?: readonly unknown[];
   readonly weather?: unknown;
@@ -3420,6 +3545,10 @@ function copySegment(segment: RoadSegment): RoadSegment {
   };
 }
 
+/** A cloud placed, its keys in the order a map read back has them (`readCloud`): DO NOT let an undo of the whole map write them in another. */
+const placedCloud = (v: Omit<PlacedCloud, 'id'>, id: number): PlacedCloud =>
+  ({ id, x: v.x, y: v.y, height: v.height, size: v.size, density: v.density, yaw: v.yaw });
+
 /** Around a junction with no road yet, world units. */
 const NODE_PAD = 30;
 /** Side of the cells the street furniture is filed in (`RoadDoc.landscapeIn`), world units. */
@@ -3451,10 +3580,15 @@ function elementsBox(items: readonly ElementItem[]): ChangeRect | null {
 function listBox(part: ListPart, items: readonly unknown[]): ChangeRect | null | undefined {
   if (items.length === 0) return null;
   switch (part) {
-    case 'terrainStamps': case 'terrainPaint': case 'gullyDabs': case 'treeClearings':
+    case 'terrainStamps': case 'terrainPaint': case 'fogDabs': case 'gullyDabs': case 'treeClearings':
       return circlesBox(items as readonly { x: number; y: number; radius: number }[])[0] ?? null;
     case 'trees': return rectAround(items as readonly PlantedTree[], ITEM_PAD);
     case 'elements': return elementsBox(items as readonly ElementItem[]);
+    case 'clouds': {
+      let pad = 0;
+      for (const c of items as readonly PlacedCloud[]) pad = Math.max(pad, c.size);
+      return rectAround(items as readonly PlacedCloud[], pad);
+    }
     default: return undefined;
   }
 }
@@ -3668,7 +3802,7 @@ interface EditRecorder {
   whole: DocImage | null;
 }
 
-const VALUE_PARTS: readonly ValuePart[] = ['terrainRelief', 'markingStyle', 'nature', 'gullyAuto', 'weather', 'economy', 'transit', 'nextZoneId', 'nextLotId', 'allocators'];
+const VALUE_PARTS: readonly ValuePart[] = ['terrainRelief', 'markingStyle', 'nature', 'fogSettings', 'gullyAuto', 'weather', 'economy', 'transit', 'nextZoneId', 'nextLotId', 'allocators'];
 
 /** ONE SIDE OF A BUILDING'S CHANGE AS ITS MEMBERS THAT CHANGED (tldraw's history of record diffs; report "Arquitetura para cidades grandes", "A conta de memória": undo memory proportional to the change, not to the records): the record's keys in their order, and the values of those that differ from the other side. Put back over the record as it stands on the other side (`over`), its keys in their order: the record undone is the record it was, text for text. */
 export class MemberDiff {
@@ -3739,6 +3873,7 @@ export interface SavedGlobals {
   readonly markingStyle?: string;
   readonly nature?: { readonly region: string; readonly seed: number };
   readonly weather?: unknown;
+  readonly fogSettings?: unknown;
   readonly gullyAuto?: number;
   readonly lotKeys?: readonly string[];
   readonly people?: readonly unknown[];

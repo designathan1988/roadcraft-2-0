@@ -483,10 +483,9 @@ export function rigData(scene: Object3D): { readonly nodes: RigNode[]; readonly 
   const at = new Map(order.map((o, i) => [o, i] as const));
   const transfer: ArrayBuffer[] = [];
   // Each value as the attribute reads it: a cooked body's positions and weights are normalised bytes and shorts (`people/cookedPerson.ts`), not floats.
-  // `size`: the components kept a vertex, as `rigFromData` reads them back (a drawn position is four wide, `cookedPerson.ts`; the rig's three).
-  const copy = (a: BufferAttribute, size = a.itemSize): Float32Array => {
-    const f = new Float32Array(a.count * size);
-    for (let i = 0; i < a.count; i++) for (let c = 0; c < size; c++) f[i * size + c] = a.getComponent(i, c);
+  const copy = (a: BufferAttribute): Float32Array => {
+    const f = new Float32Array(a.count * a.itemSize);
+    for (let i = 0; i < a.count; i++) for (let c = 0; c < a.itemSize; c++) f[i * a.itemSize + c] = a.getComponent(i, c);
     transfer.push(f.buffer as ArrayBuffer);
     return f;
   };
@@ -500,7 +499,7 @@ export function rigData(scene: Object3D): { readonly nodes: RigNode[]; readonly 
       transfer.push(inverses.buffer as ArrayBuffer);
       return { ...base, kind: 'skinned', skin: {
         bones: o.skeleton.bones.map((b) => at.get(b) ?? -1), inverses, bind: [...o.bindMatrix.elements], bindMode: o.bindMode,
-        position: copy(g.getAttribute('position') as BufferAttribute, 3),
+        position: copy(g.getAttribute('position') as BufferAttribute),
         skinIndex: copy(g.getAttribute('skinIndex') as BufferAttribute),
         skinWeight: copy(g.getAttribute('skinWeight') as BufferAttribute),
       } };

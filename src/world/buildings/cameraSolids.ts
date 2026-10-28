@@ -128,8 +128,6 @@ export interface SolidsOffPage {
   /** A building's floor known without its record (the floor kept of its row, or the one the cells' jobs measured where its blocks are its
    *  volumes: `floors.ts`); undefined: worked out from its record (`floorAt`). */
   footOf(id: BuildingId, blocksAreVolumes: boolean): number | undefined;
-  /** Moves whenever a floor `footOf` answers may have become known (a row's floor kept, a job's floors learned); none: asked at every frame. */
-  footsVersion?(): number;
   /** A cell filed from off the page: what the camera and the canyon light read there may have changed (a frame asked). */
   arrived?(): void;
 }
@@ -175,11 +173,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   let serial = 0, wholeAt = 0;
   /** The cells of the last `prefetch` (DO NOT look again at every cell of a view that stands: thousands a frame). */
   let prefetched = '';
-  /** The cell ranges `askCells` covered, each with `askSerial` then: a cell once asked is filed or stays asked until its answer files it, so the
-   *  same ranges ask nothing more until a cell leaves `asking` unfiled (a stale answer, a failed job) or the filing is let go whole, which move
-   *  `askSerial`. DO NOT look up every cell of the canyon light's and the occluders' windows at every frame: 1,600 cells a 2 km window. */
-  const askedRanges = new Map<string, number>();
-  let askSerial = 0;
   let buildings: BuildingStore | null = null;
   /** Buildings a job answered for with no floor known of them yet (the cells' jobs not come there): filed once their floor is known, or
    *  worked out here a few a frame (`settleFootless`), those of a cell a question reaches at once. DO NOT work out their floors in the
@@ -191,12 +184,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   const cellRect = (key: number): Rect => [cellX(key) * CELL, cellY(key) * CELL, (cellX(key) + 1) * CELL, (cellY(key) + 1) * CELL];
   /** By the cell each waits in (its centre's), in the order they came. */
   const footless = new Map<number, Footless[]>();
-  /** What the last whole walk of the waiting buildings was made for (`footsVersion`, the filing's `version`), and the earliest a building left
-   *  waiting runs out of its wait: walked again only when one of them moved, a building came to wait, or a walk was cut by its deadline.
-   *  DO NOT ask every waiting building's floor at every frame: each asked the cells' digest and the jobs' floors again (up to 2 ms a frame). */
-  let walkedFor = '';
-  let walkDue = Infinity;
-  let walkAgain = true;
   /** One waiting building filed if it can be: with the floor now known of it (the cells' jobs measure it with the masses, the first level to
    *  land), or worked out here when `work` is asked (a question reached its cell), when the jobs never measure it (its blocks are not its
    *  volumes) or when it waited past `FOOTLESS_WAIT_MS`; whether it was. DO NOT work out on the page what the masses' jobs are about to
@@ -225,31 +212,21 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
       arrived.push(cellRect(cell));
       return;
     }
-    const foots = offPage.footsVersion?.();
-    const walkKey = foots === undefined ? '' : `${foots}|${version}`;
-    if (foots !== undefined && !walkAgain && walkKey === walkedFor && performance.now() < walkDue) return;
-    let due = Infinity;
     for (const [key, list] of footless) {
       let kept = 0, k = 0, now = performance.now();
       for (; k < list.length; k++) {
         // The clock read a few buildings apart: reading it for each was a cost of its own.
         if ((k & 7) === 0) now = performance.now();
         if (now >= until) break;
-        const f = list[k]!;
-        if (!settleOne(town, f, false, now)) { list[kept++] = f; due = Math.min(due, f.since + FOOTLESS_WAIT_MS); }
+        if (!settleOne(town, list[k]!, false, now)) list[kept++] = list[k]!;
       }
       const settled = kept < k;
-      // Cut by the deadline: the rest walked at the next frame.
-      if (k < list.length) walkAgain = true;
       for (; k < list.length; k++) list[kept++] = list[k]!;
       list.length = kept;
       if (settled) arrived.push(cellRect(key));
       if (kept === 0) footless.delete(key);
-      if (walkAgain && performance.now() >= until) return;
+      if (performance.now() >= until) return;
     }
-    walkedFor = walkKey;
-    walkDue = due;
-    walkAgain = false;
   };
   /** The cell a building's solids are kept waiting by: the one its centre stands in. */
   const cellOfRows = (rows: Float64Array, fallback: number): number =>
@@ -336,7 +313,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         whole = false;
         wholeAt = serial;
         prefetched = '';
-        askSerial++;
       } else {
         for (const id of pending) {
           filing.remove(id);
@@ -363,11 +339,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   function askCells(rects: readonly Rect[]): void {
     const town = buildings;
     if (!offPage || !town || whole) return;
-    const range = rects.map((r) => `${Math.floor(r[0] / CELL)},${Math.floor(r[1] / CELL)},${Math.floor(r[2] / CELL)},${Math.floor(r[3] / CELL)}`).join('|');
-    if (askedRanges.get(range) === askSerial) return;
-    // A handful of windows asked a frame (the canyon light's, the occluders'): the ones of a view left behind let go.
-    if (askedRanges.size >= 16) askedRanges.clear();
-    askedRanges.set(range, askSerial);
     {
       // The cells to ask, by the block of `PREFETCH_BLOCK` cells they stand in: one job a block.
       const blocks = new Map<number, number[]>();
@@ -411,7 +382,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
                 let list = footless.get(at);
                 if (!list) footless.set(at, list = []);
                 list.push({ id, rows: answer.rows, blocksAreVolumes: answer.blocksAreVolumes, since: performance.now() });
-                walkAgain = true;
                 continue;
               }
               // Changed since it was asked, or no floor known of it: as the page files it, from its record as it stands.
@@ -420,7 +390,7 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
             }
             for (const key of cells) { filled.add(key); arrived.push(cellRect(key)); }
             offPage.arrived?.();
-          } else askSerial++;
+          }
           if (!asking.size) changedAt.clear();
         };
         const at: [number, number] = [(sx / cells.length + 0.5) * CELL, (sy / cells.length + 0.5) * CELL];
@@ -432,7 +402,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         offPage.ask(ids, town, at, [rx0, ry0, rx1, ry1]).then(landed, (error: unknown) => {
           console.error('[buildings] a block of the camera\'s solids could not be worked out off the page; filled when asked', error);
           for (const key of cells) asking.delete(key);
-          askSerial++;
           if (!asking.size) changedAt.clear();
         });
       }
@@ -453,7 +422,7 @@ const cellY = (key: number): number => (key % 8192) - 4096;
 
 /** Numbers of a building's solid volume as it stands on no floor (`solidRowsOf`): the building's centre and turn, the volume's box in its frame,
  *  its top over the floor (with `CLEARANCE`), the bottom and top of its walls over the floor (NaN: it hides nothing for sure), their inset. */
-const SOLID_ROW = 12;
+export const SOLID_ROW = 12;
 const R_BX = 0, R_BY = 1, R_COS = 2, R_SIN = 3, R_X0 = 4, R_Y0 = 5, R_X1 = 6, R_Y1 = 7, R_TOP = 8, R_WALL0 = 9, R_WALL1 = 10, R_INSET = 11;
 
 /**

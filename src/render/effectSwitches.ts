@@ -3,7 +3,7 @@ import type { Object3D } from 'three';
 /** THE EFFECT SWITCHES: every effect and layer of the drawing, each turned off to measure what it costs the GPU (the effects panel, `effectsWiring.ts`). */
 
 /** The post chain's passes (`postprocess.ts`): skipped by the composer when off (three's EffectComposer, `pass.enabled === false`). */
-export const POST_SWITCHES = ['ambientOcclusion', 'canyonLight', 'bloom', 'atmosphere', 'smaa', 'sharpen'] as const;
+export const POST_SWITCHES = ['ambientOcclusion', 'canyonLight', 'bloom', 'clouds', 'smaa', 'sharpen'] as const;
 /** The light: shadows, the sky's reflection and each light. */
 export const LIGHT_SWITCHES = ['shadows', 'shadowUpdate', 'environmentMap', 'skyFill', 'ambient', 'fillLight', 'pointLights', 'surfaceDetail'] as const;
 /** What is drawn, layer by layer: hidden only while the frame is drawn (what the game sets each frame stands). */

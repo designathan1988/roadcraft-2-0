@@ -1,3 +1,4 @@
+import { Color } from 'three';
 import { resolveBlocks } from '@world/buildings/blocks';
 import { floorHeight, frontFloorHeight, type GroundAt, type PavedAt } from '@world/buildings/foundation';
 import { closedBlocks } from '@world/buildings/geometry';
@@ -26,7 +27,12 @@ export const PLATE_DETAIL: MassDetail = { drop: m(8), boxes: true };
 /** Where the wall of a block on the ground starts: below the lowest ground under it, as the detailed plinth does. */
 export const BURY = m(1.5);
 
+export function rgbOf(hex: number, shade = 1): [number, number, number] {
+  const c = new Color().setHex(hex);
+  return [c.r * shade, c.g * shade, c.b * shade];
+}
 
+export type Rgb = readonly [number, number, number];
 /** Where a window sits in its storey from afar when its bay says nothing of it (a pillar's arcade): shares of the storey height from its floor. */
 export const MASS_SILL = 0.3;
 export const MASS_HEAD = 0.85;

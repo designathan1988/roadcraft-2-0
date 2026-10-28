@@ -95,9 +95,13 @@ export function rescaleSerializedDoc(data: SerializedDoc): SerializedDoc {
     return lengths(placed(at(stamp), place, 'ox', 'oy'), factor, ['radius', 'strength', 'level']);
   });
   out.paint = list(data.paint, scale(['radius']));
+  if (isRecord(data.fog)) {
+    out.fog = { ...data.fog, dabs: list((data.fog as { dabs?: unknown[] }).dabs, scale(['radius', 'height', 'speed'])) };
+  }
   if (isRecord(data.gullies)) {
     out.gullies = { ...data.gullies, dabs: list((data.gullies as { dabs?: unknown[] }).dabs, scale(['radius'])) };
   }
+  out.clouds = list(data.clouds, scale(['height', 'size']));
   out.elements = list(data.elements, scale(['size']));
   out.trees = list(data.trees, scale(['height']));
   out.treeClearings = list(data.treeClearings, scale(['radius']));

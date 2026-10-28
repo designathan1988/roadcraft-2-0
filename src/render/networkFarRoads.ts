@@ -101,7 +101,7 @@ export function farLevelMeshes(net: Network, field: RoadReads, groundAt: (x: num
 export type FarTileSource = (doc: RoadDoc, tile: number, cell: number, at: readonly [number, number]) => Promise<FarLevel | null>;
 
 /** How far round the view's centre the tiles are that the opening waits for (`pending`): the view's want reach of road cells (`renderer.ts` ROAD_WANT_REACH). */
-const FAR_NEAR_REACH = m(2_500);
+export const FAR_NEAR_REACH = m(2_500);
 /** How far from the view's centre a tile's marks are placed (`followMarks`): past it a crossing is under a pixel at any view that shows it. */
 const MARKS_REACH = m(2_000);
 

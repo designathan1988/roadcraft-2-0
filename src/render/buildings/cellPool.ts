@@ -590,9 +590,6 @@ export class CellPool {
   }
   private kitSeen: { readonly parts: KitBoxes['parts']; readonly furniture: KitBoxes['furniture']; readonly digest: number } | null = null;
 
-  /** Moves whenever a job's floors are kept (`learn`): what `floorKnown` answers may have changed since (the camera's solids waiting on a floor, `cameraSolids.ts`). */
-  floorsLearned = 0;
-
   /** The floors a job stood its buildings on, kept for their next jobs. */
   private learn(asked: Asked, result: CellResult): void {
     const floors = result.floors;
@@ -602,6 +599,5 @@ export class CellPool {
       const floor = floors[i];
       if (floor !== undefined) this.floors.set(e.key, { sig: e.sig, digest: e.digest, paved, floor });
     });
-    this.floorsLearned++;
   }
 }

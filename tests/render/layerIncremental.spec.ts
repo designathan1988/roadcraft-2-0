@@ -101,12 +101,7 @@ describe('the buildings layer, a change at a time', () => {
     const doc = new RoadDoc();
     for (let i = 0; i < 9; i++) doc.buildings.add(body(i, (i % 3) * SPACING, Math.floor(i / 3) * SPACING));
     const live = createBuildingLayer();
-    // An eye over the town, as the renderer gives it each frame: the plates' bases are asked only once a view is known (MISSION.md item 5).
-    for (let frame = 0; frame < 400; frame++) {
-      live.update(doc, flat, 'g');
-      live.levelOfDetail(SPACING, SPACING, m(40), 1000, null);
-      if (!live.pending && frame > 20) break;
-    }
+    settle(live, doc);
     const worn = (): number => {
       let most = 0;
       live.group.traverse((o: Object3D) => {

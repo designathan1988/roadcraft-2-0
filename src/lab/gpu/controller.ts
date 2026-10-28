@@ -14,11 +14,11 @@ export const PASS_LABELS: Record<string, string> = {
   gtao: 'GTAO',
   canyon: 'Canyon light',
   bloom: 'Bloom',
-  atmosphere: 'Atmosphere',
+  clouds: 'Clouds',
   smaa: 'SMAA',
   output: 'Output',
 };
-export const PASS_ORDER = ['shadows', 'scene', 'gtao', 'canyon', 'bloom', 'atmosphere', 'smaa', 'output'];
+export const PASS_ORDER = ['shadows', 'scene', 'gtao', 'canyon', 'bloom', 'clouds', 'smaa', 'output'];
 
 export interface PassRow {
   readonly pass: string;
@@ -97,7 +97,7 @@ export function aggregate(records: readonly DrawRecord[], key: (r: DrawRecord) =
 
 const CAPTURE_GIVE_UP_FRAMES = 60;
 /** The chain's passes that read the scene's depth (`effectSwitches.ts` POST_SWITCHES). */
-const DEPTH_PASSES = ['ambientOcclusion', 'canyonLight', 'atmosphere'];
+const DEPTH_PASSES = ['ambientOcclusion', 'canyonLight', 'clouds'];
 const TOP = 25;
 
 export function createGpuLab(ctx: LabContext): GpuLab {

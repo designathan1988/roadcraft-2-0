@@ -24,7 +24,7 @@ export interface JobSpec {
 }
 
 /** The worker a job's message is written for: whether it shares the page's memory (a worker of the page), or every shared buffer of the message is copied to it (a desktop job process's, `processWorker.ts` unshared). */
-interface JobTaker { readonly sharesMemory: boolean }
+export interface JobTaker { readonly sharesMemory: boolean }
 
 /** A job in the queue: waiting, running on a worker, or over (answered, cancelled or replaced by a newer one of its key). */
 export interface Queued { readonly seq: number; readonly spec: JobSpec; state: 'waiting' | 'running' | 'over'; rank: number }

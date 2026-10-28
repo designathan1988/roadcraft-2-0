@@ -71,6 +71,7 @@ const PORCH_LIGHT = 0xffd49a;
 /** A lit room's mean brightness over the glass */
 const ROOM_LIT_MEAN = 0.9;
 
+export { PORCH_LAMP } from './partKinds';
 /** How far the wash of its light (the `wash` part, placed at the lantern's centre) stands out of the wall. */
 const WASH_OUT = m(0.01);
 /** Outside lights after dark. 43 % of homes leave one on all night */

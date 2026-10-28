@@ -424,9 +424,7 @@ export function reserveWarm(bytes: number): () => void {
 export function warmReservedBytes(): number {
   return reservedBytes;
 }
-/** `came`: a loose job came since the queue was last sorted (`drainWarm`). DO NOT sort the whole queue at every frame: the same order while no
- *  job came and no rank moved (a still view), thousands of meshes waiting after a district came into view. */
-const toWarmLoose: LooseJob[] & { came: boolean } = Object.assign([] as LooseJob[], { came: false });
+const toWarmLoose: LooseJob[] = [];
 let warmer = false;
 export function warmAhead(mesh: Mesh, geometries: readonly BufferGeometry[]): Promise<void> {
   if (!warmer) return Promise.resolve();
@@ -440,7 +438,6 @@ export function warmLooseAhead(meshes: readonly Mesh[], priority: () => number =
     const bytes = meshBytes(mesh);
     queuedBytes += bytes;
     toWarmLoose.push({ mesh, done, priority, rank: 0, bytes });
-    toWarmLoose.came = true;
   }))).then(() => {});
 }
 /** DO NOT dispose a mesh still waiting here without this */
@@ -492,15 +489,9 @@ export function drainWarm(renderer: WebGLRenderer): void {
     try { warmLoose(renderer, one.mesh, one.geometries); } finally { one.done(); }
   }
   if (toWarmLoose.length === 0) return;
-  // Ranked once a frame, the largest error last (popped first); the eye moved since they were queued. Sorted again only when a job came or a
-  // rank moved: the queue keeps its order otherwise (a pop takes its end, a cancel its job alone).
-  let reorder = toWarmLoose.came;
-  toWarmLoose.came = false;
-  for (const job of toWarmLoose) {
-    const rank = job.priority();
-    if (rank !== job.rank) { job.rank = rank; reorder = true; }
-  }
-  if (reorder) toWarmLoose.sort((a, b) => a.rank - b.rank);
+  // Ranked once a frame, the largest error last (popped first); the eye moved since they were queued.
+  for (const job of toWarmLoose) job.rank = job.priority();
+  toWarmLoose.sort((a, b) => a.rank - b.rank);
   while (toWarmLoose.length > 0 && (budget === UPLOAD_BYTES || budget > 0)) {
     const job = toWarmLoose.pop()!;
     budget -= job.bytes;

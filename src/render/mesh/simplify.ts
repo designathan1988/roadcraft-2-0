@@ -6,8 +6,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 export async function simplified(source: BufferGeometry, ratio: number, error: number): Promise<BufferGeometry> {
   try {
     await MeshoptSimplifier.ready;
-  } catch (error) {
-    console.warn('[simplifier] not loaded: the mesh as it is', error);
+  } catch {
     return source;
   }
   const welded = weldGeometry(source.clone(), 1e-4);

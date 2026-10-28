@@ -79,10 +79,6 @@ export class NetworkBuild {
   private ribbonMemo = new Map<SegmentId, RibbonMemo>();
   /** The tiles' bakes offered since the last rebuild (`offerBake`), taken by it (`takeBakes`). */
   private readonly bakes: NetworkBake[] = [];
-  /** The scope the last `findChanges` brought the sources up to. A scope is replaced, never changed in place (`Network.rescope`, `networkWindow.ts`
-   *  roadsOfTiles, the simulation's window): the same one holds the same roads, and an edit's own roads come through the diary. DO NOT compare
-   *  every road the window holds with the sources at every rebuild: tens of thousands at each edit and each tile streamed in. */
-  private scopeSeen: ReadonlySet<SegmentId> | null = null;
 
   constructor(private readonly net: Network) {}
 
@@ -167,7 +163,6 @@ export class NetworkBuild {
     this.plateRaw = new Map();
     this.plateKeys = new Map();
     this.ribbonMemo = new Map();
-    this.scopeSeen = null;
     // The bakes offered stay: they are for the next rebuild, from nothing or not.
   }
 
@@ -190,7 +185,6 @@ export class NetworkBuild {
     this.plateRaw = new ForkMap(other.plateRaw);
     this.plateKeys = new ForkMap(other.plateKeys);
     this.ribbonMemo = new ForkMap(other.ribbonMemo);
-    this.scopeSeen = other.scopeSeen;
   }
 
   /** A working copy's state (`forkFrom`) written into this one, up to its document as it stands now: only what the copy wrote. */
@@ -208,8 +202,6 @@ export class NetworkBuild {
     this.nodePlaces.takeBack(fork.nodePlaces);
     (fork.active as ForkSet<NodeId>).applyTo(this.active);
     this.seen = this.net.doc.changes.version;
-    // The sources as the copy left them: the next rebuild compares them with the scope again.
-    this.scopeSeen = null;
   }
 
   /** Whether a full rebuild must follow (never built, or forgotten). */
@@ -450,11 +442,10 @@ export class NetworkBuild {
     }
     // The roads held moved (`Network.rescope`): those that came are not recorded yet, those that left are recorded and held no more.
     const scope = this.net.scope;
-    if (scope && scope !== this.scopeSeen) {
+    if (scope) {
       for (const id of scope) if (!this.segmentSource.has(id)) candSegs.add(id);
       for (const id of this.segmentSource.keys()) if (!scope.has(id)) candSegs.add(id);
     }
-    this.scopeSeen = scope;
 
     const segments = new Set<SegmentId>();
     for (const id of candSegs) {

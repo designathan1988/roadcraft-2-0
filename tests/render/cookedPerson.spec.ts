@@ -63,12 +63,7 @@ describe('a person cooked ahead and read back', () => {
     const moved = new Set(transfer);
     for (const array of [...person.attributes, person.index, ...person.morphs]) expect(moved.has(array.buffer as ArrayBuffer)).toBe(true);
     expect(moved.size).toBe(person.attributes.length + 1 + person.morphs.length);
-    // The position drawn four wide (D3D11 takes no three-component 16-bit format: ANGLE converts it on the CPU): the file's three, then w 0.
-    const filed = Array.from(input.mesh.attributes[0]!);
-    const drawn = Array.from(person.attributes[0]!);
-    expect(drawn.length).toBe(input.mesh.vertexCount * 4);
-    for (let v = 0; v < input.mesh.vertexCount; v++) expect(drawn.slice(v * 4, v * 4 + 4)).toEqual([...filed.slice(v * 3, v * 3 + 3), 0]);
-    for (const [k, array] of person.attributes.entries()) if (k > 0) expect(Array.from(array)).toEqual(Array.from(input.mesh.attributes[k]!));
+    expect(Array.from(person.attributes[0]!)).toEqual(Array.from(input.mesh.attributes[0]!));
     expect(Array.from(person.index)).toEqual(Array.from(input.mesh.index));
     // The sparse move at vertex 2 is dense now: 328 quantised units of y, nothing else.
     const smile = person.morphs[0]!;
@@ -95,7 +90,6 @@ describe('a person cooked ahead and read back', () => {
     // Positions as the shader reads them: normalised shorts, metres once the node's matrix is applied.
     const position = g.getAttribute('position') as BufferAttribute;
     expect(position.normalized).toBe(true);
-    expect(position.itemSize).toBe(4);
     expect(position.getX(0)).toBeCloseTo(-0.5, 3);
     mesh!.updateMatrixWorld(true);
     expect(new Vector3(position.getX(2), position.getY(2), position.getZ(2)).applyMatrix4(mesh!.matrixWorld).y).toBeCloseTo(2, 3);

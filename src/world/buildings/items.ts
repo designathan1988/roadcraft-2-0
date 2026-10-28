@@ -11,7 +11,7 @@ export interface FieldWrites {
 /**
  * A STORE'S RECORDS: A RECORD TABLE (`TableRows`, decoded when read) WITH THE RECORDS WRITTEN SINCE OVER IT. A `Map` to its readers, in a
  * `Map`'s order (a key set again keeps its place, one deleted and set again goes last); its writes told before they happen while an edit
- * is recorded (`before`, as `core/recordMap.ts`). The buildings' (`BuildingStore`), the lots' and the landscaping's alike: DO NOT hold a
+ * is recorded (`before`, as `core/recordMap.ts`). The buildings' (`BuildingItems`), the lots' and the landscaping's alike: DO NOT hold a
  * map's records as objects - 228,000 items of landscaping and 111,000 lots of a 10 km city stood as objects on the page (2026-10-26).
  */
 export class TableItems<K extends number = BuildingId, V extends TableRow = Building> implements Map<K, V> {
@@ -370,3 +370,6 @@ export class TableItems<K extends number = BuildingId, V extends TableRow = Buil
   }
 }
 
+/** THE STORE'S BUILDINGS: their table and the records written since (`TableItems`). */
+export const BuildingItems = TableItems;
+export type BuildingItems = TableItems<BuildingId, Building>;

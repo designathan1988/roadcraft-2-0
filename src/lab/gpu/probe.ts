@@ -55,7 +55,7 @@ export interface GpuProbe {
 }
 
 const SIDES = ['front', 'back', 'double'];
-const PASS_NAMES: Record<string, string> = { scene: 'scene', gtao: 'GTAO', canyon: 'canyon', bloom: 'bloom', atmosphere: 'atmosphere', smaa: 'SMAA', output: 'output' };
+const PASS_NAMES: Record<string, string> = { scene: 'scene', gtao: 'GTAO', canyon: 'canyon', bloom: 'bloom', clouds: 'clouds', smaa: 'SMAA', output: 'output' };
 
 /** FNV-1a of a string, 8 hex digits: a program's cache key shown short. */
 export function shortHash(text: string): string {

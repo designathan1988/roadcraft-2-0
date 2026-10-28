@@ -18,7 +18,6 @@ import type { PoleId, SpanId } from '@world/ids';
 import { m } from '@world/units';
 import type { UtilitySpan } from '@world/utilities';
 import { type PartBounds, type PartShape, WIRE_BLOCK, type WireBounds, emptyBox, growPart, growWires, partShape } from './poleBake';
-import { drawnShapes, drawnTemplates, holdSphere, noBox } from './poleDraws';
 import { castBySize } from './shadowCasters';
 import {
   type Placement,
@@ -36,6 +35,8 @@ import {
   wireLevel,
   wireParts,
   wireScreen,
+  wireTemplate,
+  wireTemplateOf,
   writePlacement,
 } from './utilities';
 
@@ -144,6 +145,30 @@ const HIDDEN = 255;
 /** The band round a pixel a piece's shape and showing are held by, the props' ladder's (`cellInstances.ts` HYSTERESIS): a piece at the edge
  *  does not flicker from one to the other as the view moves a little. */
 const BAND = 0.15;
+/** The triangles a shape's own draw must spare to be drawn apart: a draw call costs the CPU more than a few hundred triangles cost the GPU,
+ *  so a shape that spares fewer has its pieces drawn with the finest shape drawn anyway (more detail, never less, one draw fewer). */
+const DRAW_WORTH = 2048;
+
+/** Which shape each shape's pieces are drawn with (`counts`: the pieces each would hold, finest first; `triangles`: each one's a piece): at
+ *  most two draws - the near pieces at the finest shape any needs, the far ones at the finest shape they need - split where it spares the
+ *  most, and only when it spares a draw's worth (`DRAW_WORTH`); else every piece at the finest shape any needs (more detail, never less). */
+function drawnShapes(counts: readonly number[], triangles: readonly number[]): number[] {
+  const into = counts.map((_, k) => k);
+  const finest = counts.findIndex((n) => n > 0);
+  if (finest < 0) return into;
+  let best = 0, split = counts.length;
+  for (let s = finest + 1; s < counts.length; s++) {
+    const host = counts.findIndex((n, k) => k >= s && n > 0);
+    if (host < 0) break;
+    let spared = 0;
+    for (let k = s; k < counts.length; k++) spared += counts[k]! * (triangles[finest]! - triangles[host]!);
+    if (spared > best) { best = spared; split = s; }
+  }
+  const farHost = best >= DRAW_WORTH ? counts.findIndex((n, k) => k >= split && n > 0) : finest;
+  for (let k = finest; k < counts.length; k++) into[k] = k < split || best < DRAW_WORTH ? finest : farHost;
+  return into;
+}
+
 /** A part's instances over a block of the layer (`BLOCK`): every piece cast into the cascades from one mesh, each drawn in colour at its own shape. */
 export class PartStore {
   /** Every piece, drawn into the sun's cascades alone (`castBySize`: none in colour). */
@@ -167,16 +192,6 @@ export class PartStore {
   private shapeOf = new Uint8Array(0);
   /** Whether `colour` holds the pieces as `shapeOf` says. */
   private sorted = false;
-  /** Per piece: the colour mesh `sort` last put it in (`HIDDEN`: none). DO NOT fill and send the colour meshes again when no piece changed
-   *  mesh: a piece crossing between two shapes drawn by one mesh re-sent every shown piece of the store as the camera moved. */
-  private filledInto = new Uint8Array(0);
-  /** A box holding every piece's sphere and the largest cover of any (grown, never shrunk: never below a piece's own): what `view` bounds
-   *  every piece's pixels by. DO NOT measure each piece of a store none of whose pieces can reach a pixel: a block is a kilometre, and every
-   *  piece of every block held round the view was measured at each move of the camera. */
-  private readonly reachBox = noBox();
-  private mostCover = 0;
-  /** Whether every piece's shape is `HIDDEN`. */
-  private allHidden = true;
   /** Takes the mesh off the casters chosen by cascade (`castBySize`). */
   private uncast: (() => void) | null = null;
   readonly perInstance: number;
@@ -251,7 +266,6 @@ export class PartStore {
     covers.set(this.covers.subarray(0, this.count));
     shapes.set(this.shapeOf.subarray(0, this.count));
     this.spheres = spheres; this.covers = covers; this.shapeOf = shapes;
-    this.filledInto = new Uint8Array(capacity).fill(HIDDEN);
     if (this.mesh) {
       (mesh.instanceMatrix.array as Float32Array).set((this.mesh.instanceMatrix.array as Float32Array).subarray(0, this.count * 16));
       mesh.boundingSphere = this.mesh.boundingSphere;
@@ -287,8 +301,6 @@ export class PartStore {
     this.spheres[o + 3] = this.reach * Math.max(sx, sy, sz);
     const sides = this.shape ? [this.shape[0] * sx, this.shape[1] * sy, this.shape[2] * sz].sort((p, q) => q - p) : [0, 0];
     this.covers[slot] = sides[0]! * sides[1]!;
-    holdSphere(this.reachBox, this.spheres[o]!, this.spheres[o + 1]!, this.spheres[o + 2]!, this.spheres[o + 3]!);
-    this.mostCover = Math.max(this.mostCover, this.covers[slot]!);
     this.sorted = false;
   }
 
@@ -355,15 +367,6 @@ export class PartStore {
     const spec = this.spec, levels = spec.levels, bright = spec.brightness(), sp = this.spheres, shapes = this.shapeOf;
     const under = 1 / ((1 + BAND) * (1 + BAND));
     let changed = !this.sorted;
-    // No piece can reach a pixel: none behind the eye or under its own pixel (a light: all of it behind the eye), each one's own test's result.
-    // Every piece's pixels are at most the box's (its nearest depth along the view is at most any sphere's centre depth less its radius).
-    const bound = scale.atBox(this.reachBox);
-    if (bound === 0 || (!spec.glows && this.mostCover * bound * bound * bright < under)) {
-      if (!this.allHidden) { shapes.fill(HIDDEN, 0, this.count); this.allHidden = true; changed = true; }
-      if (changed) this.sort();
-      return;
-    }
-    let shown = false;
     for (let i = 0; i < this.count; i++) {
       const o = i * 4, was = shapes[i]!;
       const x = sp[o]!, y = sp[o + 1]!, z = sp[o + 2]!, r = sp[o + 3]!;
@@ -383,28 +386,17 @@ export class PartStore {
         }
       }
       if (shape !== was) { shapes[i] = shape; changed = true; }
-      if (shape !== HIDDEN) shown = true;
     }
-    this.allHidden = !shown;
     if (changed) this.sort();
   }
 
-  /** The colour meshes filled from the pieces' shapes: each piece's matrix in its shape's mesh; filled and sent only when a piece changed mesh
-   *  or the matrices changed (`filledInto`). */
+  /** The colour meshes filled from the pieces' shapes: each piece's matrix in its shape's mesh. */
   private sort(): void {
     const levels = this.spec.levels, shapes = this.shapeOf, all = this.mesh!.instanceMatrix.array as Float32Array;
     const wanted = levels.map(() => 0);
     for (let i = 0; i < this.count; i++) if (shapes[i] !== HIDDEN) wanted[shapes[i]!]!++;
     // A shape sparing too few triangles for a draw of its own drawn with the finest drawn.
     const into = drawnShapes(wanted, levels.map((level) => (level.geometry.index?.count ?? 0) / 3));
-    // Every piece in the mesh it was filled into, the matrices as they were: the meshes hold them as they are.
-    const filled = this.filledInto;
-    let same = this.sorted;
-    for (let i = 0; i < this.count; i++) {
-      const mesh = shapes[i] === HIDDEN ? HIDDEN : into[shapes[i]!]!;
-      if (filled[i] !== mesh) { filled[i] = mesh; same = false; }
-    }
-    if (same) return;
     const counts = levels.map(() => 0);
     for (let k = 0; k < levels.length; k++) counts[into[k]!]! += wanted[k]!;
     for (let k = 0; k < levels.length; k++) {
@@ -416,7 +408,7 @@ export class PartStore {
       }
       const mesh = this.colourOf(k, needed), out = mesh.instanceMatrix.array as Float32Array;
       let n = 0;
-      for (let i = 0; i < this.count; i++) if (filled[i] === k) out.set(all.subarray(i * 16, i * 16 + 16), 16 * n++);
+      for (let i = 0; i < this.count; i++) if (shapes[i] !== HIDDEN && into[shapes[i]!] === k) out.set(all.subarray(i * 16, i * 16 + 16), 16 * n++);
       mesh.count = n;
       mesh.visible = true;
       mesh.instanceMatrix.clearUpdateRanges();
@@ -462,6 +454,31 @@ export class PartStore {
   }
 }
 
+/** The template that draws every wire of a set of templates within a pixel: as many chords as any, creased if any is. */
+function hostOf(templates: readonly number[]): number {
+  let chords = 0, creased = false;
+  for (const t of templates) { const a = wireTemplate(t); chords = Math.max(chords, a.chords); creased ||= a.creased; }
+  return wireTemplateOf(chords, creased);
+}
+
+/** Which template each template's wires are drawn with (`wanted`: the wires each would hold): at most two draws - the near wires with the
+ *  template that serves them all, the far ones with the one that serves them - split where it spares the most triangles, and only when it
+ *  spares a draw's worth (`DRAW_WORTH`); never a template with fewer chords or no crease where a wire needs them. */
+function drawnTemplates(wanted: readonly number[]): number[] {
+  const into = wanted.map((_, t) => t);
+  const used = wanted.map((n, t) => (n > 0 ? t : -1)).filter((t) => t >= 0).sort((a, b) => wireTemplate(b).triangles - wireTemplate(a).triangles);
+  if (used.length === 0) return into;
+  const all = hostOf(used), allTriangles = wireTemplate(all).triangles;
+  let best = 0, split = used.length, farHost = all;
+  for (let s = 1; s < used.length; s++) {
+    const far = used.slice(s), host = hostOf(far);
+    const spared = far.reduce((sum, t) => sum + wanted[t]! * (allTriangles - wireTemplate(host).triangles), 0);
+    if (spared > best) { best = spared; split = s; farHost = host; }
+  }
+  used.forEach((t, k) => { into[t] = best >= DRAW_WORTH && k >= split ? farHost : all; });
+  return into;
+}
+
 /** The colour pass's wires drawn with one template (`wireLevel`): their own instances, copied from the block's, one mesh. */
 interface WireBucket {
   data: Float32Array;
@@ -492,12 +509,6 @@ export class WireStore {
   private spheres = new Float32Array(0);
   private templateOf = new Uint8Array(0);
   private sorted = false;
-  /** Per span: the bucket `sort` last put its wires in (`HIDDEN`: none), as `PartStore.filledInto`. */
-  private filledInto = new Uint8Array(0);
-  /** A box holding every span's sphere (grown, never shrunk), as `PartStore.reachBox`. */
-  private readonly reachBox = noBox();
-  /** Whether every span's template is `HIDDEN`. */
-  private allHidden = true;
   /** The colour pass's wires, one bucket a template. */
   private readonly buckets: (WireBucket | undefined)[] = [];
   /** Takes the mesh off the casters chosen by cascade (`castBySize`). */
@@ -515,7 +526,6 @@ export class WireStore {
     spheres.set(this.spheres.subarray(0, this.count * 5));
     templates.set(this.templateOf.subarray(0, this.count));
     this.spheres = spheres; this.templateOf = templates;
-    this.filledInto = new Uint8Array(capacity).fill(HIDDEN);
     this.dropLevels();
     this.data = data;
     this.buffer = new InstancedInterleavedBuffer(data, WIRE_STRIDE, 1);
@@ -588,7 +598,6 @@ export class WireStore {
     this.spheres[o] = (ax + bx) / 2; this.spheres[o + 1] = (ay + by) / 2 - sag; this.spheres[o + 2] = (az + bz) / 2;
     this.spheres[o + 3] = Math.hypot(bx - ax, by - ay, bz - az) / 2 + sag + m(2);
     this.spheres[o + 4] = sag;
-    holdSphere(this.reachBox, this.spheres[o]!, this.spheres[o + 1]!, this.spheres[o + 2]!, this.spheres[o + 3]!);
     this.sorted = false;
   }
 
@@ -648,14 +657,6 @@ export class WireStore {
     }
     const sp = this.spheres, templates = this.templateOf;
     let changed = !this.sorted;
-    // No span's wires wide enough to draw, even held by the band (`wireLevel` is -1 by the width alone): each span's own test's result.
-    const bound = scale.atBox(this.reachBox);
-    if (bound === 0 || wireLevel(bound * (1 + BAND), 0) < 0) {
-      if (!this.allHidden) { templates.fill(HIDDEN, 0, this.count); this.allHidden = true; changed = true; }
-      if (changed) this.sort();
-      return;
-    }
-    let shown = false;
     for (let i = 0; i < this.count; i++) {
       const o = i * 5, was = templates[i]!;
       const px = scale.atPoint(sp[o]!, sp[o + 1]!, sp[o + 2]!, sp[o + 3]!);
@@ -667,14 +668,11 @@ export class WireStore {
       }
       const next = template < 0 ? HIDDEN : template;
       if (next !== was) { templates[i] = next; changed = true; }
-      if (next !== HIDDEN) shown = true;
     }
-    this.allHidden = !shown;
     if (changed) this.sort();
   }
 
-  /** The colour buckets filled from the spans' templates: each span's wires (an empty slot left out) in its template's bucket; filled and sent
-   *  only when a span changed bucket or the wires changed (`filledInto`). */
+  /** The colour buckets filled from the spans' templates: each span's wires (an empty slot left out) in its template's bucket. */
   private sort(): void {
     const templates = this.templateOf, all = this.data;
     const wanted: number[] = Array.from({ length: WIRE_TEMPLATE_COUNT }, () => 0);
@@ -684,14 +682,6 @@ export class WireStore {
       for (let w = 0; w < SPAN_WIRES; w++) if (all[i * WireStore.BLOCK + w * WIRE_STRIDE + 6]! >= 0) wanted[t]!++;
     }
     const into = drawnTemplates(wanted);
-    // Every span in the bucket it was filled into, the wires as they were: the buckets hold them as they are.
-    const filled = this.filledInto;
-    let same = this.sorted;
-    for (let i = 0; i < this.count; i++) {
-      const bucket = templates[i] === HIDDEN ? HIDDEN : into[templates[i]!]!;
-      if (filled[i] !== bucket) { filled[i] = bucket; same = false; }
-    }
-    if (same) return;
     const wires: number[] = wanted.map(() => 0);
     for (let t = 0; t < wanted.length; t++) wires[into[t]!]! += wanted[t]!;
     const most = Math.max(this.buckets.length, wires.length);
@@ -705,7 +695,7 @@ export class WireStore {
       const bucket = this.bucketOf(t, needed), out = bucket.data;
       let n = 0;
       for (let i = 0; i < this.count; i++) {
-        if (filled[i] !== t) continue;
+        if (templates[i] === HIDDEN || into[templates[i]!] !== t) continue;
         for (let w = 0; w < SPAN_WIRES; w++) {
           const at = i * WireStore.BLOCK + w * WIRE_STRIDE;
           if (all[at + 6]! < 0) continue;

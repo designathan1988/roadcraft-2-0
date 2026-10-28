@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Frustum, Matrix4, type Mesh, PerspectiveCamera } from 'three';
+import type { Mesh } from 'three';
 
 import { cellMass, joinMass } from '@render/buildings/cellArrays';
 import { createBuildingKit } from '@render/buildings/kit';
@@ -21,13 +21,12 @@ function building(index: number, x: number, y: number): Building {
   return { ...JSON.parse(JSON.stringify(bp.body)), id: index + 1, x, y, rotation: 0 } as Building;
 }
 
-/** Two cells' buildings, three each, each cell's masses at the plate's detail (as the base's job lays them, `cellWork.ts`), and their base; from cell column `i0` (0: the first plate's first two cells). */
-function town(i0 = 0): { buildings: Building[]; cellMasses: ReturnType<typeof cellMass>[]; base: BaseMass } {
-  const x0 = i0 * CELL;
-  const buildings = [0, 1, 2].flatMap((i) => [building(i, x0 + m(10) + i * m(40), m(20)), building(i + 3, x0 + CELL + m(10) + i * m(40), m(20))]);
-  const cells = [`${i0},0`, `${i0 + 1},0`];
+/** Two cells' buildings, three each, each cell's masses at the plate's detail (as the base's job lays them, `cellWork.ts`), and their base. */
+function town(): { buildings: Building[]; cellMasses: ReturnType<typeof cellMass>[]; base: BaseMass } {
+  const buildings = [0, 1, 2].flatMap((i) => [building(i, m(10) + i * m(40), m(20)), building(i + 3, CELL + m(10) + i * m(40), m(20))]);
+  const cells = ['0,0', '1,0'];
   const cellMasses = cells.map((cell) => cellMass(buildings.filter((b) => baseCellOf(b) === cell).map((b) => massesOf(b, flat, undefined, flat, undefined, PLATE_DETAIL, { floor: 0 })!)));
-  const base = joinBase(cells.map((cell, k) => ({ cell, mass: cellMasses[k]! })), levelCells(baseOf(i0, 0)))!;
+  const base = joinBase(cells.map((cell, k) => ({ cell, mass: cellMasses[k]! })), levelCells(baseOf(0, 0)))!;
   return { buildings, cellMasses, base };
 }
 
@@ -45,16 +44,13 @@ describe('the base', () => {
     expect(a.runs > 0 && b.runs > 0 && a.index.length > a.runs && b.index.length > b.runs).toBe(true);
   });
 
-  it('is drawn under exactly the cells nothing finer draws, by the plate\'s materials, and never let go for the budget while every plate is seen', () => {
+  it('is drawn under exactly the cells nothing finer draws, by the plate\'s materials, and never let go for the budget', () => {
     const kit = createBuildingKit();
     const far = createMassCells(kit, CELL, () => {});
     const { buildings, base } = town();
     far.plan('0,0');
     far.plan('1,0');
     far.planLevel(baseOf(0, 0));
-    // A choice with no frustum (every plate seen, every cell held near): every base wanted, none before a choice.
-    expect(far.basesWaiting).toBe(0);
-    far.choose(0, 0, m(500), 1000, 0.1, true, Infinity, null);
     expect(far.basesWaiting).toBe(1);
     far.landBase(baseOf(0, 0), base);
     expect(far.basesWaiting).toBe(0);
@@ -80,39 +76,6 @@ describe('the base', () => {
     far.choose(0, 0, m(500), 1000, 0.1, false, Infinity, null);
     expect(far.evictLevels(0)).toBe(0);
     expect(mesh().parent).not.toBeNull();
-    far.dispose();
-  });
-
-  /** The view from 400 m over the first plate's middle, straight down: it meets that plate alone. */
-  function viewOverFirstPlate(): Frustum {
-    const camera = new PerspectiveCamera(60, 1, m(1), m(2000));
-    camera.position.set(4 * CELL, m(400), -4 * CELL);
-    camera.lookAt(4 * CELL, 0, -4 * CELL);
-    camera.updateMatrixWorld();
-    return new Frustum().setFromProjectionMatrix(new Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
-  }
-
-  it('is wanted only for the plates within a plate of the view, and let go past them for the budget, never in them (MISSION.md item 5)', () => {
-    const kit = createBuildingKit();
-    const far = createMassCells(kit, CELL, () => {});
-    // The first plate (the view's), the next one east (a plate away: the ring), and one three plates east, each base its own plate's buildings.
-    const near = baseOf(0, 0), ring = baseOf(8, 0), away = baseOf(24, 0);
-    for (const key of [near, ring, away]) { far.planLevel(key); far.planLevel(`p:${key.slice(2)}`); }
-    const view = viewOverFirstPlate();
-    far.choose(4 * CELL, 4 * CELL, m(400), 1000, null, false, Infinity, view);
-    expect([far.wanted(near), far.wanted(ring), far.wanted(away)]).toEqual([true, true, false]);
-    // The opening waits for none past the ring.
-    expect(far.basesWaiting).toBe(2);
-    for (const [key, i0] of [[near, 0], [ring, 8], [away, 24]] as const) far.landBase(key, town(i0).base);
-    const bases = (): number => { let n = 0; far.group.traverse((o) => { if (o.name === 'building-massing-base') n++; }); return n; };
-    expect(bases()).toBe(3);
-    far.choose(4 * CELL, 4 * CELL, m(400), 1000, null, false, Infinity, view);
-    // Over the budget: the one past the ring goes; the view's and the ring's stay, whatever the budget.
-    expect(far.evictLevels(0)).toBeGreaterThan(0);
-    expect(bases()).toBe(2);
-    expect(far.evicted(`p:${away.slice(2)}`)).toBe(true);
-    expect(far.evictLevels(0)).toBe(0);
-    expect(far.basesWaiting).toBe(0);
     far.dispose();
   });
 });

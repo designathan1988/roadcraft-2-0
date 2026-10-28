@@ -9,7 +9,6 @@ import {
   LessEqualCompare,
   LightShadow,
   LinearFilter,
-  Matrix4,
   NearestFilter,
   Object3D,
   OrthographicCamera,
@@ -265,14 +264,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
   /** Each corner ray's eye depths between the ground and the tops, and the cascades' split depths. */
   const enter = new Float64Array(4), leave = new Float64Array(4);
   const splits = new Float64Array(SUN_CASCADES + 1);
-  /** What the last `follow` read (the camera, the sun, the target, the top, the ground at each point it sampled), and whether it changed
-   *  nothing (no refit, scroll nor sun step): the same reads again change nothing, and are not worked out again in a still view. */
-  const lastView = new Matrix4(), lastProjection = new Matrix4(), lastSun = new Vector3(), lastTarget = new Vector3();
-  let lastTop = Number.NaN, lastNear = Number.NaN, lastFar = Number.NaN, followSettled = false;
-  const groundX = new Float64Array(4), groundY = new Float64Array(4), groundH = new Float64Array(4);
-  let groundSampled = 0;
-  /** A fit moved this `follow` (refitted or scrolled). */
-  let fitChanged = false;
 
   /** The radius a root's casters reach (largest piece), for the texel test: an instanced piece at its largest instance's scale (a train's cars, a platform's bays are a unit geometry scaled by their instances: read at the geometry's own size they lost their shadow in the far cascade). */
   /** DO NOT walk it with `traverse` and a closure: the closure and its boxed `radius` were made again for every root, cascade and frame (sunCascades.ts was the page's first source of garbage, 109 MB in 20 s, 2026-10-18). */
@@ -680,7 +671,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
     hookShadowMap(renderer.shadowMap, renderer);
     for (let i = 0; i < lights.length; i++) { storeValid[i] = false; refitted[i] = true; everDrawn[i] = false; }
     for (const store of stores) if (store) renderer.initRenderTarget(store);
-    followSettled = false;
   };
   renderer?.domElement.addEventListener('webglcontextrestored', contextBack);
   /** Whether the casters were chosen for a cascade since they were last given back (`restore`). */
@@ -749,7 +739,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
         f.cu = cu;
         place(i);
         scroll[i] = { dx, dy };
-        fitChanged = true;
         return false;
       }
       // Too far for the store to follow: drawn whole at the new centre, the pending scroll let go with it.
@@ -770,7 +759,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
     f.sHi = sHi + slack;
     f.placed = true;
     place(i);
-    fitChanged = true;
     return true;
   };
 
@@ -785,22 +773,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
       const perspective = (camera as PerspectiveCamera).isPerspectiveCamera === true;
       const near = (camera as PerspectiveCamera | OrthographicCamera).near;
       const far = (camera as PerspectiveCamera | OrthographicCamera).far;
-      // DO NOT fit the cascades again every frame of a still view with the clock stopped: the same reads as a follow that changed nothing
-      // change nothing (every fit `same` and inside, every held sun kept).
-      if (followSettled && near === lastNear && far === lastFar && top === lastTop && lastView.equals(camera.matrixWorld)
-        && lastProjection.equals(camera.projectionMatrix) && lastSun.equals(sunDirection) && lastTarget.equals(target)) {
-        let sameGround = true;
-        for (let k = 0; k < groundSampled && sameGround; k++) sameGround = Object.is(groundAt(groundX[k]!, groundY[k]!), groundH[k]!);
-        if (sameGround) { sunStepped.fill(false); return false; }
-      }
-      lastView.copy(camera.matrixWorld);
-      lastProjection.copy(camera.projectionMatrix);
-      lastSun.copy(sunDirection);
-      lastTarget.copy(target);
-      lastTop = top; lastNear = near; lastFar = far;
-      groundSampled = 0;
-      fitChanged = false;
-      followSettled = false;
       eye.setFromMatrixPosition(camera.matrixWorld);
       camera.getWorldDirection(look);
       // Each corner ray: its point at eye depth d is start + step * d (no scale on the camera: depth in world units).
@@ -818,9 +790,7 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
         if (Math.abs(d.y) < 1e-6) continue;
         const t = (target.y - s.y) / d.y;
         if (t < near || t > far) continue;
-        const gx = s.x + d.x * t, gy = -(s.z + d.z * t);
-        const h = groundAt(gx, gy);
-        groundX[groundSampled] = gx; groundY[groundSampled] = gy; groundH[groundSampled++] = h;
+        const h = groundAt(s.x + d.x * t, -(s.z + d.z * t));
         if (!Number.isFinite(h)) continue;
         low = Math.min(low, h);
         high = Math.max(high, h);
@@ -850,7 +820,7 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
         for (let k = 0; k < 4; k++) { const y = startOf[k]!.y + stepOf[k]!.y * d; y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
         if (y1 >= low && y0 <= high) { dNear = Math.min(dNear, d); dFar = Math.max(dFar, d); }
       }
-      if (!(dNear < dFar)) { followSettled = true; return false; }
+      if (!(dNear < dFar)) return false;
       const dTarget = Math.max(dNear, a.subVectors(target, eye).dot(look));
       const dEnd = Math.min(dFar, dNear + SHADOW_DEPTH_MAX, Math.max(dTarget + SHADOW_REACH, dNear + 3 * (dTarget - dNear)));
       // The splits: the first just past the point looked at, the second halfway in ratio to the end
@@ -895,7 +865,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
         if (!(minR <= maxR)) continue;
         if (fit(i, minR, maxR, minU, maxU, minS, maxS)) { refitted[i] = true; any = true; }
       }
-      followSettled = !fitChanged && !sunStepped.includes(true);
       return any || sunStepped.includes(true);
     },
     takeStats() {
@@ -992,8 +961,6 @@ export function createSunCascades(sun: DirectionalLight, others: readonly Direct
     },
     setEnabled(on, mapSize) {
       enabled = on;
-      // The maps' size or the cascades' places may change: the next follow works them out.
-      followSettled = false;
       lights.forEach((light, i) => {
         light.castShadow = on;
         // The other cascades light nothing of their own: without shadows they are not lights at all

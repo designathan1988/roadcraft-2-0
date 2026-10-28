@@ -24,7 +24,7 @@ import { PLATE, POST, QUAD, QUAD_ORDER, SignSheets, cellUv, onTopOfPost, plateFa
  */
 
 /** One plate standing: where, on what ground, what it says, which way it faces. */
-interface Stand {
+export interface Stand {
   readonly x: number;
   readonly y: number;
   readonly ground: number;
@@ -34,12 +34,12 @@ interface Stand {
 }
 
 /** A key's signs and the ground they read: a change there stands them again. */
-interface SignValue {
+export interface SignValue {
   readonly stands: readonly Stand[];
   readonly reads: ChangeRect;
 }
 
-interface SignSource {
+export interface SignSource {
   readonly net: Network;
   readonly elevation: RoadElevation;
 }
@@ -74,7 +74,7 @@ function ribbonBox(net: Network, id: SegmentId): ChangeRect | null {
 const isSignItem = (item: LandscapeItem): boolean => item.kind === 'sign' || (item.kind === 'streetname' && !!item.text);
 
 /** A junction's signs (`signsAtNode`), reading its segments' ground. */
-function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue | undefined {
+export function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue | undefined {
   const at = net.doc.node(node);
   if (!at) return undefined;
   const stands: Stand[] = [];
@@ -92,7 +92,7 @@ function junctionSigns({ net, elevation }: SignSource, node: NodeId): SignValue 
 }
 
 /** A placed sign's plate, or a street name's plates at both ends of every segment of its street. */
-function itemSigns({ net, elevation }: SignSource, id: number): SignValue | undefined {
+export function itemSigns({ net, elevation }: SignSource, id: number): SignValue | undefined {
   const item = net.doc.landscape.get(id);
   if (!item || !isSignItem(item)) return undefined;
   const stands: Stand[] = [];
@@ -136,7 +136,7 @@ function itemSigns({ net, elevation }: SignSource, id: number): SignValue | unde
 }
 
 /** A cell's signs: the junctions whose node lies in its square and the placed signs and street names whose item does (`cellSigns`). */
-function cellSigns(source: SignSource, rect: ChangeRect): SignValue {
+export function cellSigns(source: SignSource, rect: ChangeRect): SignValue {
   const { net } = source;
   const stands: Stand[] = [];
   let reads: ChangeRect | null = null;

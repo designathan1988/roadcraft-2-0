@@ -9,8 +9,7 @@ let preset: RoadParkingPreset = 'none';
 try {
   const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(KEY);
   if (raw && (ROAD_PARKING_PRESETS as readonly string[]).includes(raw)) preset = raw as RoadParkingPreset;
-} catch (error) {
-  console.warn('[road parking] Not kept: the default stands', error);
+} catch {
   // Not kept: the default stands.
 }
 
@@ -22,8 +21,7 @@ export function setRoadParkingPreset(next: RoadParkingPreset): void {
   preset = next;
   try {
     if (typeof localStorage !== 'undefined') localStorage.setItem(KEY, next);
-  } catch (error) {
-    console.warn('[road parking] Not kept between sessions; it still applies now', error);
+  } catch {
     // Not kept between sessions; it still applies now.
   }
 }

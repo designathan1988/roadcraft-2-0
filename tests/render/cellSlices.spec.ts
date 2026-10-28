@@ -154,8 +154,7 @@ describe('a square level joined from its cells\' slices', () => {
     const real = jobPool.submitJob;
     vi.spyOn(jobPool, 'submitJob').mockImplementation((spec) => { asked.push({ key: spec.key, priority: spec.priority }); return real(spec); });
     const pool: CellPool = new CellPool(() => boxes, (e) => () => texts.get(e.key)!, true, undefined, new MemorySlices());
-    // The view wants the base (its plate within a plate of the view, `massCells.ts` BASE_RING), no tile.
-    const levels = new MassLevels(pool, () => {}, () => {}, () => {}, (key) => key[0] === 'b');
+    const levels = new MassLevels(pool, () => {}, () => {}, () => {}, () => false);
     for (const [cell, list] of town()) levels.touch(cell, packed(list));
     levels.flush(env);
     await CellWorker.drainAll();

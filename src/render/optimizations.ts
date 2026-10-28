@@ -131,9 +131,9 @@ const BASE = [
     choices: [TIER, { value: 'full', label: 'full' }, { value: 'half', label: 'half' }],
   },
   {
-    id: 'airPass', system: 'post', title: 'Air pass built',
-    what: 'The air pass (the backdrop round the map and the haze by distance) is not even created (QualitySettings.airPass), rather than just skipped.',
-    tradeoff: 'No air program; the void round the map left as the scene clears it, no haze by distance.',
+    id: 'cloudPass', system: 'post', title: 'Cloud pass built',
+    what: 'The cloud and fog pass is not even created (QualitySettings.cloudShadows and skyClouds), rather than just skipped.',
+    tradeoff: 'No cloud program and no cloud targets; no clouds, painted fog or cloud shadows.',
     choices: [TIER, { value: 'off', label: 'do not build' }],
   },
   // ---- textures
@@ -259,10 +259,10 @@ const AFFECTS: Readonly<Record<(typeof BASE)[number]['id'], readonly string[]>> 
   agentShadows: ['shadows', 'layer:people', 'name:procedural-people', 'name:person'],
   shadowShapes: ['shadows', 'layer:vegetation', 'layer:furniture', 'name:garden-*', 'name:street-*', 'name:nature-tree-*'],
   farStride: ['layer:terrain', 'name:flat-world-far'],
-  postChain: ['post', 'pass:ambientOcclusion', 'pass:canyonLight', 'pass:bloom', 'pass:atmosphere', 'pass:smaa', 'pass:sharpen'],
+  postChain: ['post', 'pass:ambientOcclusion', 'pass:canyonLight', 'pass:bloom', 'pass:clouds', 'pass:smaa', 'pass:sharpen'],
   msaa: ['post', 'all'],
   aoResolution: ['post', 'pass:ambientOcclusion'],
-  airPass: ['post', 'pass:atmosphere'],
+  cloudPass: ['post', 'pass:clouds'],
   anisotropy: ['textures', 'all'],
   buildingLod: ['layer:buildings', 'name:building-*'],
   wear: ['layer:roads', 'name:roads-*'],
@@ -309,7 +309,7 @@ export function optimizationChoice(id: string, value: unknown): OptValue | undef
 }
 
 /** The tier's settings that the optimisations change. */
-const QUALITY_OPTIONS: readonly OptId[] = ['shadowMapSize', 'postChain', 'msaa', 'aoResolution', 'airPass', 'vegetation', 'detailProps', 'detailCutoff', 'pedestrianDetail', 'vehicleError', 'vehicleWhole', 'occupants',
+const QUALITY_OPTIONS: readonly OptId[] = ['shadowMapSize', 'postChain', 'msaa', 'aoResolution', 'cloudPass', 'vegetation', 'detailProps', 'detailCutoff', 'pedestrianDetail', 'vehicleError', 'vehicleWhole', 'occupants',
   // q.anisotropy is applied to the textures directly (`optimizationsApply.ts`): no tier rebuilt for it.
   ...QUALITY_FIELD_OPTIONS.filter((spec) => spec.field !== 'anisotropy').map((spec) => spec.id)];
 
@@ -332,7 +332,8 @@ export function withOptimizations(settings: QualitySettings, o: Optimizations): 
     smaa: postOff ? false : settings.smaa,
     msaa: num(o.msaa, settings.msaa),
     aoFull: o.aoResolution === 'full' ? true : o.aoResolution === 'half' ? false : settings.aoFull,
-    airPass: o.airPass === 'off' ? false : settings.airPass,
+    cloudShadows: o.cloudPass === 'off' ? false : settings.cloudShadows,
+    skyClouds: o.cloudPass === 'off' ? false : settings.skyClouds,
     vegetation: typeof o.vegetation === 'number' ? Math.round(settings.vegetation * o.vegetation) : settings.vegetation,
     detailProps: o.detailProps === 'off' ? false : settings.detailProps,
     detailCutoffZoom: settings.detailCutoffZoom * num(o.detailCutoff, 1),

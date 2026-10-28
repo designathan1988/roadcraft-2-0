@@ -11,7 +11,7 @@ export type MassLevel = 'tile' | 'plate' | 'base';
 /** The tile and the plate a cell (column, row) lies in, as keys ("t:x,y", "p:x,y"). */
 export const tileOf = (i: number, j: number): string => `t:${Math.floor(i / TILE_CELLS)},${Math.floor(j / TILE_CELLS)}`;
 export const plateOf = (i: number, j: number): string => `p:${Math.floor(i / PLATE_CELLS)},${Math.floor(j / PLATE_CELLS)}`;
-/** The base (the top level, `massBase.ts`) a cell lies under: its plate's square. */
+/** The base (the top level, never let go: `massBase.ts`) a cell lies under: its plate's square. */
 export const baseOf = (i: number, j: number): string => `b:${Math.floor(i / PLATE_CELLS)},${Math.floor(j / PLATE_CELLS)}`;
 
 /** The square of the base a job's key stands in (`baseOf`), as "x,y": a cell's ("i,j"), a tile's, a plate's or a base's. The masses' jobs of

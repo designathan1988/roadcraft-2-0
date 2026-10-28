@@ -2,7 +2,7 @@ import type { Severable } from '@sim/people/view';
 import { fitInstances } from './instanceBounds';
 import {
   BufferAttribute, BufferGeometry, Color, DataTexture, DynamicDrawUsage, FloatType, Group, InstancedBufferAttribute, InstancedMesh,
-  Matrix4, Object3D, Quaternion, RGBAFormat, RedFormat, SkinnedMesh, Texture, Vector3, type WebGLRenderer, Sphere, type OrthographicCamera } from 'three';
+  Matrix4, Object3D, Quaternion, RGBAFormat, SkinnedMesh, Texture, Vector3, type WebGLRenderer, Sphere, type OrthographicCamera } from 'three';
 import { personHash, type PartyView, type PedView } from '@sim/people/view';
 import { DT } from '@sim/dt';
 import { m, perM } from '@world/units';
@@ -44,10 +44,10 @@ const CAPACITY = 1000;
 const LIMB_REACH = 2;
 /** Instances a level's mesh starts with; it doubles with the figures drawn at that level (`growLevel`), up to `CAPACITY`. */
 const LEVEL_START = 16;
-/** One level of a body: its own mesh, and each instance's palette row (`citizenRow`, read by the skinning), as many as its instances (`growLevel`). The last level is the impostor's card. */
-export interface LevelMesh {
+/** One level of a body: its own mesh, and each instance's palette row (`citizenRow`, read by the skinning). The last level is the impostor's card. */
+interface LevelMesh {
   readonly mesh: InstancedMesh;
-  rows: InstancedBufferAttribute | null;
+  readonly rows: InstancedBufferAttribute | null;
   /** Figures written at this level this frame. */
   count: number;
   /** A slot's colour changed since the GPU took them (burnt, or a new buffer): DO NOT send every figure's colour every frame. */
@@ -72,8 +72,6 @@ interface CitizenBatch {
   gait: GaitClips;
   /** Floats of a body's palette (16 a bone), and the bodies written this frame. */
   width: number; count: number;
-  /** The palette rows written this frame: the bodies at a mesh level. A card reads none (`emit`): DO NOT give it a row, the pass blended its row every frame for nobody. */
-  posed: number;
   /** The skeletons blended on the GPU (`people/crowdAnimation.ts`): the clips' atlas, the pass, its rows; the skinning reads `uniform`. */
   atlas: CitizenAtlas; pass: PalettePass; rows: number; uniform: { value: Texture };
   /** Its first row in the palettes' shared target, read by the skinning. */
@@ -140,16 +138,9 @@ export function citizenLevelFor(errors: readonly number[], zoom: number): number
   return citizenBandAt(zoom) === 0 ? 0 : citizenLevelOf(errors, BODY_EXTENT * zoom);
 }
 
-/** CSS pixels a body stands tall at the zoom that shows faces (`citizenBandAt` 0): a figure at least this tall keeps its whole body and face. */
-const FACE_PIXELS = BODY_EXTENT * perM(20);
-
-/** The level of one figure whose 1.9 m (`BODY_EXTENT`) stands `pixels` canvas pixels tall on the screen, `ratio` of them a CSS pixel, at `zoom`:
- *  by its own size alone. While the view shows faces, the whole body (and its face) for the figures standing as tall as a body at that zoom.
- *  DO NOT give every figure level 0 by the view's zoom: a street view drew the figures far down the street, a pixel or two tall, at their
- *  whole body and face (the F7 audit, MISSION.md 3b: one form by the figure's own size). */
+/** The level of one figure whose 1.9 m (`BODY_EXTENT`) stands `pixels` canvas pixels tall on the screen, `ratio` of them a CSS pixel, at `zoom`. */
 export function citizenLevelOfFigure(errors: readonly number[], pixels: number, ratio: number, zoom: number): number {
-  const css = pixels / ratio;
-  return citizenBandAt(zoom) === 0 && css >= FACE_PIXELS ? 0 : citizenLevelOf(errors, css);
+  return citizenBandAt(zoom) === 0 ? 0 : citizenLevelOf(errors, pixels / ratio);
 }
 
 /** Who a figure drawn by `drawClip` is and with whom: the casting context without the place. */
@@ -178,15 +169,14 @@ const BURNT = new Color(0.075, 0.062, 0.055);
 const NEUTRAL_FACE: FaceWeights = {};
 
 /** The body's face at instance `slot` of its nearest level's mesh. */
-export function setFacialExpression(mesh: InstancedMesh, source: SkinnedMesh, slot: number, face: FaceWeights): void {
+function setFacialExpression(mesh: InstancedMesh, source: SkinnedMesh, slot: number, face: FaceWeights): void {
   const influences = source.morphTargetInfluences;
   const targets = source.morphTargetDictionary;
   if (!influences || !targets || !mesh.geometry.morphAttributes.position) return;
   applyFace(influences, targets, face);
-  // three allocates an InstancedMesh's morph texture from `count` (r186 `setMorphAt`): a row for each instance it has room for now, grown with
-  // them (`growLevel`). DO NOT allocate it for `CAPACITY`: a thousand rows of every face shape for the few faces a level draws (MISSION.md item 6).
+  // three allocates an InstancedMesh's morph texture from `count`.
   const visible = mesh.count;
-  if (mesh.morphTexture === null) mesh.count = mesh.instanceMatrix.count;
+  if (mesh.morphTexture === null) mesh.count = CAPACITY;
   mesh.setMorphAt(slot, source);
   mesh.count = visible;
 }
@@ -245,7 +235,7 @@ export function castCoarse(mesh: InstancedMesh, coarseFor: (texel: number) => Bu
 }
 
 /** Room for at least `needed` instances in a level's mesh (doubled), its written ones kept; its face's texture kept across. */
-export function growLevel(level: LevelMesh, needed: number): void {
+function growLevel(level: LevelMesh, needed: number): void {
   const mesh = level.mesh;
   let capacity = Math.max(1, mesh.instanceMatrix.count);
   while (capacity < needed) capacity *= 2;
@@ -260,24 +250,6 @@ export function growLevel(level: LevelMesh, needed: number): void {
   mesh.instanceMatrix = matrices;
   mesh.instanceColor = colours;
   level.colourChanged = true;
-  // Each instance's palette row, as many as its instances.
-  if (level.rows) {
-    const rows = new InstancedBufferAttribute(new Float32Array(capacity), 1);
-    rows.array.set(level.rows.array);
-    rows.setUsage(DynamicDrawUsage);
-    mesh.geometry.setAttribute('citizenRow', rows);
-    level.rows = rows;
-  }
-  // Its faces' rows too, the ones written kept (a texture let go is freed alone, no walk of the renderer's states).
-  const morph = mesh.morphTexture;
-  if (morph) {
-    const width = morph.image.width;
-    const grown = new DataTexture(new Float32Array(width * capacity), width, capacity, RedFormat, FloatType);
-    grown.image.data!.set(morph.image.data as Float32Array);
-    grown.needsUpdate = true;
-    mesh.morphTexture = grown;
-    morph.dispose();
-  }
 }
 
 /** A body's static arrays as they were uploaded: each attribute by name, its index (`index`) and each coarser level's (`lod1`, ...). */
@@ -578,7 +550,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       owned.add(impostor);
       const batch: CitizenBatch = { levels: [], errors, source, local: source.matrixWorld.clone(), impostor, clips, gait: gaitClips(clips), width, rows,
         atlas, pass, uniform, base, scratch: new Float32Array(width), joints, parents, sex, scene: loaded.scene, rigNodes: null,
-        count: 0, posed: 0, helmet, stopTilt, resources: owned, animationBytes: 0,
+        count: 0, helmet, stopTilt, resources: owned, animationBytes: 0,
         lastUsed: performance.now(), disposed: false,
         deferred, baking: Promise.resolve() };
       owned.add({ dispose: () => { batch.pass.dispose(); batch.atlas.anim.atlas.dispose(); batch.joints.dispose(); } });
@@ -605,8 +577,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         // A colour per body from the start (white): a body burnt black by a bomb is the same program, its colour near black
         mesh.instanceColor = new InstancedBufferAttribute(new Float32Array(LEVEL_START * 3).fill(1), 3);
         mesh.instanceColor.setUsage(DynamicDrawUsage);
-        // A row for each instance it has room for, grown with them (`growLevel`).
-        const rowsAttribute = new InstancedBufferAttribute(new Float32Array(LEVEL_START), 1);
+        const rowsAttribute = new InstancedBufferAttribute(new Float32Array(CAPACITY), 1);
         rowsAttribute.setUsage(DynamicDrawUsage);
         geometry.setAttribute('citizenRow', rowsAttribute);
         mesh.name = `citizen-${model.id}@${batch.levels.length}`;
@@ -831,7 +802,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       c[o] = colour.r; c[o + 1] = colour.g; c[o + 2] = colour.b;
       at.colourChanged = true;
     }
-    (at.rows!.array as Float32Array)[slot] = batch.posed++;
+    (at.rows!.array as Float32Array)[slot] = batch.count;
     if (face) setFacialExpression(at.mesh, batch.source, slot, face);
   }
 
@@ -840,7 +811,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
     weights: readonly number[], x: number, height: number, y: number, heading: number, scale: number,
     lean = 0, ground: Gradient | null = null, expression?: FaceWeights, lost: readonly Severable[] | null = null, level = 0): void {
     // A card needs no palette: its row is never read.
-    if (!batch.levels[Math.min(level, batch.levels.length - 1)]!.impostor) pose(batch, batch.posed, clips, phases, weights, lost);
+    if (!batch.levels[Math.min(level, batch.levels.length - 1)]!.impostor) pose(batch, batch.count, clips, phases, weights, lost);
     transform.position.set(x, height, -y);
     // Yaw, then a roll about the body's own forward axis
     transform.rotation.set(0, heading + Math.PI / 2, -lean, 'YXZ');
@@ -890,7 +861,6 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       band = citizenBandAt(zoom);
       for (const batch of batches.values()) {
         batch.count = 0;
-        batch.posed = 0;
         for (const at of batch.levels) at.count = 0;
       }
     },
@@ -915,7 +885,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         return;
       }
       if (batch.count >= CAPACITY) return;
-      if (batch.posed >= batch.rows) grow(batch);
+      if (batch.count >= batch.rows) grow(batch);
       const time = Math.max(0, ped.age - (1 - alpha) * DT);
       const scale = body.size * (0.92 + ((hash >>> 8) & 255) / 255 * 0.17);
       let gait = motion.get(ped);
@@ -1010,7 +980,7 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         return 0;
       }
       if (batch.count >= CAPACITY) return 0;
-      if (batch.posed >= batch.rows) grow(batch);
+      if (batch.count >= batch.rows) grow(batch);
       mixClips.length = 0;
       mixPhases.length = 0;
       mixWeights.length = 0;
@@ -1118,11 +1088,11 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
         }
       }
     },
-    /** The skeletons of the bodies written this frame at a mesh level, blended on the GPU before anybody draws them (`agents.renderPalettes`): none for a batch drawn as cards alone. */
+    /** The skeletons of the bodies written this frame, blended on the GPU before anybody draws them (`agents.renderPalettes`). */
     renderPalettes(renderer: WebGLRenderer): void {
       for (const batch of batches.values()) {
-        if (batch.posed === 0) continue;
-        batch.pass.render(renderer, batch.posed);
+        if (batch.count === 0) continue;
+        batch.pass.render(renderer, batch.count);
         batch.uniform.value = batch.pass.texture;
         batch.base.value = batch.pass.base;
       }
@@ -1183,12 +1153,6 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
       const tilt = body ? batches.get(body.index)?.stopTilt : undefined;
       return tilt ? (motorcycle ? tilt.moto : tilt.bike) : null;
     },
-    /** The bodies kept (`keepAll`) whose load is under way: the opening's curtain waits for them (`renderer.ts` reveal), so no body is put together on the page once the town shows (MISSION.md item 6). A failed one is not waited for (asked again later). */
-    get keptLoading(): number {
-      let n = 0;
-      for (const index of resident) if (!batches.has(index) && loading.has(index)) n++;
-      return n;
-    },
     /** Every body loaded now and kept: the people in the vehicles are drawn the first frame they are near, not seconds later (a body was asked for only once a car came near, and let go a minute after the view left). */
     keepAll(): void {
       for (let index = 0; index < models.length; index++) {
@@ -1209,10 +1173,10 @@ export function createRiggedCitizens(models: readonly string[] = CROWD_IDS,
     drawPalette(index: number, palette: Float32Array, instance: Matrix4, charred = false): void {
       const batch = batches.get(index);
       if (!batch || batch.count >= CAPACITY || palette.length !== batch.width) return;
-      if (batch.posed >= batch.rows) grow(batch);
+      if (batch.count >= batch.rows) grow(batch);
       // Worked out by the ragdoll: the pass copies it as it is.
-      batch.pass.setOverride(batch.posed, palette);
-      batch.pass.setPlays(batch.posed, null, 0);
+      batch.pass.setOverride(batch.count, palette);
+      batch.pass.setPlays(batch.count, null, 0);
       const e = instance.elements;
       // Never a card for a body on the ground: the palette is its pose. Its face's weights too, close up: the slot otherwise keeps whatever the morph texture held there - zero, never written
       const level = Math.min(levelOf(batch, e[12]!, -e[14]!, e[13]!), batch.errors.length - 1);

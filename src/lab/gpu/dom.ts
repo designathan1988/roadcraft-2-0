@@ -25,7 +25,7 @@ export const ms = (v: number): string => v.toLocaleString('en-US', { minimumFrac
 
 /** One colour per pass, steady across frames. */
 export const PASS_COLOURS: Record<string, string> = {
-  shadows: '#8e7cc3', scene: '#2fb3a0', gtao: '#e6a23c', canyon: '#d4675c', bloom: '#f2d16b', atmosphere: '#6fa8dc', smaa: '#9fc5a8', output: '#b4b4b4',
+  shadows: '#8e7cc3', scene: '#2fb3a0', gtao: '#e6a23c', canyon: '#d4675c', bloom: '#f2d16b', clouds: '#6fa8dc', smaa: '#9fc5a8', output: '#b4b4b4',
 };
 
 /** A table's filter from a tab's `focus` params: only what was given. */

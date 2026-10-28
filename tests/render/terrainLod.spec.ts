@@ -5,7 +5,7 @@ import { LOD_LEVELS, LOD_NODE, LOD_PATCH, LandLevels } from '@render/terrainLeve
 import { LandLod, lodFragmentGlsl, lodVertexGlsl } from '@render/terrainLod';
 import { TERRAIN_CELL, TERRAIN_HALF, TERRAIN_SEGMENTS } from '@render/terrainGrid';
 
-/** A TERRAIN PLATE DRAWN BY ITS DISTANCE (`render/terrainLod.ts`, Strugar's CDLOD): the game's plate, 200 cells of 10 m under a root of 512 that reaches past it */
+/** A TERRAIN PLATE DRAWN BY ITS DISTANCE (`render/terrainLod.ts`, Strugar's CDLOD): the game's plate, 200 cells of 10 m under a root of 256 that reaches past it */
 const seg = TERRAIN_SEGMENTS, n = seg + 1, cell = TERRAIN_CELL, half = TERRAIN_HALF;
 /** The root's side, cells: past the plate's far edges. */
 const ROOT = LOD_NODE << (LOD_LEVELS - 1);
@@ -202,7 +202,7 @@ describe('the patches chosen for a camera', () => {
   });
 });
 
-describe('a plate of 200 cells under a root of 512 (CDLOD past the raster, Strugar)', () => {
+describe('a plate of 200 cells under a root of 256 (CDLOD past the raster, Strugar)', () => {
   /** A corner of a patch as the vertex shader places it (`landCorner`): its index on the plate, held on the far edge, moved by `k` onto the even corner
    *  before it when odd, that corner held on the plate too (CDLOD's clamp, `getBaseVertexPos`). */
   const placed = (origin: number, g: number, step: number, k: number): number => {
@@ -267,10 +267,7 @@ describe('a plate of 200 cells under a root of 512 (CDLOD past the raster, Strug
     }
   });
 
-  // ONE FORM BY ITS SIZE (MISSION.md 3b): the coarsest level is the 512-cell root, whose first quarter covers a plate of up to 256 cells in one
-  // patch. This replaces the rule of the 256-cell root (four patches, 512 triangles, at the coarsest), which the far terrain drew a few tenths of
-  // a pixel across (the F7 audit).
-  it('draws a far plate as ONE patch at its coarsest level, as a plate of the root\'s quarter side does', () => {
+  it('draws a far plate with as many patches as a plate of the root\'s own side: four at its coarsest level', () => {
     const flat = (side: number): { heights: Float64Array; flip: Uint8Array } => ({ heights: new Float64Array((side + 1) ** 2), flip: new Uint8Array(side * side) });
     const far = (side: number): number => {
       const { heights, flip } = flat(side);
@@ -287,11 +284,9 @@ describe('a plate of 200 cells under a root of 512 (CDLOD past the raster, Strug
       for (let k = 0; k < count; k++) expect(data[k * 4 + 3]).toBe(LOD_LEVELS - 1);
       return count * LOD_PATCH * LOD_PATCH * 2;
     };
-    // The plate of 256 cells (the root's quarter, the grid of 2,560 m plates of 10 m) and the plate of 200: one patch each from afar.
-    expect(far(ROOT / 2)).toBe(LOD_PATCH * LOD_PATCH * 2);
-    expect(far(seg)).toBe(far(ROOT / 2));
-    // A plate of the root's own side: its four quarters.
+    // The plate of 256 cells (the root's side, the grid of 2,560 m plates of 10 m) and the plate of 200: the same triangles from afar.
     expect(far(ROOT)).toBe(4 * LOD_PATCH * LOD_PATCH * 2);
+    expect(far(seg)).toBe(far(ROOT));
   });
 
   it('refuses a plate that is not whole level-0 patches under one root', () => {

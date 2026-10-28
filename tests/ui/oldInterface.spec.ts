@@ -106,13 +106,13 @@ describe('the old interface', () => {
     // The old sliders and the whole map's actions, by the names the shell asks the game for.
     const SLIDERS = ['terrainRadius', 'terrainStrength', 'terrainHardness', 'gullyStrength', 'gullyAuto', 'waterWaves', 'waterFoam', 'waterCurrent',
       'weatherRain', 'weatherWind', 'weatherWindDir', 'weatherLightning', 'weatherThunder', 'treeDensity', 'treeHeight', 'treeVariation', 'treeSpacing',
-      'elDensity', 'elSize', 'elVariation', 'elSpacing', 'elStrength', 'elIntensity', 'trafficIntensity', 'pedIntensity'];
-    // The clouds' and the fog's sliders and actions left with them (MISSION.md item 4, 2026-10-28).
+      'elDensity', 'elSize', 'elVariation', 'elSpacing', 'elStrength', 'elIntensity', 'cloudSize', 'cloudHeight', 'cloudDensity', 'cloudCount',
+      'cloudVariation', 'fogStrength', 'fogHeight', 'fogSpeed', 'fogMapDensity', 'atmoFog', 'atmoFogHeight', 'trafficIntensity', 'pedIntensity'];
     for (const slider of SLIDERS) {
       expect(shell, slider).toContain(`'${slider}'`);
       expect(main, slider).toMatch(new RegExp(`\\b${slider}:`));
     }
-    for (const action of ['clearTerrain', 'clearGullies', 'clearTrees', 'clearElements']) {
+    for (const action of ['clearTerrain', 'clearGullies', 'clearFog', 'clearTrees', 'clearElements', 'clearClouds', 'scatterClouds']) {
       expect(shell, action).toContain(`'${action}'`);
     }
   });
