@@ -28,6 +28,7 @@ import { gpuOnlyAttributes } from './mesh/gpuOnly';
 import { PICTURE_PX, type PlantImpostors } from './plantImpostors';
 import { castBySize } from './shadowCasters';
 import { type PropPlacement, createPropAsks } from './propAsks';
+import { packBytes, within } from './propPacks';
 
 /**
  * THE PROPS HELD ROUND THE VIEW, NOT FOR THE MAP: the gardens' plants, the street furniture and its plants (`gardens.ts`,
@@ -241,41 +242,6 @@ export interface PropLayer {
 const keyOfCell = (cx: number, cy: number): CellKey => (cx + 32768) * 65536 + (cy + 32768);
 const columnOf = (key: CellKey): number => Math.floor(key / 65536) - 32768;
 const rowOf = (key: CellKey): number => (key % 65536) - 32768;
-
-/** A rectangle's things kept to those whose pose stands in the cells `cx0..cx1`, `cy0..cy1`; `code` gives each one's eighth float (none: as placed). */
-function within(packs: ReadonlyMap<number, Pack>, cx0: number, cy0: number, cx1: number, cy1: number,
-  code?: (cx: number, cy: number) => number): Map<number, Pack> {
-  const stride = YAW_POSE.stride, out = new Map<number, Pack>();
-  for (const [kind, pack] of packs) {
-    const keep: number[] = [];
-    const codes: number[] = [];
-    for (let i = 0; i < pack.count; i++) {
-      // Its cell from the pose's own floats (float32): the near cells and the far blocks file a thing by the same numbers, and the GPU reads them.
-      const cx = Math.floor(pack.data[i * stride]! / PROP_CELL), cy = Math.floor(-pack.data[i * stride + 2]! / PROP_CELL);
-      if (cx < cx0 || cx > cx1 || cy < cy0 || cy > cy1) continue;
-      keep.push(i);
-      if (code) codes.push(code(cx, cy));
-    }
-    if (keep.length === 0) continue;
-    if (keep.length === pack.count && !code) { out.set(kind, pack); continue; }
-    const data = new Float32Array(keep.length * stride), scales = new Float32Array(keep.length);
-    const colours = pack.colours ? new Float32Array(keep.length * 3) : null;
-    keep.forEach((i, j) => {
-      data.set(pack.data.subarray(i * stride, (i + 1) * stride), j * stride);
-      if (code) data[j * stride + 7] = codes[j]!;
-      scales[j] = pack.scales[i]!;
-      if (colours) colours.set(pack.colours!.subarray(i * 3, i * 3 + 3), j * 3);
-    });
-    out.set(kind, { data, colours, scales, count: keep.length });
-  }
-  return out;
-}
-
-const packBytes = (packs: ReadonlyMap<number, Pack>): number => {
-  let n = 0;
-  for (const p of packs.values()) n += p.data.byteLength + p.scales.byteLength + (p.colours?.byteLength ?? 0) + 64;
-  return n;
-};
 
 /** A layer of things held round the view. */
 export function createPropLayer(spec: PropLayerSpec): PropLayer {
@@ -627,6 +593,9 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
 
   const inSquare =(key: CellKey, s: PropSquare): boolean => s.k >= 0 && Math.max(Math.abs(columnOf(key) - s.cx), Math.abs(rowOf(key) - s.cy)) <= s.k;
   let busy = false;
+  /** Each class's cells' `version` at which every block it wanted was found held (NaN: not since). DO NOT walk the wanted blocks again at every
+   *  frame to find none missing: a city view's reach wants ~2,300 blocks a class, each asked `has` at every frame of every prop layer. */
+  const allIn = far.map(() => Number.NaN);
   /** Whether the last `ringsIn` left rings of the square it was asked for unplaced. */
   let ringsShort = false;
 
@@ -719,14 +688,22 @@ export function createPropLayer(spec: PropLayerSpec): PropLayer {
         // The same blocks as last frame: the cache's wanted list is the one it was given then (nothing else gives it one).
         const blocks = blocksFor(cls, view, reaches[cls]!);
         if (blocks.fresh) f.want(blocks.keys);
-        let first = true;
-        for (const key of f.wantedKeys) {
-          if (f.has(key)) continue;
-          // Its placement asked off the page and not come: the next one derived meanwhile.
-          if (!ready(f, key)) { busy = true; continue; }
-          if (!first && performance.now() > deadline) { busy = true; break; }
-          f.ensure(key);
-          first = false;
+        // Every wanted block held at the last walk, and neither the wanted blocks nor the held ones changed since (a wanted block is let go only
+        // by the diary or the hour, which move `version`): nothing to derive nor ask.
+        const done = allIn[cls]!;
+        if (blocks.fresh || done !== f.version) {
+          allIn[cls] = Number.NaN;
+          let first = true, whole = true;
+          for (const key of f.wantedKeys) {
+            if (f.has(key)) continue;
+            whole = false;
+            // Its placement asked off the page and not come: the next one derived meanwhile.
+            if (!ready(f, key)) { busy = true; continue; }
+            if (!first && performance.now() > deadline) { busy = true; break; }
+            f.ensure(key);
+            first = false;
+          }
+          if (whole) allIn[cls] = f.version;
         }
         f.trim(null);
         // A block held but not wanted (out of the reach, out of the frustum) draws nothing.
