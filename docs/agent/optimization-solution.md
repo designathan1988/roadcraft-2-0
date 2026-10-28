@@ -75,7 +75,7 @@ What it guarantees, by construction (not by measurement):
   changes. Any difference is a porting bug, checkable picture against picture with the game's own comparison
   (`render/gpu/imageCompare.ts`, `twins.ts`).
 
-### B. Far buildings made from the near ones (HLOD with baked material)
+### B. WITHDRAWN (never bake: the buildings are built at run time; the far levels already use the facade grammar, section 4 step 5)
 
 What it is: Hierarchical LOD as Unreal and Cesium build it: a coarser level is generated FROM the finer one, its geometry simplified
 and its material baked from the original's look into an atlas
@@ -100,6 +100,11 @@ is resolution (a texel per pixel at the distance the level is chosen for). The h
 2. Multi-draw: the part runs of a kind merged into one draw per (kind x level x pass); `partCells.ts` stops making a mesh per run.
 3. The WebGPU compute cull writing one indirect buffer, the CPU cull kept as the WebGL fallback.
 4. `massCells.choose` / `cap` only on threshold crossings (residency), not every frame.
-5. The far levels baked from the detail (part B), replacing `massing.ts` / `facadeLevel.ts` painting.
+5. WITHDRAWN: never bake. The buildings are programs made at run time and edited by the player, so the far levels must come
+   from the same facade grammar evaluated per pixel over the real masses: F-shade (Haegler et al., EGSR 2010,
+   https://diglib.eg.org/items/c323b1b7-2ba8-4be3-8575-c0808924e2bf) and levels from the grammar's own terminals (Mueller et al. 2006).
+   That was decided on 2026-10-27 (27bcdd1a) and is ALREADY IN THE CODE: the masses, tile, plate and base are written in the facade
+   level's own vertex format and drawn by its own material (`massCells.ts` 256: `[kit.shellMaterial, kit.facade]`). What is left of the
+   far look is the far wall gap ~10% darker than the original (STATE.md open issues): a fix inside that design, by reading the code.
 6. The occlusion moved into the same compute pass (a depth pyramid of the last frame, as the 2015 talk does), replacing the CPU
    `occlusion.build` / `hideOccluded` walk.

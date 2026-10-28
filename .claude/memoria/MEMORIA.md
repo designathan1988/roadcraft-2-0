@@ -1,6 +1,7 @@
 # Project memory index
 
 One line per memory file in this folder. New learnings go in a new file here (frontmatter: name, description, metadata.type) plus one line in this index.
+- [Prédios dinâmicos, nunca assar](buildings-runtime-never-bake.md) — prédios gerados em tempo de jogo e editados pelo jogador: nunca HLOD assado/atlas/impostor; níveis de longe = gramática da fachada por pixel (F-shade), já no código
 
 - TUDO DO PROJETO ESTÁ NO PROJETO: roadcraft/docs/agent/README.md (método, regras) e docs/agent/STATE.md (estado); atualizar lá, não aqui
 - [Falar em português](falar-em-portugues.md) — todas as respostas ao usuário em português do Brasil

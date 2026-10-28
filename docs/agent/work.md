@@ -99,5 +99,34 @@ must be built. No measuring, no probes, no tests: the code is the evidence. Keep
   pictures taken mid-flight and from the start: every shown run equal to a twin choosing at each view. Mutations: slack x4 fails;
   a skip turned into a throw fails (the flight does skip).
 
+- 2026-10-28 (the owner: "OS PREDIOS SÃO CONSTRUIDOS DINAMICAMENTE"): step 5 (baked HLOD) WITHDRAWN. The right design (F-shade: far levels in the facade level format, drawn by its material) was decided on 2026-10-27 (27bcdd1a) and is already in the code (massCells.ts 256). Memory: .claude/memoria/buildings-runtime-never-bake.md. Left: the far wall gap ~10% darker, fixed inside that design.
+
+- Step 2 NOT DONE, why (read: partCells.ts whole, partPose.ts, mesh/gpuOnly.ts, three r186 WebGLRenderer.js 1316-1345,
+  WebGLIndexedBufferRenderer.js 31-49, WebGLBindingStates.js 320-440, WebGLAttributes.js 185, core/GLBufferAttribute.js):
+  * three r186 multi-draws only non-instanced draws (`renderMultiDraw` -> `multiDrawElementsWEBGL`, BatchedMesh); there is no
+    base-instance multi-draw (https://registry.khronos.org/webgl/extensions/WEBGL_multi_draw/ has no instanced base-instance entry;
+    the base-instance one, https://registry.khronos.org/webgl/extensions/WEBGL_multi_draw_instanced_base_vertex_base_instance/, is a draft). A band's runs at one level sit at different offsets of the band's
+    buffer, so one draw per kind x level needs the instances MOVED into one buffer per draw.
+  * Moving them on the CPU needs the band arrays, which the code lets go once uploaded (`gpuOnlyAttributes` in the PartCell
+    constructor; gpuOnly.ts: "DO NOT keep a mesh's arrays"): keeping them doubles the detail parts' memory.
+  * Moving them on the GPU needs three's GL buffers, which it does not expose (WebGLRenderer keeps `attributes` private; only
+    `properties` and `info` are public), or raw buffers through GLBufferAttribute, which has no offset or stride (the 8-float pose
+    is two vec4 at offsets 0 and 16) and is not instanced, plus context-loss rebuilding outside three; or every part material
+    rewritten to fetch its instances from textures. None of these can be shown equal by a spec here (node, no WebGL).
+- Step 3 and step 6 NOT DONE, why (read: render/gpu/webgpuView.ts whole, backendChoice.ts, renderer.ts 4200-4227): the game is drawn
+  by WebGL (`chosenBackend` is webgl unless `?gpu=webgpu`); the WebGPU renderer is stage 1: "No shadows yet", every material without a
+  node twin "hidden for its frame", and the WebGL renderer keeps programs, uploads and shadow stores (webgpuView.ts 10-13, 60-64). A
+  compute cull and a GPU occlusion there change nothing the player sees and cannot be compared with 7c4de70f. Its CPU fallback is
+  the WebGL path, which step 0/1 already made one walk.
+- Step 4 NOT DONE, why (read: massCells.ts 1-1133 whole, layer.ts 230-349 and 990-1179): `choose` and `cap` turn on frustum tests of
+  every plate, tile and near cell (massCells.ts 518-537, 839, 917) and on the ORDER of the near cells by pixels (cap, 966; rankOf,
+  letGoPassed, letBackFitting in layer.ts). A plane's distance to a box changes by |angle| x distance as the camera turns (a box 2 km
+  off crosses a 1 m margin at 0.03 degrees), and any two cells' pixel ranks swap as the eye moves between them: a drag crosses a
+  threshold almost every frame, so "only on a crossing" would choose as often as now, with the bookkeeping on top. The existing guard
+  (layer.ts 1011-1026: the same read and a settled choice skip it) already covers the still view.
+- Step 5 WITHDRAWN by the solution itself (248680d0, 78ed0661, another session): the far levels already use the facade grammar's own
+  vertex format and material (massCells.ts 256); a bake contradicts buildings made and edited at run time.
+
 ## Next
-1. Step 2: multi-draw (one draw per kind x level x pass; partCells.ts stops making a mesh per run).
+1. The end of the goal: open the game once, photos of the same views (centre close, centre far, a drag) on this code and on
+   7c4de70f's (a worktree, its own dev server), compared by `scripts/look-compare.mjs` (`imageCompare`-style), each looked at.

@@ -17,7 +17,8 @@ published to roadcraft-2-0 (publish cbda5016). The code-graph mission and everyt
 ## TASKS, IN ORDER (the owner's words are in `docs/agent/orders.md`)
 0. NOW: the owner's goal of 2026-10-28: build `docs/agent/optimization-solution.md` section 4, steps 0-6, in order, each committed and
    published with tsc and its spec; no questions, no subagents, no measuring, the game opened once at the end for photos compared with
-   7c4de70f (`imageCompare.ts`). Progress and next step: `docs/agent/work.md`. Done: step 0 (acc7debf), step 1.
+   7c4de70f (`imageCompare.ts`). Progress and next step: `docs/agent/work.md`. Done: step 0 (acc7debf), step 1 (bd376121). Steps 2, 3, 4, 6 not
+   done, step 5 withdrawn, each with its proof in the code (work.md). Left: the photos against 7c4de70f.
 1. DONE (b42f2003 and the notebook hook): the context lost at compaction (orders of 2026-10-28 02:00-02:20). Findings:
    - This session already runs on the 1M window: it compacted 9 times, each at ~968k tokens (compactMetadata.preTokens in the
      transcript). A bigger window does not exist; `/autocompact` only makes it compact sooner.
