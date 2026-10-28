@@ -4,7 +4,9 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import FILES from 'virtual:model-urls/citizens/people?ext=bin,ktx2';
 import cast from '@people/cast.json';
-import { LEVEL_TRIANGLES, readCookedHeader } from '@render/people/cookedPerson';
+import { LEVEL_TRIANGLES, assemblePerson, decodeCookedPerson, readCookedHeader } from '@render/people/cookedPerson';
+import { CROWD_IDS } from '@render/citizenCasting';
+import { SkinnedMesh } from 'three';
 import { importClosure } from '../../scripts/vite/cook-plugin';
 
 /** A file reached only by an import for its effect, or only through the `@/` alias, is code the bake runs: a change to it must change the fingerprint. */
@@ -49,6 +51,24 @@ describe('the ready files of the people', () => {
         // The game draws the coarsest level under a pixel (`riggedCitizens.ts` citizenLevelOf): a level no coarser than the next is never drawn.
         if (k > 0) expect(level.error, `${id} L${k}`).toBeGreaterThan(levels[k - 1]!.error);
       });
+    }
+  });
+
+  /** MISSION.md item 6: a file the code can no longer read fails here, never in the game, where every body failing to load leaves the city
+   *  without a person (a change of `core/rng.ts` once did), the load only said in the console and asked again. */
+  it('are each read whole and put together by the code as it is now, every body the casting draws among them', () => {
+    expect([...CROWD_IDS].sort()).toEqual([...ids].sort());
+    for (const id of ids) {
+      const bytes = readFileSync(join('public/models/citizens/people', `${id}.bin`));
+      const { person } = decodeCookedPerson(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+      const scene = assemblePerson(person);
+      let mesh: SkinnedMesh | null = null;
+      scene.traverse((o) => { if (o instanceof SkinnedMesh && !mesh) mesh = o; });
+      expect(mesh, id).not.toBeNull();
+      const skinned = mesh! as SkinnedMesh;
+      expect(skinned.geometry.getAttribute('position').count, id).toBeGreaterThan(0);
+      expect(skinned.geometry.index?.count ?? 0, id).toBe(person.header.mesh.levels[0]!.count);
+      expect(skinned.skeleton.bones.length, id).toBeGreaterThan(0);
     }
   });
 });
