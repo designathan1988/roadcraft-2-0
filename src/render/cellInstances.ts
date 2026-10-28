@@ -300,6 +300,13 @@ export function warmMesh(spec: KindMesh, tinted: boolean, format: SlotFormat): I
   return mesh;
 }
 
+/** Whether a thing `across` pixels wide, last drawn at the level of place `rank` down the ladder (-1: none), is over `bar`, the bar above level
+ *  `above`: held by the band round it, a level kept by what was drawn at it or above, left to by what was below. DO NOT make it a closure in
+ *  the cull's slot loop: a new function for every instance in view at every frame of a move. */
+function over(across: number, rank: number, bar: number, above: number): boolean {
+  return across >= bar * (rank < 0 ? 1 : rank <= RANK[above as 0 | 1 | 2 | 3] ? 1 - HYSTERESIS : 1 + HYSTERESIS);
+}
+
 /** The smallest store worth a mesh. */
 const MIN_CAPACITY = 64;
 /** Side of a leaf cell: a fifth of a world cell (`world/cells.ts` CELL). */
@@ -1283,17 +1290,15 @@ export function createCellInstances(kindSpecs: readonly KindSpec[], format: Slot
         const across = sizes[i]! * (w > 1e-4 ? perUnitAtOne / w : Infinity);
         // Down the ladder, each bar held by the band round it: a level kept by what was drawn at it or above, left to by what was below.
         const rank = prev === UNKNOWN ? -1 : RANK[prev as 0 | 1 | 2 | 3];
-        const over = (bar: number, above: number): boolean =>
-          across >= bar * (rank < 0 ? 1 : rank <= RANK[above as 0 | 1 | 2 | 3] ? 1 - HYSTERESIS : 1 + HYSTERESIS);
         let level: number;
         if (far === Infinity) level = FAR;
         else if (far >= 0 || mid >= 0) {
-          if (over(mid >= 0 ? mid : far, NEAR)) level = NEAR;
-          else if (mid >= 0 && (far < 0 || over(far, MID))) level = MID;
+          if (over(across, rank, mid >= 0 ? mid : far, NEAR)) level = NEAR;
+          else if (mid >= 0 && (far < 0 || over(across, rank, far, MID))) level = MID;
           else level = FAR;
         } else level = NEAR;
         // Under its own least size, not drawn at any level.
-        if (least >= 0 && !over(least, FAR)) level = NONE;
+        if (least >= 0 && !over(across, rank, least, FAR)) level = NONE;
         // Past where its material fades it out whole: its sphere's nearest depth (never more than its distance) beyond it. DO NOT draw a lamp's
         // cone a kilometre off: every one of the town's was drawn at night and discarded pixel by pixel past 140 m (the F7 audit, 235 k
         // triangles at the district's view, 2026-10-25). A view from above has w 1: nothing faded, nothing cut.
