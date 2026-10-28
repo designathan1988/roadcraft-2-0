@@ -37,5 +37,9 @@ The reading that wrote the mission is done (249 of 249 documents, `reading.md`, 
 
 - 3b PEOPLE DONE (skill cycle 34, riggedCitizens.ts 1205 read whole; 7e3222bf, pub 7a3bc9b6; citizenLod.spec new case fails undone): citizenLevelOfFigure gave every figure its whole body and face while the VIEW's zoom showed faces; now the whole body only for a figure as tall as a body at the face's zoom (BODY_EXTENT x 20 px/m), every other by its own pixels (card under IMPOSTOR_PIXELS). Riders and seated people keep their coarsest mesh, never a card (their pose is the vehicle's, by design).
 
+- 3b POLES AND WIRES DONE (skill cycle 35, poleCells.ts 304, poleLayer.ts 299 read whole; e369b772, pub 7910477a; spec poleAhead fails undone): each piece was already at its level by its pixels (poleStores.ts:353-390; insulators and caps have levels, utilities.ts:160-162). The blocks were made only once in the frustum: now the ring of blocks the view turns into next (box grown by one block) is wanted after the view's and made with the frame's time left over.
+
+- 3b A ROAD JUST BUILT: BLOCKED (skill cycle 36, roadStandIn.ts 123, roadProgramStandIns.ts 56 read whole; nothing changed). roadStandIn draws the commit's new roads as the far level's pieces in two flat mean tones at every distance until the world's build lands (renderer.ts:3777, "over 2 s"): a form by load state. Its own near form is the built surfaces, made by worldSteps waiting on job workers whose answers come between frames, so the commit's frame cannot hold them; the fix is the road surfaces made on the page for the commit's segments, which is item 5's work, not this file. Taking the stand-in away leaves the road invisible (worse). roadProgramStandIns is hidden (programs compiled ahead): no form on screen.
+
 ## Next
-MISSION.md item 3b, next category: poles and wires; then a road's stand-in (roadStandIn.ts, roadProgramStandIns.ts), terrain (far tiles by size), water; then items 4-9 and the End. Left open: the paused simulation's wake (2e, above).
+MISSION.md item 3b, next category: terrain (far tiles by size), water; then items 4-9 and the End. Left open: the paused simulation's wake (2e, above).
