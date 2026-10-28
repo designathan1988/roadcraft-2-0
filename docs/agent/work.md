@@ -99,6 +99,8 @@ must be built. No measuring, no probes, no tests: the code is the evidence. Keep
   pictures taken mid-flight and from the start: every shown run equal to a twin choosing at each view. Mutations: slack x4 fails;
   a skip turned into a throw fails (the flight does skip).
 
+- 2026-10-28 03:10 (the owner: "O QUE MAIS JÁ FOI DECIDIDO ... E VOCÊ POR NEGLIGENCIA IGNOROU?"): read the whole session (docs/agent/session-log.md without tool lines, 8,258 lines) and wrote what the plan missed into optimization-solution.md section 5 and STATE.md.
+
 - 2026-10-28 (the owner: "OS PREDIOS SÃO CONSTRUIDOS DINAMICAMENTE"): step 5 (baked HLOD) WITHDRAWN. The right design (F-shade: far levels in the facade level format, drawn by its material) was decided on 2026-10-27 (27bcdd1a) and is already in the code (massCells.ts 256). Memory: .claude/memoria/buildings-runtime-never-bake.md. Left: the far wall gap ~10% darker, fixed inside that design.
 
 - Step 2 NOT DONE, why (read: partCells.ts whole, partPose.ts, mesh/gpuOnly.ts, three r186 WebGLRenderer.js 1316-1345,
@@ -124,8 +126,16 @@ must be built. No measuring, no probes, no tests: the code is the evidence. Keep
   off crosses a 1 m margin at 0.03 degrees), and any two cells' pixel ranks swap as the eye moves between them: a drag crosses a
   threshold almost every frame, so "only on a crossing" would choose as often as now, with the bookkeeping on top. The existing guard
   (layer.ts 1011-1026: the same read and a settled choice skip it) already covers the still view.
-- Step 5 WITHDRAWN by the solution itself (248680d0, 78ed0661, another session): the far levels already use the facade grammar's own
-  vertex format and material (massCells.ts 256); a bake contradicts buildings made and edited at run time.
+- Step 5, as the owner corrected it (2026-10-28: no bake; fix only the far wall ~10% darker, inside the F-shade design of massCells.ts
+  256): read facadeLevel.ts whole, finishes.ts 60-360, buildingMesh.ts CoverShell 911-984, history.md 80-112, the memory
+  buildings-runtime-never-bake.md. FOUND (facadeLevel.ts 161 before): after the cover's colour mix, `facadeWall *= 1.0 - facadeCovered`
+  took the covered share out of the weights the roughness (211), metal (213) and sky reflection (222) are weighed by: those weights
+  then summed to under 1 and the covered share (slabs, balconies, bands: shell faces) was drawn with roughness and metal 0 and no
+  sky reflection - smoother and unlit by the sky, darker. FIXED: the line gone, the covered share keeps the wall's material; program
+  key v10 -> v11. Spec tests/render/facadeCoverWeights.spec.ts (the patched fragment shader: no share written after the cover's mix,
+  the weights the whole pixel); with the old line back it fails. Only the far levels change (the L1's and detail's runs have cover 0).
+  NOT VERIFIED until the photos: how much of the 107 -> 119 gap this closes. Left by the history's own prescription if a gap remains:
+  the finish's far tone on the faces CoverShell sums (raw paint now) and the slabs' tops with the sky they hide.
 
 ## Next
 1. The end of the goal: open the game once, photos of the same views (centre close, centre far, a drag) on this code and on

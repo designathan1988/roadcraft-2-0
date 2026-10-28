@@ -108,3 +108,40 @@ is resolution (a texel per pixel at the distance the level is chosen for). The h
    far look is the far wall gap ~10% darker than the original (STATE.md open issues): a fix inside that design, by reading the code.
 6. The occlusion moved into the same compute pass (a depth pyramid of the last frame, as the 2015 talk does), replacing the CPU
    `occlusion.build` / `hideOccluded` walk.
+
+## 5. Decided or found earlier and missing from this plan (read from the whole session, 2026-10-26 21:27 to 2026-10-28 03:00)
+
+Each item below was ordered by the owner or found by reading the code, and this plan did not carry it. Every step above must keep them.
+
+1. **ONE FORM PER VIEW, FOR EVERYTHING** (the owner, 2026-10-27 evening, "above every other": `history.md` 9-27). What a thing looks like
+   depends on the view alone, never on what has loaded nor on a budget. Done: roads (8e1e9f25, 6c7361fb), cars by their own screen size
+   (8e1e9f25), the buildings' far levels in the facade level's format (878d21d5 on). NOT done:
+   - buildings: the form still hangs on load and budgets: `layer.ts` 303-318 `capTriangles` coarsens and holds cells by the triangle
+     budget, `keepToBudget` lets far cells go over the memory room, `pendingCells` are "shown as they land";
+   - trees (near trees / far forest cards), street furniture and props, people, poles and wires (blocks not built show nothing), the
+     stand-in of a road just built (`roadStandIn.ts`), terrain levels, water: inventory first, one category at a time.
+   The GPU cull (step 3) must pick the level by screen error alone, with no budget swapping the form.
+2. **Clouds and fog removed from the game** (the owner, 2026-10-27 afternoon: "SE ESTIVEREM REMOVA ELAS DE UMA VEZ DO JOGO, ASSIM COMO
+   NEBLINA"; clouds measured 13-19 ms of GPU at the whole-city view). Not done: `fogLayer.ts`, `cloudShadowStamp.ts`, ~37 files; old saves
+   must still open.
+3. **Camera-drag causes found with real gestures and not in this plan:**
+   - shader programs compiled in the middle of a move (3 to 34 a move, the page stopped up to 1 s): every program the view can need
+     compiled before it is drawn;
+   - the people's animation palettes drawn every frame for every batch, ~950 renders a second even off screen (`renderer.ts` 4112
+     `agents.renderPalettes`, `BACKLOG.md` 9);
+   - every render target reallocated when the window flips between 1079 and 1080 px (`BACKLOG.md` 6);
+   - three's batched draws re-uploading their small data textures at every draw of every camera (293 ms in 8 s): step 2's multi-draw
+     must not bring that cost with it;
+   - the 3-component half-float attributes ANGLE converts (`BACKLOG.md` 7).
+4. **Rebuild every heavy model and the textures painted at run time** (the owner, 2026-10-27: "REFAÇA SIM TODOS OS MODELOS E TEXTURAS";
+   "REFAÇA O MODELO DE TUDO QUE TIVER MUITOS TRIANGULOS"): the seven textures painted at the opening (blast, signature, casualties,
+   elements, lowPolyTrees, signs, utilities; the lint's shrinking list), the cars, the building parts (2.65 M triangles, 60% of the GPU at
+   a street view).
+5. **Whole-map work still left on the page or sent whole:** the simulation receives the whole map (`simClient.ts` -> `trafficMapOf`);
+   the road surfaces are derived on the page (inventory S1); on a cold arrival `viewCells.make`, `lookProps`, `casterChanges`, `syncBases`,
+   `poleCells.look` and the copy of rows sent to the job processes.
+6. **The base level built for the whole map at the opening**, as heavy as the plate since fe0b4e42 (said on 2026-10-27 19:51): the
+   opening's own cost, to be made by view like the rest.
+7. **Never a fake or a compensation:** the far wall gap (~10% darker) is fixed structurally, never by a shader colour compensation (the
+   owner's goals of 2026-10-27 night); the far two-wheelers stay undrawn until their riders are drawn with them; nothing baked for
+   buildings (step 5). Still asked and not done: the street-level pedestrian camera; the far night beige (`BACKLOG.md` 1, set aside).

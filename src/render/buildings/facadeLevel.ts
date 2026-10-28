@@ -156,9 +156,12 @@ if (facadeKind > ${K.none}) {
 // A level from afar's bays, with windows or none: what stands out of their walls in the detail (balconies, slabs, fins, bands: \`CoverShell\`), its colour over its
 // share of the bay as the bay falls under the pixels, as the windows fade to their mean (Haegler et al. 2010, the grammar's terminals at their
 // mean); none on the detail's and the facade level's runs, whose elements are their own.
+// The cover is the shell's own faces (slabs, balconies, bands, laid by the shell's finishes): its share keeps the wall's roughness, metal and
+// sky reflection below. DO NOT take it out of the wall's share (\`facadeWall *= 1.0 - facadeCovered\`): the weights then summed to under 1,
+// the covered share drawn with no roughness, no metal and no sky in it, smoother and unlit by the sky - the far wall darker than the
+// detail's (107,101,89 against 119,105,88 at 2000 m, STATE.md).
 float facadeCovered = vFacadeCover.a * facadeSub;
 diffuseColor.rgb = mix(diffuseColor.rgb, vFacadeCover.rgb, facadeCovered);
-facadeWall *= 1.0 - facadeCovered;
 `;
 }
 
@@ -224,6 +227,6 @@ totalEmissiveRadiance += (facadeLamp * massingNight * facadeLit + ${ROOM_SEEN_GL
     // The shell's own after: each of its additions lands right after its chunk, so before these (its finish's map, roughness, metalness and relief first).
     baseCompile(shader, renderer);
   };
-  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v10`;
+  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v11`;
   return material;
 }
