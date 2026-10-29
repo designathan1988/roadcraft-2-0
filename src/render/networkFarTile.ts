@@ -6,11 +6,10 @@ import { Network } from '@world/network';
 import { laneWidth } from '@world/roadTypes';
 import { TILE, tileKey, tileOfKey } from '@world/tiles';
 import { METERS_PER_UNIT } from '@world/units';
-import { type FarLevel, type FarMarks, type RoadPaintRecord, farCellKey, naturalGroundOf } from './networkFarInput';
-import { farCellBuffers, farPieceCells, plateStructure } from './networkFarPieces';
-import { ROAD_PASS_LOOK } from './roadPassLook';
-import { type MarkPasses, fileMarks, nodeMarks, roadAlongPaint, roadStrokes, strokeGroups } from './roadMarks';
-import { nodeOwner, ownerCell, segmentOwner } from './roads/pieceOwner';
+import { type FarLevel, type FarRoadHeights, PIECE_IDS, type RoadPaintRecord, farCellKey, farRoadInput, naturalGroundOf } from './networkFarInput';
+import { buildFarRoadCells } from './networkFarRoadsBuild';
+import { roadAlongPaint } from './roadMarks';
+import { ownerCell, segmentOwner } from './roads/pieceOwner';
 
 /**
  * THE MAP'S FAR LEVEL MADE TILE BY TILE, OFF THE PAGE (`networkFarTile.worker.ts`, asked by `networkFarRoads.ts` requestWhole): each 1 km tile's
@@ -107,41 +106,20 @@ export function farTileOf(ask: FarTileAsk): { level: FarLevel; transfer: ArrayBu
   net.rebuild({ full: true });
   const ground = naturalGroundOf(doc);
   const elevation = buildRoadElevation(net, ground);
+  const heights: FarRoadHeights = { onSegment: (s, x, y) => elevation.onSegment(s, x, y), at: (x, y) => elevation.at(x, y) };
   const only = tileCells(ask.tile, ask.cell);
-  // Its roads and junctions as the detail makes them: the same pieces, surfaces and vertices (`networkFarPieces.ts`).
-  const cells = farPieceCells(net, elevation, ground, ask.cell, only, ROAD_PASS_LOOK);
+  const { input } = farRoadInput(net, heights, ground, ask.cell, only, PIECE_IDS);
+  const cells = buildFarRoadCells(input);
   const paints: RoadPaintRecord[] = [];
-  const marks: FarMarks[] = [];
-  const passes = farMarkPasses(net);
   for (const id of [...net.ribbons.keys()].sort((p, q) => p - q)) {
     const at = segmentOwner(net, id);
     if (!at || !only.has(farCellKey(...ownerCell(at, ask.cell)))) continue;
     const ribbon = net.ribbons.get(id)!;
     paints.push({ id, paint: roadAlongPaint(net, ribbon), half: ribbon.road.width / 2, lane: laneWidth(ribbon.road) });
-    // Its arrows and bus lanes' legends, as its detail lays them (`roadSurfaceInputs.ts` placeSegment; its parking's lines the detail's alone: the
-    // lots' gates are the page's).
-    const groups = roadStrokes(net, ribbon).flatMap((spec) => strokeGroups(spec));
-    const source = { kind: 'segment', id } as const;
-    if (groups.length) marks.push({ source, into: fileMarks(net, source, groups, passes) });
   }
-  // Each junction's crossings, stop lines, legends and island, as its detail lays them (`roadSurfaceInputs.ts` placeNode): the far level drawn
-  // where the detail is not built yet shows them too. DO NOT leave them to the detail: a district the view came to showed its crossings bare until
-  // its blocks were built, seconds later (the owner's photos, 2026-10-27).
-  for (const node of [...net.junctions.keys()].sort((p, q) => p - q)) {
-    const at = nodeOwner(net, node);
-    if (!at || !only.has(farCellKey(...ownerCell(at, ask.cell)))) continue;
-    const owner = passes.node(node);
-    if (owner === null) continue;
-    const into = nodeMarks(net, node, owner === 'ground', passes);
-    if (into.length) marks.push({ source: { kind: 'node', id: node }, into });
-  }
-  return { level: { cell: ask.cell, cells, paints, marks }, transfer: farCellBuffers(cells) };
-}
-
-/** The passes the far level files its marks in (`roadMarks.ts` MarkPasses): a road's structure, a plate's that of its lowest road that is no tunnel
- *  (`networkFarPieces.ts` plateStructure; the alignments raised by hand are the detail's, read on the page). */
-function farMarkPasses(net: Network): MarkPasses {
-  return { segment: (id) => net.doc.segment(id)?.structure ?? null, node: (id) => plateStructure(net, id) };
+  const transfer: ArrayBuffer[] = [];
+  for (const c of cells) transfer.push(c.positions.buffer as ArrayBuffer, c.colors.buffer as ArrayBuffer, c.sections.buffer as ArrayBuffer, c.indices.buffer as ArrayBuffer, c.pieces.buffer as ArrayBuffer);
+  return { level: { cell: ask.cell, cells, paints }, transfer };
 }
 
 /** The keys of the blocks of a tile, as the far level files its cells (`NetworkFarRoads.replaceCells`). */

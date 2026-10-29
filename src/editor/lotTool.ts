@@ -70,9 +70,6 @@ const WINDOW_CELL = m(250);
 /** How far past the ground the view sees a cell's lots are drawn, and how far they are kept once drawn: a view moved back and forth draws nothing again. */
 const WINDOW_REACH = m(100);
 const WINDOW_KEEP = m(500);
-/** The page's time a frame the window's cells are filled and let go in (`settleWindow`), ms: the rest waits for the next frames, the
- *  cells nearest the view first. */
-const WINDOW_FILL_MS = 2;
 const windowKey = (i: number, j: number): number => (i + 32768) * 65536 + (j + 32768);
 const windowCellRect = (key: number): ChangeRect => {
   const i = Math.floor(key / 65536) - 32768, j = (key % 65536) - 32768;
@@ -104,12 +101,6 @@ function forCellsOutside(range: CellRange, minus: CellRange | null, visit: (key:
   const jLo = Math.max(j0, minus[1]), jHi = Math.min(j1, minus[3]);
   strip(i0, jLo, Math.min(i1, minus[0] - 1), jHi);
   strip(Math.max(i0, minus[2] + 1), jLo, i1, jHi);
-}
-
-/** Whether a window cell lies in a range of cells. */
-function inRange(range: CellRange, key: number): boolean {
-  const i = Math.floor(key / 65536) - 32768, j = (key % 65536) - 32768;
-  return i >= range[0] && i <= range[2] && j >= range[1] && j <= range[3];
 }
 
 /** What a lot's group is drawn with besides the lot itself (`LotTool.drawLot`): -1 for no lot. */
@@ -692,9 +683,6 @@ export class LotTool {
    */
   private seen: ChangeRect | null = null;
   private readonly windowCells = new Set<number>();
-  /** The window's cells waiting to have their lots drawn, and those waiting to have theirs let go (`settleWindow`). */
-  private readonly toFill = new Set<number>();
-  private readonly toLeave = new Set<number>();
   /** The cells the window was last drawn over and kept over (`moveWindow`): every cell of `windowCells` is within the kept one. */
   private drawnRange: CellRange | null = null;
   private keptRange: CellRange | null = null;
@@ -755,64 +743,37 @@ export class LotTool {
   }
 
   /**
-   * The view moved over the ground: the cells it came to queued to have their lots drawn, those it left behind (past `WINDOW_KEEP`)
-   * queued to have theirs let go, and the queues worked through for `WINDOW_FILL_MS` of the frame, the cells nearest the view first
-   * (`settleWindow`); whether any lot was drawn or let go. Only the cells that came into or left the window are looked at
-   * (`forCellsOutside`). DO NOT walk the window's every cell each frame: from the Home view of the 10 km map it reaches the far plane,
-   * ~20,000 cells looked up in every frame the zones are shown (556 ms of a road's edit, 2026-10-27). DO NOT fill the cells a move brought
-   * in the frame they came: pulling the camera back brought thousands at once, the frame held 150-300 ms reading their lots (the camera's
-   * stutter, the owner's moves measured in the game, 2026-10-27).
+   * The view moved over the ground: the lots of the cells it came to drawn, those of the cells it left behind (past `WINDOW_KEEP`) let go;
+   * whether any was. Only the cells that came into or left the window are looked at (`forCellsOutside`). DO NOT walk the window's every cell
+   * each frame: from the Home view of the 10 km map it reaches the far plane, ~20,000 cells looked up in every frame the zones are shown, the
+   * view still or not (556 ms of a road's edit, 2026-10-27).
    */
   private moveWindow(d: LotDecor): boolean {
     const seen = this.seen;
     if (!seen) return false;
     const drawn = cellRange(grow(seen, WINDOW_REACH)), kept = cellRange(grow(seen, WINDOW_KEEP));
-    if (!sameRange(drawn, this.drawnRange) || !sameRange(kept, this.keptRange)) {
-      forCellsOutside(drawn, this.drawnRange, (key) => { if (!this.windowCells.has(key)) this.toFill.add(key); });
-      // The cells kept before and no longer: every cell of the window stood in the range kept before.
-      if (this.keptRange) {
-        forCellsOutside(this.keptRange, kept, (key) => {
-          this.toFill.delete(key);
-          if (this.windowCells.has(key)) this.toLeave.add(key);
-        });
-      }
-      // A cell queued to be let go that the view came back to stays.
-      for (const key of this.toLeave) if (inRange(kept, key)) this.toLeave.delete(key);
-      this.drawnRange = drawn;
-      this.keptRange = kept;
-    }
-    return this.settleWindow(d, seen);
-  }
-
-  /** The cells queued to be drawn (`toFill`) and let go (`toLeave`), for `WINDOW_FILL_MS` of the frame, the nearest the view's middle first;
-   *  another frame asked while some wait. Whether any lot was drawn or let go. */
-  private settleWindow(d: LotDecor, seen: ChangeRect): boolean {
-    if (this.toFill.size === 0 && this.toLeave.size === 0) return false;
-    const until = performance.now() + WINDOW_FILL_MS;
-    const cx = (seen[0] + seen[2]) / 2, cy = (seen[1] + seen[3]) / 2;
-    const away = (key: number): number => { const r = windowCellRect(key); return Math.hypot((r[0] + r[2]) / 2 - cx, (r[1] + r[3]) / 2 - cy); };
+    if (sameRange(drawn, this.drawnRange) && sameRange(kept, this.keptRange)) return false;
     let moved = false;
-    for (const key of [...this.toLeave]) {
-      if (performance.now() > until) break;
-      this.toLeave.delete(key);
+    forCellsOutside(drawn, this.drawnRange, (key) => {
+      if (this.windowCells.has(key)) return;
+      this.windowCells.add(key);
+      for (const lot of this.doc.lotsIn(windowCellRect(key))) if (!this.drawnLots.has(lot.id)) { this.drawLot(lot.id, d); moved = true; }
+    });
+    // The cells kept before and no longer: every cell of the window stood in the range kept before.
+    const left: number[] = [];
+    if (this.keptRange) forCellsOutside(this.keptRange, kept, (key) => { if (this.windowCells.has(key)) left.push(key); });
+    this.drawnRange = drawn;
+    this.keptRange = kept;
+    for (const key of left) {
+      const rect = windowCellRect(key);
       this.windowCells.delete(key);
-      for (const lot of this.doc.lotsIn(windowCellRect(key))) {
+      for (const lot of this.doc.lotsIn(rect)) {
         if (!this.drawnLots.has(lot.id) || this.inWindow(lotBox(lot))) continue;
         this.book.put(`l${lot.id}`, null);
         this.drawnLots.delete(lot.id);
         moved = true;
       }
     }
-    if (this.toFill.size && performance.now() <= until) {
-      const order = [...this.toFill].map((key) => [away(key), key] as const).sort((a, b) => a[0] - b[0]);
-      for (const [, key] of order) {
-        if (performance.now() > until) break;
-        this.toFill.delete(key);
-        this.windowCells.add(key);
-        for (const lot of this.doc.lotsIn(windowCellRect(key))) if (!this.drawnLots.has(lot.id)) { this.drawLot(lot.id, d); moved = true; }
-      }
-    }
-    if (this.toFill.size || this.toLeave.size) this.host.redraw();
     return moved;
   }
 
@@ -829,8 +790,6 @@ export class LotTool {
     for (const name of [...this.book.groups.keys()]) if (name.startsWith('l')) this.book.put(name, null);
     this.drawnLots.clear();
     this.windowCells.clear();
-    this.toFill.clear();
-    this.toLeave.clear();
     this.drawnRange = this.keptRange = null;
     if (!this.seen) { for (const lot of this.doc.lotStore.all()) this.drawLot(lot.id, d); return; }
     this.moveWindow(d);

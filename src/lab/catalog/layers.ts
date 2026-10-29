@@ -14,9 +14,10 @@ import { sheetMaterial } from './items';
 import { BufferGeometry as BufferGeometryClass, DoubleSide, InstancedMesh, type BufferGeometry, type InstancedBufferAttribute, type InstancedBufferGeometry, type WebGLRenderer } from 'three';
 import { REGIONS } from '@world/ecology';
 import { ROAD_TYPES } from '@world/roadTypes';
-import { Group } from 'three';
-import { farLevelMeshes } from '../../render/networkFarRoads';
-import { createMaterials } from '../../render/materials';
+import { BufferAttribute, Group } from 'three';
+import { farLayerMaterial, pageSlots } from '../../render/networkFarRoads';
+import { farRoadInput } from '../../render/networkFarInput';
+import { FAR_CARRIAGEWAY, FAR_SECTION, buildFarRoadCells } from '../../render/networkFarRoadsBuild';
 import { CELL as ROAD_BLOCK } from '../../render/roadSurfaceEntries';
 import type { PieceSpec } from './items';
 import { RELIEF_FLAT } from '@world/terrain';
@@ -201,11 +202,11 @@ export function farForestItems(add: Add, renderer: WebGLRenderer): void {
   }
 }
 
-/** The network's root level as the renderer asks it (`renderer.ts` requestNetworkFar): every road and junction the detail's own pieces
- *  (`networkFarPieces.ts`), drawn by the road material (`materials.ts` roadRoot); each class of road straight and at a four-way junction. */
+/** The network's far level as the renderer asks it (`renderer.ts` requestNetworkFar): every road's and junction's outline at its class's colour
+ *  (`networkFarRoads.ts` farRoadInput), merged a cell at a time by the worker's own function (`networkFarRoadsBuild.ts` buildFarRoadCells); each
+ *  class of road straight and at a four-way junction. */
 export function farNetworkItems(add: Add): void {
   const flat = (): number => 0;
-  const material = createMaterials(16).roadRoot;
   for (let t = 0; t < ROAD_TYPES.length; t++) {
     for (const [layout, junction] of [['straight', false], ['four-way junction', true]] as const) {
       const doc = new RoadDoc();
@@ -215,17 +216,30 @@ export function farNetworkItems(add: Add): void {
       } else doc.addSegment(doc.addNode({ x: -LEG, y: 0 }).id, doc.addNode({ x: LEG, y: 0 }).id, t);
       const net = new Network(doc);
       net.rebuild();
+      const { input } = farRoadInput(net, buildRoadElevation(net, flat), flat, ROAD_BLOCK, null, pageSlots(net));
       const group = new Group();
       group.name = 'road-far-network';
       const pieces: PieceSpec[] = [];
-      for (const mesh of farLevelMeshes(net, buildRoadElevation(net, flat), flat, ROAD_BLOCK, material)) {
-        pieces.push({ label: mesh.name, geometry: mesh.geometry, material });
+      for (const cell of buildFarRoadCells(input)) {
+        if (!cell.indices.length) continue;
+        const g = new BufferGeometryClass();
+        g.setAttribute('position', new BufferAttribute(cell.positions, 3));
+        g.setAttribute('color', new BufferAttribute(cell.colors, 3));
+        // The carriageway's section, its paint inked as the game inks it (`networkFarRoads.ts` farLayerMaterial).
+        if (cell.layer === FAR_CARRIAGEWAY) g.setAttribute('roadSection', new BufferAttribute(cell.sections, FAR_SECTION));
+        g.setIndex(new BufferAttribute(cell.indices, 1));
+        g.computeVertexNormals();
+        const material = farLayerMaterial(cell.layer === FAR_CARRIAGEWAY ? 1 : 0);
+        const label = cell.layer === 0 ? 'casing (footways and kerbs)' : 'carriageway';
+        pieces.push({ label: `${label}, cell ${cell.key}`, geometry: g, material });
+        const mesh = new Mesh(g, material);
+        mesh.name = label;
         group.add(mesh);
       }
       add({ group: 'Roads: network far level', name: `${ROAD_TYPES[t]!.id} ${layout}`, variation: `${LEG * 2} m`, origin: 'kit',
-        source: 'src/render/networkFarPieces.ts (farPieceCells) + src/render/networkFarRoads.ts (farLevelMeshes)', build: 'merged', pieces, object: group,
+        source: 'src/render/networkFarRoads.ts (farRoadInput) + src/render/networkFarRoadsBuild.ts (buildFarRoadCells)', build: 'merged', pieces, object: group,
         countKey: `far-network:${ROAD_TYPES[t]!.id}`,
-        notes: ['the roads\' root level: the detail\'s own pieces and material, shown in a cell whose blocks are not built; one GPU batch in the game (GpuBatchedMesh), one instance a cell'] });
+        notes: ['the roads\' top level: shown in a cell whose blocks\' far levels the far budget let go; one GPU batch a layer in the game (GpuBatchedMesh), one instance a cell'] });
     }
   }
 }

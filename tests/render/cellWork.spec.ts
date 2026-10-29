@@ -192,7 +192,7 @@ describe('a cell put together off the page', () => {
     expect(buildings.length).toBeGreaterThan(3);
     const [ci, cj] = cell.split(',').map(Number) as [number, number];
     const env = { groundAt, naturalAt, pavedAt };
-    const run = (pool: CellPool, kind: 'mass' | 'massTile', key: string, entries: readonly CellEntry[]): CellResult => {
+    const run = (pool: CellPool, kind: 'mass' | 'massTile' | 'massPlate', key: string, entries: readonly CellEntry[]): CellResult => {
       let got: CellResult | null = null;
       pool.run(kind, key, entries, env, (result) => { got = result; });
       expect(got).not.toBeNull();
@@ -207,7 +207,7 @@ describe('a cell put together off the page', () => {
     run(pool, 'mass', cell, entries);
     expect(programs.walks).toBe(buildings.length);
     expect(programs.hits).toBe(0);
-    // Its tile's masses, on the floors handed: no building walked again, each level a filter over the programs kept.
+    // Its tile's and plate's masses, on the floors handed: no building walked again, each level a filter over the programs kept.
     programs.resetCounts();
     const tile = run(pool, 'massTile', tileOf(ci, cj), entries);
     expect(programs.walks).toBe(0);

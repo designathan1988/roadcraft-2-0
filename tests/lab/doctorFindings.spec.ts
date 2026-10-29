@@ -4,7 +4,7 @@ import type { Snapshot } from '@/lab/doctor/measure';
 
 /** A measure with nothing in it but what a case puts there. */
 const base = (over: Partial<Snapshot>): Snapshot => ({
-  at: 0, frameMs: 16.7, cpuMs: 4, gpuMs: 8, frames: 120, passes: [], draws: [], systems: [], functions: [], libraryFunctions: [], timeline: null, drawCalls: 300, triangles: 1e6, hitches: 0,
+  at: 0, frameMs: 16.7, cpuMs: 4, gpuMs: 8, frames: 120, passes: [], draws: [], systems: [], functions: [], drawCalls: 300, triangles: 1e6, hitches: 0,
   waste: null, hidden: [], hiddenSeconds: 10, checks: [], suspects: [], contexts: ['src/render/renderer.ts:462'], ...over,
 });
 

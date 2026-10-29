@@ -1,10 +1,10 @@
 import { WEAK_MACHINE, type WeakMachine } from '@core/weakMachine';
-import type { BufferAttribute, BufferGeometry, InterleavedBuffer, InterleavedBufferAttribute } from 'three';
+import type { BufferAttribute, BufferGeometry } from 'three';
 
 /** THE GPU'S BYTES IN ONE BOOK: every owner of video memory registers what it holds (bytes and triangles by class), and selection asks it before it requests (Cesium `cacheBytes`, 3DTilesRendererJS `lruCache.maxBytes`) */
 
 /** What holds video memory, by class. */
-export type GpuClass = 'building detail' | 'building facade' | 'cell masses' | 'tile masses' | 'base masses' | 'render targets' | 'shadow maps' | `far ${string}`;
+export type GpuClass = 'building detail' | 'building facade' | 'cell masses' | 'tile masses' | 'plate masses' | 'base masses' | 'render targets' | 'shadow maps' | `far ${string}`;
 
 interface Entry { readonly cls: GpuClass; readonly bytes: number; readonly triangles: number }
 interface Sum { bytes: number; triangles: number }
@@ -72,18 +72,12 @@ export const gpuLedger = new GpuLedger();
 /** What a geometry sends to the GPU, bytes, and its triangles: read before its arrays are let go (`gpuOnly.ts` keeps `keptBytes`). */
 export function geometryCost(geometry: BufferGeometry): { bytes: number; triangles: number } {
   let bytes = 0;
-  const add = (a: BufferAttribute | InterleavedBuffer | null | undefined): void => {
+  const add = (a: BufferAttribute | null | undefined): void => {
     if (!a) return;
     const array = a.array as { byteLength?: number } | null;
     bytes += array?.byteLength ?? (a as { keptBytes?: number }).keptBytes ?? 0;
   };
-  // An interleaved buffer once, however many attributes read it (the facade level's opening and trim, `meshesOf`, `massCells.ts` cellMesh).
-  const shared = new Set<InterleavedBuffer>();
-  for (const a of Object.values(geometry.attributes)) {
-    const data = (a as InterleavedBufferAttribute).isInterleavedBufferAttribute ? (a as InterleavedBufferAttribute).data : null;
-    if (data) { if (!shared.has(data)) { shared.add(data); add(data); } continue; }
-    add(a as BufferAttribute);
-  }
+  for (const a of Object.values(geometry.attributes)) add(a as BufferAttribute);
   add(geometry.index);
   const index = geometry.index;
   const triangles = Math.floor((index ? index.count : geometry.attributes['position']?.count ?? 0) / 3);

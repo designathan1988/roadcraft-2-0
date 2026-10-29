@@ -1,10 +1,6 @@
 import type { PoleId, SpanId } from '@world/ids';
 import type { Network } from '@world/network';
 import { kerbward } from '@world/poleLines';
-import type { RoadDoc } from '@world/doc';
-import type { SegmentId } from '@world/ids';
-import { segmentPolyline } from '@world/geometry';
-import { tilesMeeting } from '@world/networkWindow';
 import { m } from '@world/units';
 import { POLE_HEIGHT, type PoleArms, type PoleKind, poleArmsAt, poleToward, streetArm, type UtilityPole, type UtilitySpan } from '@world/utilities';
 import { type Placement, SPAN_WIRES, type SpanEnd, WIRE_STRIDE } from './utilities';
@@ -81,51 +77,11 @@ export const emptyBox = (): number[] => [Infinity, Infinity, Infinity, -Infinity
 export function framePole(net: Network, groundAt: (x: number, y: number) => number, source: PoleSource,
   pole: UtilityPole, kept: { x: number; y: number } | null | undefined): { readonly top: number; readonly kerb: { x: number; y: number } | null; readonly frame: PoleArms } {
   const top = groundAt(pole.x, pole.y) + POLE_HEIGHT;
-  // Towards the carriageway: the nearest kerb the network holds, kept to the side of the nearest road's middle line in the document (every road
-  // of the map); that line where the kerb is not held or lies the other way; null off the streets. DO NOT trust the network's kerb alone: it
-  // holds the roads near the view (`networkWindow.ts`), and a pole framed while the street before it was not held found the kerb of the street
-  // behind it, its arm and lamp turned to the houses (the owner's photos, 2026-10-27). A way kept null (read off the streets) is read again.
-  const kerb = kept ?? towardStreet(net, pole.x, pole.y);
+  // Towards the carriageway: the nearest kerb, or null off the streets.
+  const kerb = kept !== undefined ? kept : kerbward(net, { x: pole.x, y: pole.y }, m(6));
   // A pole with no wire yet stands square to its street.
   const frame = poleArmsAt(pole, source.spansAt(pole.id), source.poles, () => kerb ?? { x: 0, y: 1 });
   return { top, kerb, frame };
-}
-
-/** How far from a road's middle line a pole is taken to stand by that road (`roadward`): a wide road's half and its footway. */
-const ROADWARD_REACH = m(30);
-
-/** A pole's way to its street (`framePole`): the network's nearest kerb where it lies on the side of the document's nearest road, else that road's way. */
-function towardStreet(net: Network, x: number, y: number): { x: number; y: number } | null {
-  const road = roadward(net.doc, x, y, ROADWARD_REACH);
-  const kerb = kerbward(net, { x, y }, m(6));
-  if (!kerb) return road;
-  return !road || kerb.x * road.x + kerb.y * road.y >= 0 ? kerb : road;
-}
-
-/**
- * The way from a point to the nearest road's middle line in the document within `reach` (every road of the map, `RoadDoc.tileRoads`), or null.
- * DO NOT leave a pole's way to its street to the network alone: it holds the roads near the view (`networkWindow.ts`), a pole framed where its
- * street was not held found no kerb, turned by the arm's sign alone, and half the street lights of a district faced the houses (the owner's
- * photos, 2026-10-27).
- */
-export function roadward(doc: RoadDoc, x: number, y: number, reach: number): { x: number; y: number } | null {
-  let best: { x: number; y: number } | null = null, bestD = reach;
-  for (const tile of tilesMeeting([x - reach, y - reach, x + reach, y + reach])) {
-    for (const id of doc.tileRoads(tile).segments) {
-      const seg = doc.segment(id as SegmentId);
-      if (!seg || seg.structure !== 'ground') continue;
-      const { xy, n } = segmentPolyline(doc, seg);
-      for (let i = 0; i + 1 < n; i++) {
-        const ax = xy[i * 2]!, ay = xy[i * 2 + 1]!, dx = xy[i * 2 + 2]! - ax, dy = xy[i * 2 + 3]! - ay, len2 = dx * dx + dy * dy;
-        const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2)) : 0;
-        const qx = ax + dx * t - x, qy = ay + dy * t - y, d = Math.hypot(qx, qy);
-        if (d <= 1e-6 || d >= bestD) continue;
-        bestD = d;
-        best = { x: qx / d, y: qy / d };
-      }
-    }
-  }
-  return best;
 }
 
 /** A span's end at a pole, as its wires read it: the pole's place and top, its arm for the span turned toward the street the way its parts

@@ -340,14 +340,10 @@ const unionDab = (box: DabRect | null, dab: PaintDab): DabRect => {
   const r: DabRect = [dab.x - dab.radius, dab.y - dab.radius, dab.x + dab.radius, dab.y + dab.radius];
   return box ? [Math.min(box[0], r[0]), Math.min(box[1], r[1]), Math.max(box[2], r[2]), Math.max(box[3], r[3])] : r;
 };
-/** The paving's kinds (`rasterPaint`): laid hard, every texel by how much of it the dab covers. */
-const PAVING_KINDS: readonly string[] = Object.freeze(['gravel', 'asphalt', 'concrete']);
-/** A dab's reach in texels (`rasterPaint`): the paving's half a texel further, its edge's coverage. */
-const dabTexelReach = (dab: PaintDab, cell: number): number => dab.radius / cell + (PAVING_KINDS.includes(dab.kind) ? 0.5 : 0);
 /** The paint texels a dab lays (`rasterPaint`, the same bounds). */
 function paintTexelBox(dab: PaintDab, res = PAINT_RES): TexelBox {
   const cell = TERRAIN_SIZE / res;
-  const cx = (dab.x + TERRAIN_HALF) / cell, cy = (dab.y + TERRAIN_HALF) / cell, r = dabTexelReach(dab, cell);
+  const cx = (dab.x + TERRAIN_HALF) / cell, cy = (dab.y + TERRAIN_HALF) / cell, r = dab.radius / cell;
   return {
     x0: Math.max(0, Math.floor(cx - r)), x1: Math.min(res - 1, Math.ceil(cx + r)),
     y0: Math.max(0, Math.floor(cy - r)), y1: Math.min(res - 1, Math.ceil(cy + r)),
@@ -367,19 +363,13 @@ function rasterPaint(layers: readonly Uint8Array[], dab: PaintDab, res = PAINT_R
   const cx = (dab.x + TERRAIN_HALF) / cell;
   const cy = (dab.y + TERRAIN_HALF) / cell;
   const r = dab.radius / cell;
-  // THE PAVING LAID HARD: full inside the dab, its edge texels by the share the dab covers (the shader cuts at half, `terrain-ground`). DO NOT
-  // fade it over the radius as the soils: a square's walks, dabs of 1.4 m on texels of 2-4 m, kept a weight of a few hundredths in most texels
-  // of the walk, pale smears broken in pieces (the owner's photo, 2026-10-27).
-  const paving = PAVING_KINDS.includes(dab.kind);
-  const reachR = dabTexelReach(dab, cell);
-  const x0 = Math.max(0, Math.floor(cx - reachR)), x1 = Math.min(res - 1, Math.ceil(cx + reachR));
-  const y0 = Math.max(0, Math.floor(cy - reachR)), y1 = Math.min(res - 1, Math.ceil(cy + reachR));
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(res - 1, Math.ceil(cx + r));
+  const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(res - 1, Math.ceil(cy + r));
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
-      const dist = Math.hypot(x + 0.5 - cx, y + 0.5 - cy);
-      const d = dist / Math.max(1e-6, r);
-      if (paving ? dist >= reachR : d >= 1) continue;
-      const fall = paving ? Math.min(1, reachR - dist) : 1 - d * d * (3 - 2 * d);
+      const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / Math.max(1e-6, r);
+      if (d >= 1) continue;
+      const fall = 1 - d * d * (3 - 2 * d);
       const w = Math.min(1, dab.strength * fall) * reach;
       const i = (y * res + x) * 4;
       for (let k = 0; k < 8; k++) {
@@ -1036,11 +1026,6 @@ function landShader(shader: WebGLProgramParametersWithUniforms, grid: LandGrid |
          if (uHasPaint > 0.5) {
            pa = texture(uPaint, vec3(paintUv, 0.0));
            pb = texture(uPaint, vec3(paintUv, 1.0));
-           // THE PAVING'S EDGE (gravel, asphalt, concrete): cut at the half-weight contour, a pixel wide (the weight read as a distance field,
-           // Green, "Improved Alpha-Tested Magnification", SIGGRAPH 2007). DO NOT lay them as the weights blur: 2 m texels made a square's
-           // 4 m walks pale, translucent smears with no edge (the owner's photo, 2026-10-27). The derivatives taken here, in a uniform's branch.
-           vec3 paveFw = min(max(fwidth(pb.rgb), vec3(1e-3)), vec3(0.5));
-           pb.rgb = smoothstep(0.5 - paveFw, 0.5 + paveFw, pb.rgb);
          }
          float painted = pa.r + pa.g + pa.b + pa.a + pb.r + pb.g + pb.b;
          if (painted > 0.002) {

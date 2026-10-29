@@ -1,66 +1,57 @@
 import { describe, expect, it } from 'vitest';
+import { DataUtils } from 'three';
 
-import { FACADE_BYTES, FACADE_FLOATS, FACADE_GRID, NORMAL_SHORTS, PAINT_ATTRIBUTE, SHELL_NORMAL, SHELL_SHORTS, cellMass, massPlaces, octDecode } from '@render/buildings/cellArrays';
-import { FINISHES } from '@world/buildings/materials';
+import { MASS_FACADE, MASS_GRID, cellMass, massPlaces } from '@render/buildings/cellArrays';
 import { createBuildingKit } from '@render/buildings/kit';
 import { cellMesh } from '@render/buildings/massCells';
-import { massCorners, massesOf } from './support/masses';
+import { massesOf } from './support/masses';
 import { BLUEPRINTS } from '@world/buildings/blueprints';
 import type { Building } from '@world/buildings/types';
-import type { RunChunk, ShellChunk } from '@render/buildings/chunk';
 
-/** A MASS VERTEX IS THE FACADE LEVEL'S OWN (`cellArrays.ts` CellMass, `buildingMesh.ts` massShells): its place, its octahedral normal, its paint
- *  with its finish and wear, and its run's window grid, copied as the facade level lays them; drawn by the shells' and the facade level's materials. */
+/** A MASS VERTEX IS 44 BYTES, AND THE SHADER READS FROM IT WHAT IT READ FROM THE 52 (`cellArrays.ts` `CellMass`, `massingMaterial.ts`) */
 
 const building = (n: number): Building => ({ ...JSON.parse(JSON.stringify(BLUEPRINTS[n % BLUEPRINTS.length]!.body)), id: n + 1, x: n * 60, y: 30, rotation: n * 0.3 }) as Building;
 
-/** A level's fragments in the order a mass merges them: its shells by finish, then its runs by finish. */
-const fragmentsOf = (m: NonNullable<ReturnType<typeof massesOf>>): { shells: ShellChunk[]; runs: RunChunk[] } => ({
-  shells: FINISHES.flatMap((f) => (m.shells[f] ? [m.shells[f]] : [])), runs: FINISHES.flatMap((f) => (m.runs?.[f] ? [m.runs[f]] : [])),
-});
-
 describe('a mass vertex', () => {
-  it("holds in 48 bytes the facade level's own numbers (its runs' cover of what stands out of their walls among them), each copied as its shell and its runs laid it", () => {
+  it('holds in 44 bytes what the masses\' shader reads, the long and the high in full floats', () => {
     const chunks = [0, 3, 4, 6, 8].map((n) => massesOf(building(n), (x, y) => x * 0.01 + y * 0.02)!);
     const mass = cellMass(chunks)!;
     const vertices = mass.position.length / 3;
-    const bytes = mass.position.byteLength + mass.normal.byteLength + mass.paint.byteLength + mass.facade.byteLength + mass.grid.byteLength + mass.opening.byteLength;
-    expect(bytes / vertices).toBe(48);
-    let v = 0, runs = 0;
+    const bytes = mass.position.byteLength + mass.normal.byteLength + mass.color.byteLength + mass.facade.byteLength + mass.grid.byteLength + mass.seed.byteLength;
+    expect(bytes / vertices).toBe(44);
+    let v = 0;
     for (const c of chunks) {
-      const { shells, runs: list } = fragmentsOf(c);
-      for (const f of [...shells, ...list]) {
-        const n = f.position.length / 3;
-        expect([...mass.position.subarray(v * 3, (v + n) * 3)]).toEqual([...f.position]);
-        expect([...mass.normal.subarray(v * NORMAL_SHORTS, (v + n) * NORMAL_SHORTS)]).toEqual([...f.normal]);
-        expect([...mass.paint.subarray(v * SHELL_SHORTS, (v + n) * SHELL_SHORTS)]).toEqual([...f.paint]);
-        if ('grid' in f) {
-          const r = f as RunChunk;
-          runs += n;
-          expect([...mass.facade.subarray(v * FACADE_FLOATS, (v + n) * FACADE_FLOATS)]).toEqual([...r.facade]);
-          expect([...mass.grid.subarray(v * FACADE_GRID, (v + n) * FACADE_GRID)]).toEqual([...r.grid]);
-          expect([...mass.opening.subarray(v * FACADE_BYTES, (v + n) * FACADE_BYTES)]).toEqual([...r.opening]);
-        } else expect(mass.grid.subarray(v * FACADE_GRID, (v + n) * FACADE_GRID).every((x) => x === 0)).toBe(true);
-        v += n;
+      for (let k = 0; k < c.position.length / 3; k++, v++) {
+        // What the vertex shader makes of it (`vFacade`, `vGlazing`, `vColor`).
+        const half = (i: number): number => DataUtils.fromHalfFloat(mass.grid[v * MASS_GRID + i]!);
+        const facade = [mass.facade[v * MASS_FACADE]!, half(0), half(1), mass.facade[v * MASS_FACADE + 1]!];
+        const glazing = [half(2), mass.seed[v]!];
+        expect(facade[0]).toBe(Math.fround(c.facade[k * 4]!));
+        expect(facade[3]).toBe(Math.fround(c.facade[k * 4 + 3]!));
+        for (const i of [1, 2]) expect(Math.abs(facade[i]! - c.facade[k * 4 + i]!)).toBeLessThanOrEqual(Math.abs(c.facade[k * 4 + i]!) / 1024);
+        expect(Math.abs(glazing[0]! - c.glazing[k * 2]!)).toBeLessThanOrEqual(1 / 1024);
+        // The seed whole: each lit window's lot is drawn from its fraction.
+        expect(glazing[1]).toBe(Math.fround(c.glazing[k * 2 + 1]!));
+        for (let ch = 0; ch < 3; ch++) {
+          const was = c.colour[k * 3 + ch]!;
+          expect(Math.abs(DataUtils.fromHalfFloat(mass.color[v * 4 + ch]!) - was)).toBeLessThanOrEqual(Math.max(was, 1e-3) / 1024);
+        }
       }
     }
-    // Its walls the facade level's runs of bays, and every triangle drawn once.
-    expect(runs).toBeGreaterThan(0);
-    expect(mass.index.length).toBe(chunks.reduce((s, c) => s + massCorners(c), 0));
   });
 
-  it("is drawn with the facade level's attributes, its shells by the shells' material and its runs by the facade's", () => {
+  it('is drawn from its half floats as half floats, its full ones as floats', () => {
     const kit = createBuildingKit();
     const mass = cellMass([massesOf(building(3), () => 0)!])!;
-    const mesh = cellMesh(mass, kit);
-    const g = mesh.geometry;
-    expect((g.getAttribute('facadeSize') as { isFloat16BufferAttribute?: boolean }).isFloat16BufferAttribute).toBe(true);
-    expect(g.getAttribute(SHELL_NORMAL).itemSize).toBe(NORMAL_SHORTS);
-    expect(g.getAttribute(PAINT_ATTRIBUTE).itemSize).toBe(4);
-    expect(g.getAttribute('facadeCell').itemSize).toBe(FACADE_GRID);
-    expect(mesh.material).toEqual([kit.shellMaterial, kit.facade]);
-    expect(g.groups.map((q) => q.materialIndex)).toEqual([0, 1]);
-    expect(g.groups[0]!.count + g.groups[1]!.count).toBe(mass.index.length);
+    const g = cellMesh(mass, kit).geometry;
+    const flagged = (name: string): boolean => (g.getAttribute(name) as { isFloat16BufferAttribute?: boolean }).isFloat16BufferAttribute === true;
+    expect(flagged('color')).toBe(true);
+    expect(flagged('facadeGrid')).toBe(true);
+    expect(flagged('facade')).toBe(false);
+    expect(flagged('glazingSeed')).toBe(false);
+    expect(g.getAttribute('facade').itemSize).toBe(MASS_FACADE);
+    expect(g.getAttribute('facadeGrid').itemSize).toBe(MASS_GRID);
+    expect(g.getAttribute('color').itemSize).toBe(4);
     kit.dispose();
   });
 });
@@ -68,13 +59,13 @@ describe('a mass vertex', () => {
 describe('a mass\'s slabs', () => {
   it('share their corners between their triangles: a roof slab is its points once, not three a triangle', () => {
     for (const n of [0, 3, 4, 6, 8]) {
-      const mass = cellMass([massesOf(building(n), () => 0)!])!;
-      const up = (v: number): boolean => octDecode(mass.normal[v * 2]!, mass.normal[v * 2 + 1]!)[1] > 0.9999;
+      const chunk = massesOf(building(n), () => 0)!;
+      const up = (v: number): boolean => chunk.normal[v * 3 + 1]! > 0.9999;
       // The flat faces' triangles and the points they are drawn from: shared, fewer points than three a triangle.
       const used = new Set<number>();
       let triangles = 0;
-      for (let t = 0; t < mass.index.length; t += 3) {
-        const corners = [mass.index[t]!, mass.index[t + 1]!, mass.index[t + 2]!];
+      for (let t = 0; t < chunk.index.length; t += 3) {
+        const corners = [chunk.index[t]!, chunk.index[t + 1]!, chunk.index[t + 2]!];
         if (!corners.every(up)) continue;
         triangles++;
         for (const c of corners) used.add(c);
@@ -90,9 +81,9 @@ describe('a lot\'s plate in the masses', () => {
     const b = building(0);
     // Its one block made a paved lot: the masses draw its plate alone (`emitLotPlates`).
     b.volumes = [{ ...b.volumes[0]!, open: 'paving' }];
-    const mass = cellMass([massesOf(b, () => 0)!])!;
-    expect(mass.index.length / 3).toBe(2);
-    expect(mass.position.length / 3).toBe(4);
+    const chunk = massesOf(b, () => 0)!;
+    expect(chunk.index.length / 3).toBe(2);
+    expect(chunk.position.length / 3).toBe(4);
   });
 });
 

@@ -19,45 +19,15 @@ declare const __CELL_WORK_HASH__: string | undefined;
 /** The cells' jobs kept from one session to the next, by this build's fingerprint of their code (`cook-plugin.ts` DERIVED). */
 const CELL_HASH = typeof __CELL_WORK_HASH__ !== 'undefined' && __CELL_WORK_HASH__ ? __CELL_WORK_HASH__ : null;
 const CELL_PREFIX = CELL_HASH ? `cellWork:${CELL_HASH}:` : null;
-/** The kinds kept: every level of a cell a view draws, the detail ('cell') with them. DO NOT make them again at every launch: the same buildings on the same ground made the same masses, 117 jobs and ~3 s of every worker before a reopened city showed (2026-10-21). DO NOT leave the detail out: a worker made it again every time the eye came back to a cell, and the facade level and the masses stood as boxes 4-6 s at each approach (the city tour, 2026-10-27). The summaries are the page's alone. */
-const KEPT_KINDS: ReadonlySet<JobKind> = new Set(['cell', 'facade', 'mass', 'massTile', 'massBase']);
+/** The kinds kept: the masses and the far level, what the opening waits for (`layer.ts` coarsePending, viewPending). DO NOT make them again at every launch: the same buildings on the same ground made the same masses, 117 jobs and ~3 s of every worker before a reopened city showed (2026-10-21). The detail ('cell') is the largest and lands after the curtain. */
+const KEPT_KINDS: ReadonlySet<JobKind> = new Set(['facade', 'mass', 'massTile', 'massPlate', 'massBase']);
 let forgotOthers = false;
-/** The keys kept, read once at the start (a keys-only read) and added to as results are kept: a job not in it is asked at once. DO NOT read the store before every job: a read waits for every write on the store before it (IndexedDB transactions), the road tiles' and the cells' own, and a city not kept yet opened 4 s later (2026-10-21). With them, the one key kept of each level and cell (`levelOfStored`), followed as results are kept (`keptResult`). */
-let keptKeys: Promise<{ readonly keys: Set<string>; readonly byLevel: Map<string, string> }> | null = null;
-/** A kept result's level and cell (`storedKey`: `<prefix><kind>|<cell>|<digest>`): what a newer result of the same level and cell replaces. */
-const levelOfStored = (key: string): string => key.slice(0, key.lastIndexOf('|'));
-/** The keys as the store had them, filed by level and cell: two results of one cell's level kept by sessions before (a building changed, the store never told) are both forgotten, neither can be told newest. Whole keys: `readDerivedKeys` gives them without their prefix. */
-function keptOnce(): NonNullable<typeof keptKeys> {
-  return keptKeys ??= (CELL_PREFIX
-    ? readDerivedKeys(CELL_PREFIX).then((keys) => new Set([...keys].map((k) => CELL_PREFIX + k)), () => new Set<string>())
-    : Promise.resolve(new Set<string>())).then((keys) => {
-    const byLevel = new Map<string, string>();
-    const stale: string[] = [];
-    for (const key of keys) {
-      if (key.startsWith(`${CELL_PREFIX}slice|`)) continue;
-      const level = levelOfStored(key), was = byLevel.get(level);
-      if (was !== undefined) { stale.push(was, key); continue; }
-      byLevel.set(level, key);
-    }
-    for (const key of stale) { byLevel.delete(levelOfStored(key)); keys.delete(key); }
-    if (stale.length) forgetDerivedKeys(CELL_PREFIX!, stale.map((key) => key.slice(CELL_PREFIX!.length)));
-    return { keys, byLevel };
-  });
-}
-const keptCellKeys = (): Promise<Set<string>> => keptOnce().then((kept) => kept.keys);
-/** A result kept under `key`: the one of its level and cell it replaces forgotten in the store. DO NOT keep every result ever made: each
- *  edit, each ground change and each launch's new floors left the cell's earlier result in the store for good, and with the detail kept a
- *  10 km city's store only grew. */
-function keptResult(key: string): void {
-  void keptOnce().then(({ keys, byLevel }) => {
-    keys.add(key);
-    const level = levelOfStored(key), was = byLevel.get(level);
-    byLevel.set(level, key);
-    if (was === undefined || was === key) return;
-    keys.delete(was);
-    forgetDerivedKeys(CELL_PREFIX!, [was.slice(CELL_PREFIX!.length)]);
-  });
-}
+/** The keys kept, read once at the start (a keys-only read) and added to as results are kept: a job not in it is asked at once. DO NOT read the store before every job: a read waits for every write on the store before it (IndexedDB transactions), the road tiles' and the cells' own, and a city not kept yet opened 4 s later (2026-10-21). */
+let keptKeys: Promise<Set<string>> | null = null;
+// Whole keys: `readDerivedKeys` gives them without their prefix.
+const keptCellKeys = (): Promise<Set<string>> => (keptKeys ??= CELL_PREFIX
+  ? readDerivedKeys(CELL_PREFIX).then((keys) => new Set([...keys].map((k) => CELL_PREFIX + k)), () => new Set<string>())
+  : Promise.resolve(new Set<string>()));
 
 /** WHERE A CELL'S SLICES OF ITS SQUARE'S LEVELS ARE KEPT (`cellWork.ts` CellSlice): read when a tile's, a plate's or a base's job is asked, its
  *  cells kept handed to it as they are (their buildings not sent, not walked), written when a job hands back the slices it made. */
@@ -120,7 +90,7 @@ function derivedSlices(prefix: string | null, store: KeptStore = { read: readDer
 }
 
 /** The kinds joined from their cells' slices (`CellJob.spans`). */
-const SLICED_KINDS: ReadonlySet<JobKind> = Object.freeze(new Set<JobKind>(['massTile', 'massBase']));
+const SLICED_KINDS: ReadonlySet<JobKind> = Object.freeze(new Set<JobKind>(['massTile', 'massPlate', 'massBase']));
 
 /** THE PAGE'S SIDE OF THE CELLS PUT TOGETHER IN WORKERS (`cellWork.ts`, `cell.worker.ts`), through the job system's one queue (`jobPool.ts` `submitJob`) */
 
@@ -134,7 +104,7 @@ export interface CellEnv {
 /** How far past its cell a job's buildings read the paving off the roads handed to its worker (`PavingData`) */
 const PAVING_REACH = m(64);
 /** Which jobs go first, a band each, nearest the eye first within a band: the detail, its far level, the masses, the summaries; the base (the top level, `massBase.ts`) in the far levels' band (`FAR_TIER`), before them all. */
-const TIER: Readonly<Record<JobKind, number>> = { cell: 0, facade: 1, mass: 2, massTile: 2.5, summary: 3, massBase: -0.5 };
+const TIER: Readonly<Record<JobKind, number>> = { cell: 0, facade: 1, mass: 2, massTile: 2.5, massPlate: 2.75, summary: 3, massBase: -0.5 };
 /** A band: farther than any cell of any map is from the eye (the far levels' jobs take a band of their own, `farLevels.ts`). */
 export const TIER_SPAN = m(10_000_000);
 /** The bands the detail is put back by while the town is unseen (`coarseFirst`): past the masses (2-2.75). */
@@ -300,8 +270,8 @@ export class CellPool {
     private readonly tone?: Readonly<Record<Finish, readonly [number, number, number]>>, slices?: SliceStore | null) {
     this.kept = keptStore(workers);
     this.slices = slices === undefined ? derivedSlices(CELL_PREFIX, this.kept) : slices;
-    // The kept keys read now, at the start, before the town's writes come (`keptCellKeys`, `keptLevels`).
-    if (workers && canQueueJobs()) void keptOnce();
+    // The kept keys read now, at the start, before the town's writes come (`keptCellKeys`).
+    if (workers && canQueueJobs()) void keptCellKeys();
   }
 
   /** Where the cells' results and slices are kept and read (`keptStore`): off the page where jobs run. */
@@ -518,7 +488,7 @@ export class CellPool {
     if (reply.kind === 'done') {
       // Kept before it is handed on: its arrays copied now, they are the layer's after (`KeptStore.keep`).
       const stored = asked.stored;
-      if (stored !== null && this.kept.keep(stored, reply.result)) keptResult(stored);
+      if (stored !== null && this.kept.keep(stored, reply.result)) void keptCellKeys().then((keys) => keys.add(stored));
       // The slices it made of its cells, kept; each cell's slice before them forgotten.
       for (const { cell, slice } of reply.result.slices ?? []) {
         const key = asked.sliceKeys?.get(cell);

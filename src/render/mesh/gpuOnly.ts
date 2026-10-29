@@ -1,4 +1,4 @@
-import type { BufferAttribute, BufferGeometry, InterleavedBuffer, InterleavedBufferAttribute, Object3D } from 'three';
+import type { BufferAttribute, BufferGeometry, InterleavedBuffer, Object3D } from 'three';
 
 /** DO NOT keep a mesh's arrays for a later rebuild: rebuild from the data it was made from. */
 
@@ -45,13 +45,7 @@ export function fillArrays(holder: Object3D, arrays: GeometryArrays): boolean {
 export function gpuOnly(mesh: Object3D & { geometry: BufferGeometry }, arrays: () => GeometryArrays): void {
   const g = mesh.geometry;
   const own: Record<string, Uploaded> = {};
-  // An interleaved attribute is uploaded as its buffer (three's `onUpload` is the buffer's): the buffer once, under the first attribute reading it.
-  const shared = new Set<InterleavedBuffer>();
-  for (const [name, attribute] of Object.entries(g.attributes)) {
-    const data = (attribute as InterleavedBufferAttribute).isInterleavedBufferAttribute ? (attribute as InterleavedBufferAttribute).data : null;
-    if (data) { if (!shared.has(data)) { shared.add(data); own[name] = data; } continue; }
-    own[name] = attribute as BufferAttribute;
-  }
+  for (const [name, attribute] of Object.entries(g.attributes)) own[name] = attribute as BufferAttribute;
   if (g.index) own.index = g.index;
   gpuOnlyAttributes(mesh, own, arrays);
 }

@@ -1,8 +1,10 @@
-import { Group, type Material, type Mesh } from 'three';
+import { Color, Group, type Material, type Mesh } from 'three';
 
 import { measureHitch } from '@core/hitch';
 import { Digest } from '@core/digest';
 import type { Network } from '@world/network';
+import { ROAD_TYPES } from '@world/roadTypes';
+import type { CarriagewayMaterial } from '@world/roadSection';
 import { packFlush } from '@world/roads/footwayRise';
 import { rampsMeeting } from '@world/curbRamps';
 import { type CurbRamp, rampData } from '@world/rampRise';
@@ -18,18 +20,18 @@ import {
   type DrawGroup, type KeptTile, type PassState, type PassTile, type SurfaceSpec, type TileBundle, coded, concatSeams, drawGroups, ringsReader, sameTiles,
   farSurfaceSource, surfaceSource, tileSignature,
 } from './roadSurfaceBlocks';
+import { ROAD_CODE, type RoadCode } from './mesh/roadEdges';
 import { attachFarLevel, blockArraysOf, blockBox, cloneBlock, joinBlocks, memberSizes, mergeTiles, splitBlock, tilesOnGpu } from './mesh/surfaceTiles';
 import { cancelWarm, warmLooseAhead } from './uploads';
 import type { FarBlockBatches } from './mesh/farBlockBatches';
 import { type BlockArrays, type BlockLock, levelsOf } from './mesh/roadLod';
 import { FOOTPRINT, farLocksOf, farTileName, seamsOf } from './roads/pieceMesh';
 import type { RoadFootprints } from './roadFootprints';
-import { CLASS_TINTS, PAVING_TINTS, REFERENCE_TINT } from './roadPassLook';
+import { ASPHALT_REFERENCE, CARRIAGEWAY_COLOUR } from './roadTones';
 import type { RoadTiler, TileJob } from './roadTilePool';
 import type { SurfaceData } from './roadTileMesh';
 import {
   passSurfaces,
-  roadCodeOf,
   type PassDesc,
   type RoadLook,
   type SurfaceRead,
@@ -43,7 +45,6 @@ import {
 } from './mesh/surfaceMesh';
 
 export type { TileBundle } from './roadSurfaceBlocks';
-export { roadCodeOf } from './roadSurfaceReads';
 
 /** The road network's surface bands */
 
@@ -151,6 +152,26 @@ const TUNNEL_OPEN = (TUNNEL_ROOF + TUNNEL_BORE) / 2;
 const SHAPE_BATCH = 64;
 /** Batches of tiles asked of the workers ahead of the one being taken (`buildAll`): each worker's next share waits in its queue. */
 const IN_FLIGHT = 3;
+
+/** Linear-space tints per road class, so the asphalt mesh can vary by class. */
+const CLASS_TINT: readonly Color[] = ROAD_TYPES.map((type) =>
+  new Color(type.color),
+);
+/** The tint the asphalt material is authored against, so 1.0 means "as baked". */
+const TINT_REFERENCE = new Color(ASPHALT_REFERENCE);
+/** A carriageway's tone by what it is paved with; asphalt keeps its class's. */
+const CARRIAGEWAY_TINT: Readonly<Record<Exclude<CarriagewayMaterial, 'asphalt'>, Color>> = {
+  concrete: new Color(CARRIAGEWAY_COLOUR.concrete),
+  cobble: new Color(CARRIAGEWAY_COLOUR.cobble),
+};
+/** A colour against the reference, channel by channel: the multiplier a vertex is tinted with. */
+const againstReference = (tint: Color): [number, number, number] =>
+  [tint.r / TINT_REFERENCE.r, tint.g / TINT_REFERENCE.g, tint.b / TINT_REFERENCE.b];
+/** The carriageway's tints as a pass reads them (`PassDesc`): numbers, made once here with three's colour management. */
+const CLASS_TINTS: readonly number[] = CLASS_TINT.flatMap(againstReference);
+const REFERENCE_TINT = againstReference(TINT_REFERENCE);
+const PAVING_TINTS: Readonly<Record<string, readonly [number, number, number]>> = Object.fromEntries(
+  Object.entries(CARRIAGEWAY_TINT).map(([name, tint]) => [name, againstReference(tint)]));
 
 /** The page's constants the roads are drawn with (`PassLook`): what a road bake in a worker is handed to draw them alike (`nearRoadTiles.ts`). */
 function passLook(materials: SceneMaterials): PassLook {
@@ -700,6 +721,18 @@ export function* roadSurfaceSteps(
       group.clear();
     },
   };
+}
+
+/** A surface's code in the road material (`mesh/roadEdges.ts` ROAD_CODE): the look its own material had (the footway's for its ramps and a median's
+ *  paving, the kerb's for a median's kerb, the planting's for a median's soil). */
+export function roadCodeOf(source: TileSource, raised: boolean): RoadCode {
+  if (source.kind === 'median') return source.part === 'kerb' ? ROAD_CODE.kerb : source.part === 'planting' ? ROAD_CODE.planting : ROAD_CODE.footway;
+  switch (source.band) {
+    case 'deckEdge': return ROAD_CODE.deck;
+    case 'footway': case 'curbRamp': return ROAD_CODE.footway;
+    case 'kerb': return ROAD_CODE.kerb;
+    case 'asphalt': return raised ? ROAD_CODE.raised : ROAD_CODE.carriageway;
+  }
 }
 
 /** How a surface is drawn: its material, whether it casts a shadow - the region's (`dress`) and the programs' stand-ins (`roadProgramStandIns.ts`) alike. */

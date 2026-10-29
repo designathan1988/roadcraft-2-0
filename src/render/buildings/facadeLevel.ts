@@ -1,6 +1,6 @@
 import type { MeshStandardMaterial } from 'three';
 import { m } from '@world/units';
-import { PULSE_GLSL, ROOM_SEEN_GLSL, type MassingUniforms } from './facadePulse';
+import { PULSE_GLSL, ROOM_SEEN_GLSL, type MassingUniforms } from './massingMaterial';
 import { ROOM_LAMP_GLSL } from './roomLamps';
 import { MACRO_SCALE, SHELL_NOISE_GLSL } from './shellParts';
 
@@ -41,7 +41,6 @@ varying vec4 vFacadeGrid;
 varying vec4 vFacadeKey;
 varying vec4 vFacadeOpening;
 varying vec4 vFacadeTrim;
-varying vec4 vFacadeCover;
 varying vec3 vFacadeWorld;
 // The pixel's shares: wall, frame, glass, door or shutter; the glass's darker pane; the room's light.
 float facadeWall = 1.0;
@@ -153,12 +152,6 @@ if (facadeKind > ${K.none}) {
     facadeLamp = mix(roomLamp(fract(lot * 17.31), office), roomLampMean(office), sub);
   }
 }
-// A level from afar's bays, with windows or none: what stands out of their walls in the detail (balconies, slabs, fins, bands: \`CoverShell\`), its colour over its
-// share of the bay as the bay falls under the pixels, as the windows fade to their mean (Haegler et al. 2010, the grammar's terminals at their
-// mean); none on the detail's and the facade level's runs, whose elements are their own.
-float facadeCovered = vFacadeCover.a * facadeSub;
-diffuseColor.rgb = mix(diffuseColor.rgb, vFacadeCover.rgb, facadeCovered);
-facadeWall *= 1.0 - facadeCovered;
 `;
 }
 
@@ -183,12 +176,10 @@ attribute vec2 facadeSize;
 attribute vec4 facadeCell;
 attribute vec4 facadeOpening;
 attribute vec4 facadeTrim;
-attribute vec4 facadeCover;
 varying vec4 vFacadeGrid;
 varying vec4 vFacadeKey;
 varying vec4 vFacadeOpening;
 varying vec4 vFacadeTrim;
-varying vec4 vFacadeCover;
 varying vec3 vFacadeWorld;`)
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
 vFacadeGrid = vec4(facadeCell.xy, facadeSize);
@@ -202,7 +193,6 @@ vFacadeGrid = vec4(facadeCell.xy, facadeSize);
 }
 vFacadeOpening = facadeOpening;
 vFacadeTrim = facadeTrim;
-vFacadeCover = facadeCover;
 vFacadeWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${facadeFragmentPars(p)}`)
@@ -224,6 +214,6 @@ totalEmissiveRadiance += (facadeLamp * massingNight * facadeLit + ${ROOM_SEEN_GL
     // The shell's own after: each of its additions lands right after its chunk, so before these (its finish's map, roughness, metalness and relief first).
     baseCompile(shader, renderer);
   };
-  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v10`;
+  material.customProgramCacheKey = () => `${baseKey()}-facade-level-v8`;
   return material;
 }

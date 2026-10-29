@@ -27,9 +27,8 @@ export interface PassLook {
   readonly pavingTint: Readonly<Record<string, readonly [number, number, number]>>;
 }
 
-/** The road a surface reads beside the field, as a pass sees it (`RoadLook`): its paving, widths and mouths. `ids`: its paint's slot its own id and its
- *  ends' its nodes' ids (a job's, whose page resolves them, `networkFarRoads.ts`), its lines not written in this thread's table. */
-export function lookOf(net: Network, id: SegmentId, ids = false): RoadLook | undefined {
+/** The road a surface reads beside the field, as a pass sees it (`RoadLook`): its paving, widths and mouths. */
+export function lookOf(net: Network, id: SegmentId): RoadLook | undefined {
   const ribbon = net.ribbons.get(id);
   const segment = net.doc.segment(id);
   if (!ribbon || !segment) return undefined;
@@ -40,8 +39,8 @@ export function lookOf(net: Network, id: SegmentId, ids = false): RoadLook | und
     width: ribbon.road.width,
     lane,
     // Its lines along it and its widths in the carriageway shader's table, at its slot (`roadPaint.ts`); its ends' plates' slots, for a plate's vertices.
-    paint: ids ? id : roadPaint.set(net.doc, id, roadAlongPaint(net, ribbon), ribbon.road.width / 2, lane),
-    ends: ids ? [segment.a, segment.b] : [roadPaint.nodeSlot(net.doc, segment.a), roadPaint.nodeSlot(net.doc, segment.b)],
+    paint: roadPaint.set(net.doc, id, roadAlongPaint(net, ribbon), ribbon.road.width / 2, lane),
+    ends: [roadPaint.nodeSlot(net.doc, segment.a), roadPaint.nodeSlot(net.doc, segment.b)],
     id,
     endIds: [segment.a, segment.b],
     from: trims?.a[Level.Asphalt] ?? 0,
@@ -69,11 +68,11 @@ export function passRaised(net: Network, pass: SurfacePass, elevation: Pick<Road
 }
 
 /** What a pass's surfaces read where the network is at hand (the page's, or a worker's own): the solved field, the ground as drawn, each road's look and line, the footways' rise (made once a pass). */
-export function passReads(net: Network, elevation: RoadReads, terrainAt: (x: number, y: number) => number, ids = false): SurfaceReads {
+export function passReads(net: Network, elevation: RoadReads, terrainAt: (x: number, y: number) => number): SurfaceReads {
   /** Each road's look, asked per vertex: made once a pass. */
   const looks = new Map<SegmentId, RoadLook | undefined>();
   const look = (id: SegmentId): RoadLook | undefined => {
-    if (!looks.has(id)) looks.set(id, lookOf(net, id, ids));
+    if (!looks.has(id)) looks.set(id, lookOf(net, id));
     return looks.get(id);
   };
   return {

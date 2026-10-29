@@ -19,12 +19,3 @@ lab-reports/
 
 # Local MCP servers (holds a GitHub token: never commit)
 .mcp.json
-
-# The code graph (scripts/codegraph): rebuilt in seconds, never committed
-reports/codegraph/*.db
-
-# The whole session extracted at each compaction (.claude/hooks/sessionlog.cjs): rewritten whole every time
-docs/agent/session-log.md
-
-# The coordinator's one-command unlocks for the git and acceptance gates (.claude/hooks/git-gate.cjs, acceptance-lock.cjs)
-.claude/*.unlock

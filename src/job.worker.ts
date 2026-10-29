@@ -21,6 +21,7 @@ const LOADERS: Readonly<Record<JobService, () => Promise<{ serve: Serve }>>> = {
   roadCoarse: () => import('./render/roadTile.worker'),
   roadStations: () => import('./render/roadStations.worker'),
   // The whole network's far roads at a large city's opening (`render/networkFarRoads.ts`).
+  roadFar: () => import('./render/networkFarRoads.worker'),
   // The whole finite city built with the game's own generator, off the page (`cityGen.worker.ts`).
   cityGen: () => import('./cityGen.worker'),
   // A city's network solved while its curtain is up, taken by the page's build (`networkBake.worker.ts`).

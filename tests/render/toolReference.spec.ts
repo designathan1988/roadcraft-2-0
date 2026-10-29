@@ -10,18 +10,17 @@ import type { RoadSection } from '@world/roadSection';
 import type { NodeId, SegmentId } from '@world/ids';
 import { type Geom, type PieceLevel, atLevel } from '@render/roads/pieceGeom';
 import { type MeshedSurface, farTileName, pieceBundle } from '@render/roads/pieceMesh';
-import { type Shape, segmentShapes } from '@render/roads/segmentPiece';
-import { junctionShapes } from '@render/roads/junctionPiece';
+import { type Shape, deckOf, segmentFarShapes, segmentShapes } from '@render/roads/segmentPiece';
+import { junctionFarShapes, junctionShapes } from '@render/roads/junctionPiece';
 import { passDesc, passReads } from '@render/roadSurfacePass';
 import { passSurfaces } from '@render/roadSurfaceReads';
 import { SurfaceInputs } from '@render/roadSurfaceInputs';
 import type { SurfacePass } from '@render/roadSurfaceEntries';
-import { FAR_SECTION, farPieceCells } from '@render/networkFarPieces';
-import { ROAD_PASS_LOOK } from '@render/roadPassLook';
+import { FAR_FAN, FAR_STRIP, buildFarRoadCells, type FarRoadInput } from '@render/networkFarRoadsBuild';
 import type { Tile } from '@render/mesh/tileMesh';
 import type { SceneMaterials } from '@render/materials';
 import { type SurfaceReuse, roadSurfaceSteps } from '@render/roadSurfaces';
-import { ROAD_CODE, marksRoadSection } from '@render/mesh/roadEdges';
+import { marksRoadSection } from '@render/mesh/roadEdges';
 import { coarseArrays } from '@render/mesh/roadLodPure';
 import { levelsOf } from '@render/mesh/roadLod';
 import type { RoadTiler } from '@render/roadTilePool';
@@ -277,21 +276,39 @@ function behindRamp(geom: Geom & { kind: 'strip' }, shapes: readonly Shape[]): b
 
 const ribbonShapes = (net: Network, id: SegmentId): Shape[] => segmentShapes(net, net.ribbons.get(id)!);
 
-/** The network's root level (L2) of a layout counted the tool's way, as the game makes it (`networkFarPieces.ts` farPieceCells: the far shapes meshed
- *  as the detail's surfaces): the plate (a junction's carriageway, its vertices carrying its node), the casing (the footway's band) and the
- *  carriageway's strips; and its triangles narrower than the tool's widest least altitude with their float slack. */
+/** The network's far level (L2) of a layout, counted per shape: the plate (a junction's fan), the casing and the carriageway's strips. */
+/** The network's far level (L2) counted the tool's way, and its triangles narrower than the tool's widest least altitude with their float slack. */
 function countFar(net: Network): { plate: number; casing: number; carriageway: number; thin: Thin[] } {
   const out = { plate: 0, casing: 0, carriageway: 0, thin: [] as Thin[] };
-  const cells = farPieceCells(net, buildRoadElevation(net, () => 0), () => 0, 1000, null, ROAD_PASS_LOOK);
-  for (const cell of cells) {
-    for (let t = 0; t < cell.indices.length; t += 3) {
-      const c = [0, 1, 2].flatMap((k) => { const v = cell.indices[t + k]! * 3; return [cell.positions[v]!, cell.positions[v + 1]!, cell.positions[v + 2]!]; });
-      const a = altitudeOf(c);
-      if (a < 1.5) out.thin.push([a, floatSlack(c)]);
-      const at = cell.indices[t]! * FAR_SECTION, code = cell.sections[at + 3]!, slot = cell.sections[at + 2]!;
-      if (code === ROAD_CODE.carriageway) { if (slot <= -2) out.plate++; else out.carriageway++; } else if (code === ROAD_CODE.footway) out.casing++;
+  const one = (geom: Geom, layer: number, junction: boolean): void => {
+    const points: number[] = [];
+    let kind: number, sizes: [number, number];
+    if (geom.kind === 'strip') {
+      for (const c of [geom.a, geom.b]) for (let k = 0; k < c.s.length; k++) points.push(c.xy[k * 2]!, c.xy[k * 2 + 1]!, 0, c.s[k]!);
+      kind = FAR_STRIP; sizes = [geom.a.s.length, geom.b.s.length];
+    } else if (geom.kind === 'fan') {
+      points.push(geom.cx, geom.cy, 0, 0);
+      for (let k = 0; k < geom.ring.length; k += 2) points.push(geom.ring[k]!, geom.ring[k + 1]!, 0, 0);
+      kind = FAR_FAN; sizes = [geom.ring.length / 2, 0];
+    } else return;
+    const input: FarRoadInput = {
+      cell: 1000, owners: Int32Array.of(0, 0), layers: Uint8Array.of(layer), colors: Float32Array.of(1, 1, 1),
+      kinds: Uint8Array.of(kind), sizes: Uint32Array.of(...sizes), points: Float64Array.from(points),
+      across: new Float32Array(points.length / 4), slots: Float64Array.of(-1),
+    };
+    const cells = buildFarRoadCells(input);
+    const n = cells.reduce((sum, c) => sum + c.indices.length / 3, 0);
+    for (const cell of cells) {
+      for (let t = 0; t < cell.indices.length; t += 3) {
+        const c = [0, 1, 2].flatMap((k) => { const v = cell.indices[t + k]! * 3; return [cell.positions[v]!, cell.positions[v + 1]!, cell.positions[v + 2]!]; });
+        const a = altitudeOf(c);
+        if (a < 1.5) out.thin.push([a, floatSlack(c)]);
+      }
     }
-  }
+    if (geom.kind === 'fan' && layer === 1) out.plate += n; else if (layer === 1 && !junction) out.carriageway += n; else out.casing += n;
+  };
+  for (const ribbon of net.ribbons.values()) for (const s of segmentFarShapes(net, ribbon, deckOf(net, [ribbon.id]))) one(s.geom, s.layer, false);
+  for (const id of net.junctions.keys()) for (const s of junctionFarShapes(net, id as NodeId, false)) one(s.geom, s.layer, true);
   return out;
 }
 

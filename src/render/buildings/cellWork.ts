@@ -2,21 +2,19 @@ import type { Finish } from '@world/buildings/materials';
 import { eachRecord, readRecords } from '@world/buildings/recordTable';
 import { type PavingData, pavingReader } from '@world/paving';
 import { type GroundReaders, type SharedGroundData, sharedGroundReaders } from '../sharedGround';
-import { MassShellWriter, ShellWriter, emitLotsAt, emitProgram, letGoEmitted, type ProgramWants } from './buildingMesh';
-
-
+import { ShellWriter, emitLotsAt, emitProgram, letGoEmitted, type ProgramWants } from './buildingMesh';
 export { ShellWriter } from './buildingMesh';
-import { type CellArrays, type CellMass, type CellSelection, type KitBoxes, MassAppender, cellArrays, cellBuffers, cellMassBuffers, joinMass, massOnGrid } from './cellArrays';
+import { type CellArrays, type CellMass, type CellSelection, type KitBoxes, cellArrays, cellBuffers, cellMass, cellMassBuffers, joinMass } from './cellArrays';
 import type { BuildingChunk, CellJobEntry, LotGroundRecipe } from './chunk';
 import type { Building } from '@world/buildings/types';
 import type { FlagInstance } from './flagLayer';
 import { COARSE_PARTS, DETAIL_PARTS, PART_KINDS } from './partKinds';
 import { DETAIL_CELL } from './partFiling';
-import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, baseFloor, massFloor } from './massing';
+import { CELL_DETAIL, type MassDetail, PLATE_DETAIL, TILE_DETAIL, baseFloor, massFloor, massOf, type MassingChunk } from './massing';
 import { type PartFiling, fileParts, filingBuffers, shellPieceOf } from './partFiling';
 import { levelCells } from './levelKeys';
-import { type BaseMass, baseCellOf, joinBase } from './massBase';
-import { type BayCovers, type BuildingProgram, type LotsProgram, type ProgramSummary, ProgramCache, summaryOf } from './program';
+import { type BaseMass, type BaseSlice, BaseWriter, baseBuffers, writeBase } from './massBase';
+import { type BuildingProgram, type LotsProgram, type ProgramSummary, ProgramCache, summaryOf } from './program';
 import { PartyWalls } from './partyWalls';
 
 /** DO NOT send the page a chunk per building */
@@ -24,11 +22,11 @@ import { PartyWalls } from './partyWalls';
 export type { CellEntry } from './chunk';
 
 /** What a job makes: a cell's detail (its coarse batch and its detail cells'), the same at the far level (`facade`: L1, `emitChunk` `far`), a cell's buildings faded */
-/** 'massTile': the masses of a 1,000 m tile (L2) merged, simplified to its level (`massLevels.ts`); 'massBase': a plate's square (L3, the top level, `massBase.ts`), laid cell by cell. */
-export type JobKind = 'cell' | 'mass' | 'summary' | 'facade' | 'massTile' | 'massBase';
+/** 'massTile' and 'massPlate': the masses of a 1,000 m tile (L2) and a 2,000 m plate (L3) merged, simplified to their level (`massLevels.ts`); 'massBase': a plate's square at the top level, its blocks' prisms (`massBase.ts`). */
+export type JobKind = 'cell' | 'mass' | 'summary' | 'facade' | 'massTile' | 'massPlate' | 'massBase';
 
 /** What each kind of masses leaves out (`massing.ts` `MassDetail`). */
-const MASS_DETAIL: Partial<Readonly<Record<JobKind, MassDetail>>> = { mass: CELL_DETAIL, massTile: TILE_DETAIL, massBase: PLATE_DETAIL };
+const MASS_DETAIL: Partial<Readonly<Record<JobKind, MassDetail>>> = { mass: CELL_DETAIL, massTile: TILE_DETAIL, massPlate: PLATE_DETAIL };
 
 /** A cell of a tile's, a plate's or a base's job whose slice is not kept (`CellJob.spans`): how many of the job's entries are its buildings, in order. */
 export interface CellSpan {
@@ -37,12 +35,12 @@ export interface CellSpan {
 }
 
 /** A CELL'S SLICE OF A SQUARE'S LEVEL, kept between jobs (`cellPool.ts` SliceStore, the derived cache): its buildings' masses at the tile's or the
- *  plate's detail merged in floats (`concatMass`; null: none), or at the base's (`base`: null, none of them stands from afar). A tile, a plate and
- *  a base are joined from their cells' slices (`joinMass`, `joinBase`): an edit makes its cell's slices again, its buildings alone walked, every
- *  other cell's read as kept. */
+ *  plate's detail merged in floats (`cellMass` with no square; null: none), or its base (`BaseWriter.sliceOf`). A tile, a plate and a base are
+ *  joined from their cells' slices (`joinMass`, `BaseWriter.put`): an edit makes its cell's slices again, its buildings alone walked, every other
+ *  cell's read as kept. */
 export interface CellSlice {
   readonly mass?: CellMass | null;
-  readonly base?: CellMass | null;
+  readonly base?: BaseSlice | null;
 }
 export interface KeptSlice {
   readonly cell: string;
@@ -115,11 +113,10 @@ export function replyBuffers(reply: WorkReply): ArrayBuffer[] {
   const out = reply.result.batch ? cellBuffers(reply.result.batch) : [];
   if (reply.result.parts) out.push(...filingBuffers(reply.result.parts));
   if (reply.result.mass) out.push(...cellMassBuffers(reply.result.mass));
-  const base = reply.result.base;
-  if (base) { if (base.mass) out.push(...cellMassBuffers(base.mass)); out.push(base.cells.buffer as ArrayBuffer); }
+  if (reply.result.base) out.push(...baseBuffers(reply.result.base));
   for (const { slice } of reply.result.slices ?? []) {
     if (slice.mass) out.push(...cellMassBuffers(slice.mass));
-    if (slice.base) out.push(...cellMassBuffers(slice.base));
+    if (slice.base) out.push(slice.base.position.buffer as ArrayBuffer, slice.base.paint.buffer as ArrayBuffer, slice.base.index.buffer as ArrayBuffer);
   }
   return out;
 }
@@ -272,22 +269,37 @@ export function runCellJob(job: CellJob, reads: CellReads): WorkReply {
   // and the base, the masses, the summary, the facade level and the detail each drawn from it; an edited building walked again, it alone.
   const programs = new JobPrograms(toneKeyOf(job.tone), job.paved);
   const tone = job.tone;
-  // The worker's bays' covers kept across its jobs (`ProgramCache.covers`): each kind of bay measured once.
-  const stage = (floor: number | null): { floor: number | null; tone?: NonNullable<CellJob['tone']>; covers: BayCovers } => (tone ? { floor, tone, covers: PROGRAMS.covers } : { floor, covers: PROGRAMS.covers });
+  const stage = (floor: number | null): { floor: number | null; tone?: NonNullable<CellJob['tone']> } => (tone ? { floor, tone } : { floor });
+  if (job.kind === 'massBase') {
+    // The top level: each building's blocks' prisms, in its cell's run, on its floor as seen from afar (`baseFloor`) where no job measured it yet.
+    // DO NOT measure the exact floor here (`massFloor`, the bays laid out): every building of the map is in a base, and the curtain waits for every base (`layer.ts` coarsePending) - 70,000 floors were ~22 s of the workers behind the opening of the step-70k city (2026-10-22). Nor hand the estimate on (`floors`): the finer levels stand on the exact one.
+    const writer = new BaseWriter();
+    const floors: (number | null | undefined)[] = [];
+    let n = 0;
+    for (const b of eachRecord(job.entries.map((entry) => entry.record))) {
+      const entry = job.entries[n]!;
+      const given = entry.floor;
+      const floor = given !== undefined ? given : baseFloor(b, naturalAt, paved) ?? null;
+      floors.push(given);
+      n++;
+      const program = programs.mass(entry, floor, () => emitProgram(b, groundAt, paved, naturalAt, { near: false, far: false }, stage(floor)),
+        () => emitLotsAt(b, floor, groundAt, paved));
+      writeBase(writer.cellOf(b), program);
+    }
+    if (missed()) { programs.undo(); return wider(job, missX0, missY0, missX1, missY1); }
+    // Joined from its cells' slices: those kept put as they were, those walked here handed back to keep.
+    for (const { cell, slice } of job.slices ?? []) if (slice.base) writer.put(cell, slice.base);
+    const made: KeptSlice[] | undefined = job.spans && job.slices ? job.spans.map(({ cell }) => ({ cell, slice: { base: writer.sliceOf(cell) } })) : undefined;
+    return { kind: 'done', job: job.id, result: { batch: null, parts: null, summaries: [], base: writer.done(levelCells(job.cell)), floors, ...(made ? { slices: made } : {}) } };
+  }
   const detail = MASS_DETAIL[job.kind];
   if (detail) {
-    // Every building laid into one shell (`MassShellWriter`, its arrays kept from one to the next), written at once into its cell's mass
-    // (`MassAppender`): a cell's slice its buildings', a level its slices' joined (`concatMass`: the same bytes as its buildings at once).
-    const writer = new MassShellWriter();
-    const masses = new MassAppender();
+    const masses: MassingChunk[] = [];
     const floors: (number | null | undefined)[] = [];
     // Joined from its cells' slices (`CellJob.spans`): each cell's buildings' masses apart, merged into its slice.
     const spans = job.spans;
-    const sliced: MassAppender[] = spans ? spans.map(() => new MassAppender()) : [];
+    const sliced: MassingChunk[][] = spans ? spans.map(() => []) : [];
     let span = 0, inSpan = 0;
-    // The base's cell by cell, by each building's own cell (`baseCellOf`): its draw leaves out the cells a finer level draws (`massBase.ts`).
-    const base = job.kind === 'massBase';
-    const byCell = new Map<string, MassAppender>();
     // A tile's and a plate's masses are drawn from afar, as the base is: on the floor seen from afar where none was measured (`baseFloor`), never handed on. DO NOT lay every building's bays out for them: with the bases' estimate (no floor handed on) the plates of the step-70k city took ~3 s of a worker each after the curtain, the map standing in cells' masses (2026-10-22).
     const far = job.kind !== 'mass';
     // One record at a time, let go once its masses are made: a plate's job is four tiles of buildings (`eachRecord`).
@@ -301,41 +313,24 @@ export function runCellJob(job: CellJob, reads: CellReads): WorkReply {
       n++;
       const program = programs.mass(entry, floor, () => emitProgram(b, groundAt, paved, naturalAt, { near: false, far: false }, stage(floor)),
         () => emitLotsAt(b, floor, groundAt, paved));
-      // In the facade level's own format and look (`massShells`): the building's own paints, finishes and runs of bays.
-      writer.write(program, detail);
-      const mass = writer.take();
-      if (base) {
-        const cell = baseCellOf(b);
-        let into = byCell.get(cell);
-        if (!into) byCell.set(cell, into = new MassAppender());
-        if (mass) into.add(mass);
-      } else if (spans) {
+      const mass = massOf(program, detail);
+      if (spans) {
         while (inSpan >= spans[span]!.count) { span++; inSpan = 0; }
         inSpan++;
-        if (mass) sliced[span]!.add(mass);
-      } else if (mass) masses.add(mass);
-    }
-    if (base) {
-      if (missed()) { programs.undo(); return wider(job, missX0, missY0, missX1, missY1); }
-      // Joined from its cells' slices: those kept as they were, those walked here handed back to keep.
-      const made: KeptSlice[] = [...byCell].map(([cell, into]) => ({ cell, slice: { base: into.done() } }));
-      const kept = (job.slices ?? []).filter(({ slice }) => slice.base !== undefined);
-      const all = [...made, ...kept].sort((p, q) => cellOrder(p.cell, q.cell));
-      const joined = joinBase(all.map(({ cell, slice }) => ({ cell, mass: slice.base ?? null })), levelCells(job.cell));
-      return { kind: 'done', job: job.id, result: { batch: null, parts: null, summaries: [], base: joined, floors, ...(job.spans && job.slices ? { slices: made } : {}) } };
+        if (mass) sliced[span]!.push(mass);
+      } else if (mass) masses.push(mass);
     }
     // On the square's grid (`cellArrays.ts` `massGrid`): a cell's, a tile's or a plate's.
     const at = job.cell[1] === ':' ? levelCells(job.cell) : { i0: Number(job.cell.slice(0, job.cell.indexOf(','))), j0: Number(job.cell.slice(job.cell.indexOf(',') + 1)), n: 1 };
     if (missed()) { programs.undo(); return wider(job, missX0, missY0, missX1, missY1); }
     if (spans) {
       // Each cell's slice in floats; the level its cells' slices joined in the cells' order (`MassLevels` lists them column by column), as its buildings' chunks merged at once.
-      const made: KeptSlice[] = spans.map(({ cell }, k) => ({ cell, slice: { mass: sliced[k]!.done() } }));
+      const made: KeptSlice[] = spans.map(({ cell }, k) => ({ cell, slice: { mass: cellMass(sliced[k]!) } }));
       const all = [...made, ...(job.slices ?? [])].sort((p, q) => cellOrder(p.cell, q.cell));
       const mass = joinMass(all.flatMap(({ slice }) => (slice.mass ? [slice.mass] : [])), at);
       return { kind: 'done', job: job.id, result: { batch: null, parts: null, summaries: [], mass, floors, ...(job.slices ? { slices: made } : {}) } };
     }
-    const whole = masses.done();
-    return { kind: 'done', job: job.id, result: { batch: null, parts: null, summaries: [], mass: whole && massOnGrid(whole, at), floors } };
+    return { kind: 'done', job: job.id, result: { batch: null, parts: null, summaries: [], mass: cellMass(masses, at), floors } };
   }
   // DO NOT parse a text per building: each record decoded from its tile's shared table, a tile's shared members once for the job.
   const buildings = readRecords(job.entries.map((entry) => entry.record));

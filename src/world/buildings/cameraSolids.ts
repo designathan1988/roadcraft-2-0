@@ -115,12 +115,10 @@ export interface GroundSince {
   rectsSince(since: number): readonly Rect[] | null;
 }
 
-/** A building's solid volumes as a job worked them out (`solidRowsOf`): its rows on no floor, whether its blocks are its volumes, and its floor
- *  measured there on the ground and paving the cells' jobs read (`floorHeight`; absent where the job could not read all it needed). */
-export interface SolidRows { readonly id: number; readonly rows: Float64Array; readonly blocksAreVolumes: boolean; readonly floor?: number }
-/** The solids of `ids` worked out off the page (`render/buildings/solidJobs.ts`), asked nearest `at` first; `rect`, the world rectangle their
- *  buildings stand in (the paving handed with the job). */
-export type SolidsAsk = (ids: readonly BuildingId[], buildings: BuildingStore, at: readonly [number, number], rect: Rect) => Promise<readonly SolidRows[]>;
+/** A building's solid volumes as a job worked them out (`solidRowsOf`): its rows on no floor, and whether its blocks are its volumes. */
+export interface SolidRows { readonly id: number; readonly rows: Float64Array; readonly blocksAreVolumes: boolean }
+/** The solids of `ids` worked out off the page (`render/buildings/solidJobs.ts`), asked nearest `at` first. */
+export type SolidsAsk = (ids: readonly BuildingId[], buildings: BuildingStore, at: readonly [number, number]) => Promise<readonly SolidRows[]>;
 
 /** What the cells are filled with off the page (`CameraSolidsKeeper.prefetch`). */
 export interface SolidsOffPage {
@@ -143,9 +141,6 @@ export interface CameraSolidsKeeper {
   /** The cells over the rectangles not filled yet asked of the jobs (`SolidsOffPage`), filed as their answers come: what the questions will
    *  reach next (the canyon light's window, the occluders round the eye). Nothing without a job queue. */
   prefetch(rects: readonly Rect[]): void;
-  /** The world rectangles of the cells filed off the page since the last call (a job's answer, a waiting building filed): what the questions
-   *  already asked there (the canyon light's window) should read again. Emptied by the call. */
-  takeArrived(): Rect[];
 }
 
 /**
@@ -174,63 +169,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   /** The cells of the last `prefetch` (DO NOT look again at every cell of a view that stands: thousands a frame). */
   let prefetched = '';
   let buildings: BuildingStore | null = null;
-  /** Buildings a job answered for with no floor known of them yet (the cells' jobs not come there): filed once their floor is known, or
-   *  worked out here a few a frame (`settleFootless`), those of a cell a question reaches at once. DO NOT work out their floors in the
-   *  answer's handler: a camera brought to a district not seen yet sampled the ground under every building of its blocks there, 0.4-0.5 s
-   *  in one task (the owner's moves measured in the game, 2026-10-27). */
-  type Footless = { readonly id: BuildingId; readonly rows: Float64Array; readonly blocksAreVolumes: boolean; readonly since: number };
-  /** The cells filed off the page since `takeArrived`, as world rectangles. */
-  const arrived: Rect[] = [];
-  const cellRect = (key: number): Rect => [cellX(key) * CELL, cellY(key) * CELL, (cellX(key) + 1) * CELL, (cellY(key) + 1) * CELL];
-  /** By the cell each waits in (its centre's), in the order they came. */
-  const footless = new Map<number, Footless[]>();
-  /** One waiting building filed if it can be: with the floor now known of it (the cells' jobs measure it with the masses, the first level to
-   *  land), or worked out here when `work` is asked (a question reached its cell), when the jobs never measure it (its blocks are not its
-   *  volumes) or when it waited past `FOOTLESS_WAIT_MS`; whether it was. DO NOT work out on the page what the masses' jobs are about to
-   *  measure: a district come to put 0.9 s of floors on the page, spread or not (2026-10-27). */
-  const settleOne = (town: BuildingStore, f: Footless, work: boolean, now: number): boolean => {
-    if (filing.has(f.id)) return true;
-    const foot = offPage!.footOf(f.id, f.blocksAreVolumes);
-    if (foot !== undefined) { filing.addRows(f.id, f.rows, foot); return true; }
-    if (!work && f.blocksAreVolumes && now - f.since < FOOTLESS_WAIT_MS) return false;
-    const b = town.get(f.id);
-    if (b) filing.add(b, floorAt(b));
-    return true;
-  };
-  /** The waiting buildings filed: every one of `cell` whatever the time (a question reached it), else as many as `until` (ms on the page's
-   *  clock) allows, cell after cell from the first come, the rest left for the next frames. DO NOT look at every waiting building each frame:
-   *  thousands waited after a move, and looking up each one's floor every frame took 2.4 s of 13 (2026-10-27). */
-  const settleFootless = (until: number, cell = -1): void => {
-    const town = buildings;
-    if (!town || !offPage || footless.size === 0) return;
-    if (cell >= 0) {
-      const list = footless.get(cell);
-      if (!list) return;
-      const now = performance.now();
-      for (const f of list) settleOne(town, f, true, now);
-      footless.delete(cell);
-      arrived.push(cellRect(cell));
-      return;
-    }
-    for (const [key, list] of footless) {
-      let kept = 0, k = 0, now = performance.now();
-      for (; k < list.length; k++) {
-        // The clock read a few buildings apart: reading it for each was a cost of its own.
-        if ((k & 7) === 0) now = performance.now();
-        if (now >= until) break;
-        if (!settleOne(town, list[k]!, false, now)) list[kept++] = list[k]!;
-      }
-      const settled = kept < k;
-      for (; k < list.length; k++) list[kept++] = list[k]!;
-      list.length = kept;
-      if (settled) arrived.push(cellRect(key));
-      if (kept === 0) footless.delete(key);
-      if (performance.now() >= until) return;
-    }
-  };
-  /** The cell a building's solids are kept waiting by: the one its centre stands in. */
-  const cellOfRows = (rows: Float64Array, fallback: number): number =>
-    rows.length ? cellKey(Math.floor(rows[R_BX]! / CELL), Math.floor(rows[R_BY]! / CELL)) : fallback;
   /** The cells over a rectangle filled: each building a volume of which may be filed in one of them (its box grown by `REACH`, `forEachCellOf`) filed, once. */
   const fill = (x0: number, y0: number, x1: number, y1: number): void => {
     const town = buildings;
@@ -258,20 +196,11 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
   };
   /** The filing as the questions read it: each cell they reach filled first. */
   const asked: CameraSolids = {
-    floorAt: (x, y) => { fill(x, y, x, y); settleFootless(0, cellKey(Math.floor(x / CELL), Math.floor(y / CELL))); return filing.floorAt(x, y); },
-    roofAt: (x, y) => { fill(x, y, x, y); settleFootless(0, cellKey(Math.floor(x / CELL), Math.floor(y / CELL))); return filing.roofAt(x, y); },
-    // The canyon light's window: what is filed, the cells not filed yet asked of the jobs and laid once they come (`takeArrived`). DO NOT fill
-    // its 2 km here: a view come to a district not seen yet sampled the ground under every building there on the page, a second of a move
-    // (2026-10-27). Without the jobs it is filled here, as before.
-    forEachIn: (x0, y0, x1, y1, visit) => { if (offPage) askCells([[x0, y0, x1, y1]]); else fill(x0, y0, x1, y1); filing.forEachIn(x0, y0, x1, y1, visit); },
-    forEachInAny: (rects, visit) => { if (offPage) askCells(rects); else for (const r of rects) fill(r[0], r[1], r[2], r[3]); filing.forEachInAny(rects, visit); },
-    // What surely hides what stands behind it, from what is filed: a cell not filed yet is asked of the jobs, its occluders left out this frame
-    // (fewer hidden, nothing drawn wrong). DO NOT fill it here: the occluders round the eye of a view come to a district not seen yet filled
-    // every building there on the page, the frame held 0.5 s (2026-10-27). Without the jobs it is filled here, as before.
-    forEachOccluder: (x0, y0, x1, y1, visit) => {
-      if (offPage) askCells([[x0, y0, x1, y1]]); else fill(x0, y0, x1, y1);
-      filing.forEachOccluder(x0, y0, x1, y1, visit);
-    },
+    floorAt: (x, y) => { fill(x, y, x, y); return filing.floorAt(x, y); },
+    roofAt: (x, y) => { fill(x, y, x, y); return filing.roofAt(x, y); },
+    forEachIn: (x0, y0, x1, y1, visit) => { fill(x0, y0, x1, y1); filing.forEachIn(x0, y0, x1, y1, visit); },
+    forEachInAny: (rects, visit) => { for (const r of rects) fill(r[0], r[1], r[2], r[3]); filing.forEachInAny(rects, visit); },
+    forEachOccluder: (x0, y0, x1, y1, visit) => { fill(x0, y0, x1, y1); filing.forEachOccluder(x0, y0, x1, y1, visit); },
   };
   const read = BuildingStore.cursor();
   let groundSeen = -1;
@@ -309,7 +238,6 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         // The diary cannot say what changed: every cell let go, filled again as the questions reach it.
         filing.clear();
         filled.clear();
-        footless.clear();
         whole = false;
         wholeAt = serial;
         prefetched = '';
@@ -321,25 +249,14 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
         }
       }
       pending.clear();
-      settleFootless(performance.now() + FOOTLESS_MS);
       return asked;
     },
     prefetch(rects) {
-      if (!offPage || !buildings || whole) return;
+      const town = buildings;
+      if (!offPage || !town || whole) return;
       const range = rects.map((r) => `${Math.floor(r[0] / CELL)},${Math.floor(r[1] / CELL)},${Math.floor(r[2] / CELL)},${Math.floor(r[3] / CELL)}`).join('|');
       if (range === prefetched) return;
       prefetched = range;
-      askCells(rects);
-    },
-    takeArrived() {
-      return arrived.splice(0, arrived.length);
-    },
-  };
-  /** The cells over the rectangles neither filled nor asked yet asked of the jobs, a block of `PREFETCH_BLOCK` cells a job, filed as their answers come. */
-  function askCells(rects: readonly Rect[]): void {
-    const town = buildings;
-    if (!offPage || !town || whole) return;
-    {
       // The cells to ask, by the block of `PREFETCH_BLOCK` cells they stand in: one job a block.
       const blocks = new Map<number, number[]>();
       for (const [x0, y0, x1, y1] of rects) for (let cx = Math.floor(x0 / CELL); cx <= Math.floor(x1 / CELL); cx++) {
@@ -373,46 +290,27 @@ export function cameraSolidsKeeper(floorAt: (b: Building) => number, boxOf: (b: 
               if (filing.has(id)) continue;
               const answer = rows.get(id);
               const changed = (changedAt.get(id) ?? -1) > askedAt;
-              // Its floor as the job measured it on the cells' ground, else as known on the page.
-              const foot = answer && !changed ? answer.floor ?? offPage.footOf(id, answer.blocksAreVolumes) : undefined;
+              const foot = answer && !changed ? offPage.footOf(id, answer.blocksAreVolumes) : undefined;
               if (answer && !changed && foot !== undefined) { filing.addRows(id, answer.rows, foot); continue; }
-              // No floor known of it yet: kept waiting for one (`settleFootless`), not worked out in this handler.
-              if (answer && !changed) {
-                const at = cellOfRows(answer.rows, cells[0]!);
-                let list = footless.get(at);
-                if (!list) footless.set(at, list = []);
-                list.push({ id, rows: answer.rows, blocksAreVolumes: answer.blocksAreVolumes, since: performance.now() });
-                continue;
-              }
               // Changed since it was asked, or no floor known of it: as the page files it, from its record as it stands.
               const b = town.get(id);
               if (b) filing.add(b, floorAt(b));
             }
-            for (const key of cells) { filled.add(key); arrived.push(cellRect(key)); }
+            for (const key of cells) filled.add(key);
             offPage.arrived?.();
           }
           if (!asking.size) changedAt.clear();
         };
         const at: [number, number] = [(sx / cells.length + 0.5) * CELL, (sy / cells.length + 0.5) * CELL];
-        let rx0 = Infinity, ry0 = Infinity, rx1 = -Infinity, ry1 = -Infinity;
-        for (const key of cells) {
-          rx0 = Math.min(rx0, cellX(key) * CELL - REACH); ry0 = Math.min(ry0, cellY(key) * CELL - REACH);
-          rx1 = Math.max(rx1, (cellX(key) + 1) * CELL + REACH); ry1 = Math.max(ry1, (cellY(key) + 1) * CELL + REACH);
-        }
-        offPage.ask(ids, town, at, [rx0, ry0, rx1, ry1]).then(landed, (error: unknown) => {
+        offPage.ask(ids, town, at).then(landed, (error: unknown) => {
           console.error('[buildings] a block of the camera\'s solids could not be worked out off the page; filled when asked', error);
           for (const key of cells) asking.delete(key);
           if (!asking.size) changedAt.clear();
         });
       }
-    }
-  }
+    },
+  };
 }
-
-/** The page's time a frame the buildings a job answered for with no floor known are filed in, working their floors out (`settleFootless`), ms. */
-const FOOTLESS_MS = 2;
-/** How long a building waits for the cells' jobs to measure its floor before it is worked out on the page (`settleOne`), ms. */
-const FOOTLESS_WAIT_MS = 3000;
 
 const overlaps = (a: Rect, b: Rect): boolean => a[0] <= b[2] && a[2] >= b[0] && a[1] <= b[3] && a[3] >= b[1];
 

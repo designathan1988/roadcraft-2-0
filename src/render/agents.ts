@@ -1960,10 +1960,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
           own = wholeOrNot(pixels);
           if (cellRecord) { cellRecord.pixels.push(pixels); cellRecord.whole.push(own === 2); }
         }
-        // Its band by its own size on the screen where one is told (`screenScale`), else the view's zoom. DO NOT cap it by the view's zoom: in a
-        // perspective view a car near the eye, large on the screen, was drawn as the far proxy (`VehicleModel.far`, its glass painted on) until
-        // the view's centre came past `FAR_BODY_ZOOM`, then swapped for its real model before the player's eyes (the owner's photos, 2026-10-27).
-        const level = !detailed ? 0 : screenScale ? own : Math.min(vehicleBand, own);
+        const level = Math.min(vehicleBand, own);
         if (twoWheeled && level === 2) bikesWholeNow = true;
         // A car's tyres cast only with its whole body (level 2): at level 1 its shadow is the soft disc, the tyres' dots under it were the player's to drop (2026-10-17).
         if (!twoWheeled && level >= 2) { carsWheeled = true; if (cellRecord) cellRecord.wheeled = true; }
@@ -2029,7 +2026,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
           ? pedestrians.stopTiltFor(seatIdentity(vehicle, seatPersonInto(vehicle, 0, seated), false), vehicle.archetype.shape === 'motorcycle', pose.p.x, pose.p.y) ?? fit.stopTilt
           : 0;
         frameAt(pose.p.x, pose.p.y, pose.angle, s.deck, twoWheeled ? leanOf(vehicle, s) + stopTilt * stopping : 0, s.pitch, s.roll);
-        occupantBand = level;
+        occupantBand = twoWheeled ? vehicleBand : level;
         frame[FRAME_CLOCK] = vehicle.age;
 
         // Brakes and indicators, straight off the simulation.
@@ -2054,7 +2051,7 @@ export function createAgentMeshes(elevationAt: ElevationAt, onAssetsReady: () =>
         switch (plan.shape) {
           case 'motorcycle':
           case 'bicycle':
-            drawTwoWheeler(vehicle, s, Math.max(1, level));
+            drawTwoWheeler(vehicle, s, Math.max(1, vehicleBand));
             break;
           case 'car':
           case 'bus':

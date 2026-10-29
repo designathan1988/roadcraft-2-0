@@ -7,11 +7,11 @@ import { type MassLevel, baseOf, cellIndex, levelCells, plateOf, tileOf } from '
 import type { BaseMass } from './massBase';
 import { warmFull } from '../uploads';
 
-/** THE BUILDINGS' LEVELS ABOVE THE CELLS: a 1,000 m tile (L2) of masses, one mesh each (`massCells.ts` chooses them), and the base over each plate's square (the plate's own level, L3, laid cell by cell, `massBase.ts`): asked at once, before every other, never let go. A plate has no job of its own: its base is it (the same buildings, the same detail, the same bytes). */
+/** THE BUILDINGS' LEVELS ABOVE THE CELLS: a 1,000 m tile (L2) and a 2,000 m plate (L3) of masses, one mesh each (`massCells.ts` chooses them), and the base over each plate's square (the top level, `massBase.ts`): asked at once, before every other, never let go */
 
-const KIND: Readonly<Partial<Record<MassLevel, JobKind>>> = { tile: 'massTile', base: 'massBase' };
-/** The base that is a plate's level (`massBase.ts`). */
-const baseKeyOf = (plate: string): string => `b:${plate.slice(2)}`;
+const KIND: Readonly<Record<MassLevel, JobKind>> = { tile: 'massTile', plate: 'massPlate', base: 'massBase' };
+/** DO NOT ask every plate of the map at once (the opening, a town filed whole): each job holds its entries (an object a building) until it is answered, so the whole city's were alive together. At most this many plates asked and not answered, nearest the eye first (`away`), the rest waiting in `stale`. */
+const PLATES_IN_FLIGHT = 3;
 
 /** DO NOT ask a tile or a plate again for each cell an edit touched: the cells are touched, their levels asked once (`flush`) */
 export class MassLevels {
@@ -26,6 +26,8 @@ export class MassLevels {
   changed: () => void = () => {};
   /** How far a level is from the eye (`layer.ts`): the plates waiting are asked nearest first. */
   away: (key: string) => number = () => 0;
+  /** Whether nothing stands for a level yet (`layer.ts`: a plate with no masses of its own): asked in the far levels' band (`cellPool.ts` hole), before the view's detail. */
+  hole: (key: string) => boolean = () => false;
   /** A tile or a plate left waiting for now (`layer.ts`: out of the view while the curtain is up): asked by `pump` once it is not. */
   deferred: (key: string) => boolean = () => false;
   /** A base's prisms come (`massBase.ts`; null: none of its buildings stands from afar). */
@@ -67,12 +69,10 @@ export class MassLevels {
         continue;
       }
       this.plan(key);
-      // A plate is its base's (`massBase.ts`): planned, never asked.
-      if (key[0] === 'p') { this.edited.delete(key); continue; }
       // THE BASE AT ONCE, whatever the view and the upload queue: it is what stands where no finer level is (`massBase.ts`).
       if (key[0] === 'b') { this.ask(key, env); continue; }
-      // The upload queue full (`uploads.ts` warmFull): left stale, asked by `pump` once it drains.
-      if (this.wanted(key) && (this.edited.has(key) || (!warmFull() && !this.deferred(key)))) this.ask(key, env);
+      // The upload queue full (`uploads.ts` warmFull): left stale, asked by `pump` once it drains. A plate not edited waits its turn (`pump`).
+      if ((key[0] === 'p' || this.wanted(key)) && (this.edited.has(key) || (key[0] !== 'p' && !warmFull() && !this.deferred(key)))) this.ask(key, env);
       else {
         // Its old masses, if any, are no longer its buildings': asked again once a view wants it.
         const was = this.asked.get(key);
@@ -86,18 +86,33 @@ export class MassLevels {
 
   /** The tiles changed since last asked that a view now wants (a plate refined): asked (each frame, `layer.ts`; as many as tiles changed, never the map). */
   pump(env: CellEnv): void {
+    const plates: string[] = [];
     for (const key of this.stale) {
       // DO NOT ask masses to upload while the upload queue is full: their arrays waited on the page (conf77, 2026-10-17); asked once it drains.
       if (warmFull() && !this.edited.has(key)) continue;
-      if (!this.wanted(key) || (this.deferred(key) && !this.edited.has(key))) continue;
+      if (key[0] === 'p' && !this.edited.has(key)) { if (!this.deferred(key)) plates.push(key); continue; }
+      if (key[0] !== 'p' && (!this.wanted(key) || (this.deferred(key) && !this.edited.has(key)))) continue;
       this.stale.delete(key);
       if (this.hasAny(key)) this.ask(key, env);
     }
+    if (!plates.length) return;
+    let flying = 0;
+    for (const key of this.asked.keys()) if (key[0] === 'p') flying++;
+    if (flying >= PLATES_IN_FLIGHT) return;
+    const away = new Map(plates.map((key) => [key, this.away(key)]));
+    plates.sort((a, b) => away.get(a)! - away.get(b)! || (a < b ? -1 : a > b ? 1 : 0));
+    for (const key of plates) {
+      if (flying >= PLATES_IN_FLIGHT) break;
+      this.stale.delete(key);
+      if (!this.hasAny(key)) continue;
+      this.ask(key, env);
+      if (this.asked.has(key)) flying++;
+    }
   }
 
-  /** A tile whose masses were let go, neither drawn nor wanted, or let go out of the view for the budget (`massCells.ts` evictLevels): asked again once a view wants it (`pump`, `deferred`). */
+  /** A tile whose masses were let go, neither drawn nor wanted, or a plate's let go out of the view for the budget (`massCells.ts` evictLevels): asked again once a view wants it (`pump`, `deferred`). */
   release(key: string): void {
-    if (key[0] === 'b' || key[0] === 'p' || !this.hasAny(key)) return;
+    if (key[0] === 'b' || !this.hasAny(key)) return;
     const was = this.asked.get(key);
     if (was !== undefined) { this.pool.cancel(was); this.asked.delete(key); }
     this.stale.add(key);
@@ -135,7 +150,6 @@ export class MassLevels {
     const was = this.asked.get(key);
     if (was !== undefined) { this.pool.cancel(was); this.asked.delete(key); }
     const kind = KIND[levelCells(key).level];
-    if (!kind) throw new Error(`[buildings] no job makes level ${key}: a plate is its base's`);
     // DO NOT read `id` in the answer before it is given: on the page the answer comes inside `run`.
     let id = -1;
     const edited = this.edited.delete(key);
@@ -144,14 +158,12 @@ export class MassLevels {
       this.changed();
       if (key[0] === 'b') this.landBase(key, result.base ?? null);
       else this.land(key, result.mass ?? null);
-    // The base in the far levels' band (`cellPool.ts` hole), before the view's detail: until it comes nothing stands there.
-    }, `${kind}|${key}`, edited, key[0] === 'b', false, cells);
+    }, `${kind}|${key}`, edited, key[0] === 'b' || this.hole(key), false, cells);
     if (this.pool.isRunning(id)) this.asked.set(key, id);
   }
 
-  /** Whether a level's buildings changed since its masses were made (asked and not come, or not asked yet): its mesh, if any, is of older buildings. A plate's are its base's. */
+  /** Whether a level's buildings changed since its masses were made (asked and not come, or not asked yet): its mesh, if any, is of older buildings. */
   outdated(key: string): boolean {
-    if (key[0] === 'p') key = baseKeyOf(key);
     return this.asked.has(key) || this.stale.has(key) || this.dirty.has(key);
   }
 

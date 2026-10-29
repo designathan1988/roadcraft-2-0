@@ -7,7 +7,6 @@ import {
 import { DETAIL_WORLD_SIZE, type DetailKind } from './bake/detailRecipes';
 import { detailSwitch } from './mesh/detailLayer';
 import { ROAD_CODE, type RoadLook, type RoadMaps, applyRoadLayers, applyRoadSurface } from './mesh/roadEdges';
-import { pullTowardEye } from './depthConvention';
 import { applyLotOverlay } from './lotOverlay';
 
 /** Every material the scene uses, its surfaces baked at build time (`bake/roadRecipes.ts`) and shared. */
@@ -16,9 +15,6 @@ export interface SceneMaterials {
   /** Every road surface's one material (`mesh/roadEdges.ts` applyRoadSurface): the carriageway, its raised crossings, the footway, the kerb, a
    *  median's planting and a deck's edge, each told by the code its vertices carry. The surfaces' own names below are this material too. */
   readonly road: MeshStandardMaterial;
-  /** The roads' root level's (`networkFarRoads.ts`): the road material itself, the same shader, maps and look, drawn a step toward the eye over the
-   *  ground it is laid on where no block cut the terrain under it (`depthConvention.ts` pullTowardEye: no change to what a pixel shows). */
-  readonly roadRoot: MeshStandardMaterial;
   readonly asphalt: MeshStandardMaterial;
   readonly asphaltRaised: MeshStandardMaterial;
   readonly footway: MeshStandardMaterial;
@@ -83,13 +79,6 @@ export function createMaterials(anisotropy: number): SceneMaterials {
     details: surfaceTexture('road-details', anisotropy), detailNormals: ROAD_DETAIL_LAYERS.length,
   };
   applyRoadSurface(road, maps, looks, FOOTWAY_TILE / KERB_TILE);
-  // The root level's: made as `road` is, the same program (`customProgramCacheKey`), its depth offset its own.
-  const roadRoot = keep(new MeshStandardMaterial({
-    color: new Color(ROAD_TINT), roughness: 1, metalness: 0, side: FrontSide, shadowSide: DoubleSide, envMapIntensity: 0.55, vertexColors: true,
-  }));
-  roadRoot.name = 'road-surface-root';
-  applyRoadSurface(roadRoot, maps, looks, FOOTWAY_TILE / KERB_TILE);
-  pullTowardEye(roadRoot, 1, 3);
   // The structures' concrete, the deck's (`structures.ts`), read from the road's layers: the parapets and walls with the deck's close-zoom layer.
   const parapetMaterial = keep(new MeshStandardMaterial({
     color: new Color(0xffffff), roughness: 1, metalness: 0.02, side: FrontSide, shadowSide: DoubleSide, envMapIntensity: 0.55,
@@ -100,11 +89,9 @@ export function createMaterials(anisotropy: number): SceneMaterials {
   applyRoadLayers(concreteMaterial, maps, deckLook, false);
   // The lots coloured into the street's own surfaces (`lotOverlay.ts`)
   applyLotOverlay(road);
-  applyLotOverlay(roadRoot);
 
   return {
     road,
-    roadRoot,
     asphalt: road,
     asphaltRaised: road,
     footway: road,

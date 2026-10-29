@@ -421,12 +421,8 @@ const GOVERN_FRAMES = 60;
 /** The objects of the scene the governor's walk reads between two looks at the frame's time, and that time a frame, ms (`geometryBytesSteps`). */
 const GOVERN_SLICE = 256;
 const GOVERN_SLICE_MS = 1;
-/** The road cells the view wants taken at a step past those within the detail's reach while near ones are still built (`cellStep`): the near cells land first. */
+/** The road cells the view wants taken at a step past those within the detail's reach (`cellStep`): a step's build has a fixed cost (every pass walked), a few cells share it. */
 const STEP_CELLS = 2;
-/** The road cells of the view taken in one step once none near waits (`cellStep`): a step's build has a fixed cost (every pass walked, the
- *  next step only once it is done), so the view's cells share one. DO NOT take them two a step: a district's dozens of cells came two a world
- *  build, and most of the view stood on the network's far level for many seconds (the owner's photos, 2026-10-27). */
-const VIEW_STEP_CELLS = 32;
 /** How far round the eye the road cells in the view are wanted in detail (`mesh/roadResidency.ts` wantReach): past it, and past the tier's far budget within it, the network's far level draws them. */
 const ROAD_WANT_REACH = m(2_500);
 /** The roads the opening's solve left, solved a share a frame once the town is shown (`completeSolve`): ~15-20 ms of a frame on level ground (the 16,708 roads of a city of the largest radius: 1.5 roads solved a road taken, ~0.04 ms each, Node, 2026-10-21). */
@@ -992,7 +988,7 @@ export function createSceneRenderer(
   const roadStandIn = new RoadStandIn();
   world.add(roadStandIn.group);
   /** Every road of a large city at its far level from the opening's first frame, made from the network (`networkFarRoads.ts`): the fill's detailed blocks replace it when they land. */
-  const networkFar = new NetworkFarRoads(materials.roadRoot);
+  const networkFar = new NetworkFarRoads();
   world.add(networkFar.group);
   /** The roads the tool just laid (`flashRoads`: the player's road alone, never the street it meets split at the new junction), stood in once their heights are solved. */
   const pendingStandIn: SegmentId[] = [];
@@ -1819,7 +1815,7 @@ export function createSceneRenderer(
   const followFloors = (net: Network, shaped: readonly ChangeRect[] | null = null): void => floors.follow(net.doc.buildings, floorGroundSince, shaped);
   /** The camera's solids' cells filled off the page ahead of the questions (`cameraSolids.ts` prefetch): each building's volumes worked out by a job,
    *  stood on the floor kept of its row or measured by the cells' jobs where its blocks are its volumes, as `floors.floorOf` gives it. */
-  const solidsAsk = solidsJobAsk(() => buildings.jobGround());
+  const solidsAsk = solidsJobAsk();
   const cameraSolidsKept = cameraSolidsKeeper((b) => floors.floorOf(b), floorBox, FLOOR_READ_REACH, solidsAsk ? {
     ask: solidsAsk,
     footOf: (id, blocksAreVolumes) => {
@@ -2403,8 +2399,7 @@ export function createSceneRenderer(
     // surfaces' textures, for the many steps its near cells took (the player, 2026-10-26).
     const ready = look.build.filter(cellHeld);
     const near = ready.filter((key) => gap(key) < roadFocus.reach);
-    const past = ready.filter((key) => gap(key) >= roadFocus.reach);
-    const build = near.length ? [...near, ...past.slice(0, STEP_CELLS)] : past.slice(0, VIEW_STEP_CELLS);
+    const build = [...near, ...ready.filter((key) => gap(key) >= roadFocus.reach).slice(0, STEP_CELLS)];
     const release = look.release.filter((key) => taken.has(key));
     if (!build.length && !release.length) return;
     for (const key of build) { taken.add(key); awaiting.add(key); }
@@ -2675,7 +2670,7 @@ export function createSceneRenderer(
     tiny.setAttribute('uv', new Float32BufferAttribute([0, 0, 1, 0, 0, 1], 2));
     tiny.setAttribute('aDecay', new Float32BufferAttribute([0, 0, 0], 1));
     const group = new Group();
-    const mats = [kit.shellMaterial, kit.ruinShell, kit.facade, ...Object.values(kit.material), kit.furniture().material];
+    const mats = [kit.shellMaterial, kit.ruinShell, kit.facade, ...Object.values(kit.material), kit.furniture().material, kit.massing];
     for (const mat of mats) {
       const mesh = new Mesh(tiny, mat);
       mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
@@ -3687,12 +3682,7 @@ export function createSceneRenderer(
       }
       frameMark('frame:solids');
       // The light the buildings shut out of the streets round the view (`canyonLight.ts`).
-      // And the cells the solids filed off the page since (`takeArrived`): laid in the window as they come, the view's first look not waiting for them.
-      {
-        const changes = canyonChanges(net.doc.changes);
-        const arrived = cameraSolidsKept.takeArrived();
-        post.followTown(rig.target.x, -rig.target.z, townSolids, changes === null || arrived.length === 0 ? changes : [...changes, ...arrived]);
-      }
+      post.followTown(rig.target.x, -rig.target.z, townSolids, canyonChanges(net.doc.changes));
       const detailed = rig.viewport.zoom >= quality.detailCutoffZoom;
       const plantMap = rig.viewport.zoom < PLANT_MAP_ZOOM;
       // The buildings' detail and parts by the error on the screen (`levelOfDetail`, `cullDetails`).
@@ -3719,7 +3709,7 @@ export function createSceneRenderer(
         detailFrustum.setFromProjectionMatrix(detailProjection, rig.camera.coordinateSystem, rig.camera.reversedDepth);
         // The sun's cascades are made by three at their first draw: counted as they stand before the detail is chosen.
         gpuLedger.set('shadow maps', 'shadow maps', renderTargetsBytes(environment.shadowMaps()));
-        // The view's budget of triangles (`core/perfBudget.ts`): over it the farthest cells step down first (`layer.ts` capTriangles), the levels chosen once by the view.
+        // The view's budget of triangles (`core/perfBudget.ts`): the levels' error scale rises until they fit (`buildings/frameBudget.ts`).
         buildings.frame.budget = buildingChoices.triangles === 0 ? Infinity : VIEW_BUDGETS[viewOf(rig.viewport.zoom)].triangles * buildingChoices.triangles * quality.triangleScale;
         buildings.levelOfDetail(ex, ey, ez, pxAtMetre * optimizer.buildingPx, rig.perspective ? null : rig.viewport.zoom, reach, detailFrustum);
         // DO NOT leave a road just built invisible until the world's build lands (over 2 s, the player): drawn now from the network the commit solved, let go by the build of the commit's revision landing, every commit not landed yet standing.
@@ -4038,8 +4028,6 @@ export function createSceneRenderer(
           roadLook = updateRoadLevels(blocks, roadFocus.x, roadFocus.y, roadFocus.reach, roadResidency, networkFar.cells.size ? networkFar.cells : null, FAR_ROAD_CELL);
           // The tiles the page's network must hold for these cells (`roadWindowLink.ts`): asked of it, solved off the page, stepped in below.
           roadWindow?.want(tilesWanted(roadLook));
-          // The far level's crossings and stop lines near the view (`NetworkFarRoads.followMarks`): drawn where the detail is not built yet.
-          networkFar.followMarks(roadFocus.x, roadFocus.y);
           // Cells drawn by the network's far level that it does not stand for (none made, or made before the roads changed): made again for the roads drawn, off the page.
           if (roadResidency.wantsNetwork && elevation && worldJob === null && !openingBuild && !openingSolvePending && !networkFar.pending && networkFar.outdated()) networkFar.refresh(net, elevation, terrain.renderedHeightAt, FAR_ROAD_CELL, rig.viewport.centre);
         }

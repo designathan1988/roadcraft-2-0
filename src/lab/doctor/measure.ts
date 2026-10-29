@@ -1,7 +1,6 @@
 import { hiddenWork, type SiteReading } from '../hiddenWork';
 import type { LabContext, LabSample } from '../labTypes';
 import { scanWaste, type Waste } from './waste';
-import { recordGpuTimeline, type GpuTimeline } from './gpuTimeline';
 
 /** THE DIAGNOSIS'S MEASURES: one snapshot of where the frame goes (the GPU's passes, one frame's every draw, the CPU's systems and functions), and the quick A/B of one change (off, measured, back on, measured), from the other areas' probes. */
 
@@ -24,8 +23,6 @@ export interface Snapshot {
   readonly draws: readonly Draw[];
   readonly systems: readonly (readonly [string, number])[];
   readonly functions: readonly ProfileFn[];
-  /** The library's and the browser's own functions that took the most (three's render, WebGL's calls, the collector): where the game's "drawing" goes inside three. DO NOT leave them out: the 9 ms a frame of three's render at a street read as nobody's (2026-10-27). */
-  readonly libraryFunctions: readonly ProfileFn[];
   readonly drawCalls: number;
   readonly triangles: number;
   readonly hitches: number;
@@ -40,8 +37,6 @@ export interface Snapshot {
   readonly suspects: readonly Suspect[];
   /** WebGL contexts alive, by the line that made each. */
   readonly contexts: readonly string[];
-  /** The GPU's timeline with the view still: every draw timed, the work outside the frame, the uploads, the formats, the waits (`gpuTimeline.ts`); null without the timer. */
-  readonly timeline: GpuTimeline | null;
 }
 
 interface Check { readonly id: string; readonly title: string; readonly verdict: string; readonly value: string; readonly why: string }
@@ -106,9 +101,6 @@ export async function snapshot(ctx: LabContext, progress: (text: string) => void
     passes = gpu.passes().filter((p) => p.avg > 0);
     gpu.passTiming(false);
   }
-  progress('timing every draw on the GPU…');
-  let timeline: GpuTimeline | null = null;
-  try { timeline = await recordGpuTimeline(ctx, 3000); } catch (error) { console.error('lab doctor: the GPU timeline failed', error); }
   let draws: readonly Draw[] = [];
   if (gpu) {
     progress('capturing a frame…');
@@ -148,13 +140,11 @@ export async function snapshot(ctx: LabContext, progress: (text: string) => void
     draws,
     systems: [...systems].map(([k, v]) => [k, v.reduce((a, b) => a + b, 0) / v.length] as const).sort((a, b) => b[1] - a[1]),
     functions: code ? code.functions('session').filter((f) => f.category === 'game').sort((a, b) => b.selfMs - a.selfMs).slice(0, 12) : [],
-    libraryFunctions: code ? code.functions('session').filter((f) => f.category !== 'game' && f.category !== 'lab').sort((a, b) => b.selfMs - a.selfMs).slice(0, 16) : [],
     drawCalls: median(plain.samples.map((s) => s.drawCalls)),
     triangles: median(plain.samples.map((s) => s.triangles)),
     hitches: plain.samples.filter((s) => s.intervalMs > 50).length,
     waste, hidden, hiddenSeconds, checks, suspects,
     contexts: watch?.contexts() ?? [],
-    timeline,
   };
 }
 

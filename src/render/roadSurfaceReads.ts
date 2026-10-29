@@ -7,7 +7,6 @@ import { roadStructure, type RoadStructure } from '@world/structures';
 import { m } from '@world/units';
 import type { HeightFn, TileMeshOptions, TintFn, UvFn, UvFrameFn } from './mesh/tileMesh';
 import { FOOTWAY_TINT } from './roadTones';
-import { ROAD_CODE, type RoadCode } from './mesh/roadEdges';
 
 /** WHAT EACH SURFACE OF A ROAD PASS READS PER VERTEX (`roadSurfaces.ts`) */
 
@@ -21,18 +20,6 @@ export type TileSource =
 /** The name a surface's shapes are filed under in a piece (`roadSurfaceInputs.ts`). */
 export const slotOf = (source: TileSource): string =>
   source.kind === 'band' ? source.band : `median:${source.part}`;
-/** A surface's code in the road material (`mesh/roadEdges.ts` ROAD_CODE): the look its own material had (the footway's for its ramps and a median's
- *  paving, the kerb's for a median's kerb, the planting's for a median's soil). */
-export function roadCodeOf(source: TileSource, raised: boolean): RoadCode {
-  if (source.kind === 'median') return source.part === 'kerb' ? ROAD_CODE.kerb : source.part === 'planting' ? ROAD_CODE.planting : ROAD_CODE.footway;
-  switch (source.band) {
-    case 'deckEdge': return ROAD_CODE.deck;
-    case 'footway': case 'curbRamp': return ROAD_CODE.footway;
-    case 'kerb': return ROAD_CODE.kerb;
-    case 'asphalt': return raised ? ROAD_CODE.raised : ROAD_CODE.carriageway;
-  }
-}
-
 /** Where a piece files the stations every strip of a group takes (`roads/pieceGeom.ts` 'stations'). */
 export const STATIONS_SLOT = 'stations';
 

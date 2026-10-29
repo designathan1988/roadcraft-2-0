@@ -11,9 +11,19 @@ import type { Network } from '@world/network';
 import type { NetworkDelta } from '@world/networkDelta';
 import { ROAD_STRUCTURES, roadStructure } from '@world/structures';
 import { m } from '@world/units';
+import {
+  type Bar,
+  type StrokeSpec,
+  approachLegendsAt,
+  junctionDetailAt,
+  midBlockDetailAt,
+  miniRoundaboutIsland,
+  transitionMarkings,
+  type ZebraStretch,
+} from '@world/markings';
 import { parkingLinesOf, parksAlong } from '@world/parkingLayout';
 import {
-  type Filed, type MarkGroup, type MarkPasses, type MarkPiece, fileMarks, nodeMarks, parkingGroups, roadMarks, roadStrokes, strokeGroups,
+  type Filed, type MarkGroup, type MarkPasses, type MarkPiece, STOP_PAINT, barGroup, fileMarks, islandGroup, parkingGroups, roadMarks, roadStrokes, strokeGroups, zebraGroup,
 } from './roadMarks';
 import { type Geom, type Input, inputOf } from './roads/pieceGeom';
 import { type Shape, segmentShapes } from './roads/segmentPiece';
@@ -596,9 +606,42 @@ export class SurfaceInputs {
     return { segment: (id) => this.passOf(net, id), node: (id) => this.ownerOf(net, id) };
   }
 
-  /** A node's marks (`roadMarks.ts` nodeMarks): its stop lines, crossings, legends and island where its plate is drawn at ground level. */
+  /**
+   * A node's marks (`roadMarks.ts`), each filed on the piece it lies on: the taper's lines on its plate (in any pass, as they always were); and for a
+   * junction drawn at ground level, as its paint always was: each leg's stop line, crossings and the rule's legends on that leg's own carriageway,
+   * in whatever pass that road is drawn (DO NOT file them in the plate's pass: as polygons there, a leg of another pass, a road raised by hand, had
+   * them float over its own deck or sink under it), and a mini-roundabout's island on its plate.
+   */
   private nodeMarks(net: Network, node: NodeId, owner: string): [MarkPiece, Filed[]][] {
-    return nodeMarks(net, node, isGroundPass(owner), this.markPasses(net));
+    const passes = this.markPasses(net);
+    const plate: MarkPiece = { kind: 'node', id: node };
+    const onPlate: MarkGroup[] = [];
+    // The tapers where a road carries on at another width, whose lane lines and edge lines run on through them.
+    if (net.transitions.has(node)) for (const spec of transitionMarkings(net, node)) onPlate.push(...strokeGroups(spec));
+    const onLegs = new Map<SegmentId, MarkGroup[]>();
+    const onLeg = (seg: SegmentId, group: MarkGroup | null): void => {
+      if (!group) return;
+      let list = onLegs.get(seg);
+      if (!list) onLegs.set(seg, list = []);
+      list.push(group);
+    };
+    if (isGroundPass(owner)) {
+      const stops: Bar[] = [], zebras: Bar[] = [], runs: ZebraStretch[] = [], stopSegs: SegmentId[] = [];
+      junctionDetailAt(net, node, stops, zebras, runs, stopSegs);
+      midBlockDetailAt(net, node, stops, zebras, runs, stopSegs);
+      stops.forEach((bar, k) => onLeg(stopSegs[k]!, barGroup(STOP_PAINT, bar)));
+      // A crosswalk a shape a run of its bars, the bars cut by the shader (`ZebraStretch`), not a quad a bar.
+      for (const run of runs) onLeg(run.seg, zebraGroup(run));
+      // Mini-roundabouts' painted islands (V5), and the junction rule's words and symbols before the stop lines (V6).
+      const island = miniRoundaboutIsland(net, node);
+      if (island) onPlate.push(islandGroup(island));
+      const legends: StrokeSpec[] = [], legendSegs: SegmentId[] = [];
+      approachLegendsAt(net, node, net.doc.markingStyle, legends, legendSegs);
+      legends.forEach((spec, k) => { for (const group of strokeGroups(spec)) onLeg(legendSegs[k]!, group); });
+    }
+    const out: [MarkPiece, Filed[]][] = fileMarks(net, plate, onPlate, passes);
+    for (const [seg, groups] of [...onLegs].sort((p, q) => p[0] - q[0])) out.push(...fileMarks(net, { kind: 'segment', id: seg }, groups, passes));
+    return out;
   }
 
   /** `silent`: entries derived again as they were (`wakeTile`), or let go while what they drew still stands (`dormant`): what the parts read is put together again, no part made dirty. */

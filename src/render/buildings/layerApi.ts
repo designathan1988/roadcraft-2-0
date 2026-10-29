@@ -6,8 +6,6 @@ import type { FrameScale } from './frameBudget';
 import type { BuildingKit } from './kit';
 import type { CellDrawn } from './massCells';
 import type { Camera, Frustum, Group, Object3D } from 'three';
-import type { SharedGroundData } from '../sharedGround';
-import type { PavingData } from '@world/paving';
 
 /** DO NOT put the detail of every cell together again, and DO NOT hold a far cell's detail for a while */
 export interface BuildingPreviewInput {
@@ -93,10 +91,6 @@ export interface BuildingLayer {
   coverReady(rect: readonly [number, number, number, number]): boolean;
   /** A building's floor as the cells' jobs measured it on the ground and paving as they stand (`CellPool.floorKnown`); undefined where none did. */
   knownFloor(id: BuildingId): number | undefined;
-  /** The ground and paving its cells' jobs read, for another job to read them alike (`solidJobs.ts`): the shared ground, whether the natural
-   *  ground is the drawn one, and the paving of a rectangle packed (null: none to read, or it cannot be handed over); null before the first update
-   *  or where the ground is not shared. */
-  jobGround(): { readonly ground: SharedGroundData; readonly naturalIsGround: boolean; readonly paved: boolean; pack(rect: readonly [number, number, number, number]): { data: PavingData; transfer: ArrayBuffer[] } | null } | null;
   /** Bumped when what `covers` answers changes (a footprint or a lot moved, came or went). */
   readonly coversVersion: number;
   /** Height of a building's lot or parking bay as drawn at a world point, NaN off them */

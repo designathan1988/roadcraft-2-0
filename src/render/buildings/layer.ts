@@ -1,6 +1,4 @@
 import { Box3, type Camera, Frustum, Group, InstancedMesh, type Mesh, type Object3D } from 'three';
-import type { SharedGroundAt } from '../sharedGround';
-import type { PavingSource } from '@world/paving';
 import { Digest } from '@core/digest';
 
 import type { RoadDoc } from '@world/doc';
@@ -94,7 +92,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   let lodStale = true;
   const lodChanged = (): void => { lodStale = true; };
   const massCells = createMassCells(kit, BATCH_CELL, (key) => {
-    if (key[0] === 't') levels.release(key);
+    if (key[0] === 't' || key[0] === 'p') levels.release(key);
     else massAsked.delete(key);
   }, (key) => !levels.outdated(key), lodChanged);
   group.add(massCells.group);
@@ -494,6 +492,8 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
   // One let go for the budget (`massBudget`) waits for the view to meet it again and want it whole (`askable`): DO NOT ask it back at once, to be let go again.
   // Nor one the view refines (its tiles or cells draw it): DO NOT mass a plate the curtain's picture does not draw. The district a city opens on refines its plates, and a city of 70,000 buildings massed the four round its middle (~21 s of the workers, ~10,000 buildings each) behind the curtain while the road tiles of the view queued behind them (trace of step-70k, 2026-10-22).
   levels.deferred = (key) => (hiddenNow && (!massCells.levelSeen(key) || !massCells.levelWhole(key))) || !massCells.askable(key);
+  // A plate with no masses of its own is a hole in the map (the corners of a city opened on its middle, step-25k 08-early-map): before the view's detail.
+  levels.hole = (key) => key[0] === 'p' && !massCells.levelDrawn(key);
   /** The most the town's masses (cells, tiles, plates) hold on the GPU, bytes (`quality.ts` GEOMETRY_BUDGETS): past it the levels out of the view go, least recently seen first. */
   let massBudget = Infinity;
   // The plates waiting asked nearest the eye first (`massLevels.ts` PLATES_IN_FLIGHT).
@@ -998,14 +998,12 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       eye = eyeNow;
       viewKnown = view !== null;
       if (view) eyeView.copy(view);
-      // The levels chosen ONCE a frame, by the view alone (one form at a view): over the view's budget of triangles the farthest coarsened first
-      // (`capTriangles`). The building cut open and the one being edited stay in detail whatever the eye says. DO NOT raise an error scale
-      // under load and choose again at each step (`fitErrorScale`): every frame of a camera drag chose and capped the whole town two to six
-      // times, and a building's form hung on the frame's load, not on the view. The frame's time is the quality governor's (`quality.ts`).
-      const fitted = (): void => {
-        massCells.setErrorScale(1); chooseRaw();
+      // The levels chosen at scale 1, over the view's budget of triangles the farthest coarsened first (`capTriangles`); only when the masses alone pass it does the scale rise (`frameBudget.ts`). The building cut open and the one being edited stay in detail whatever the eye says.
+      const fitted = (scale: number): number => {
+        massCells.setErrorScale(scale); chooseRaw();
         capRaw();
         capTriangles();
+        return chosenTriangles();
       };
       // DO NOT choose the levels again when nothing they read changed and the last choice left them as the one before it did (the choice is deterministic: the same inputs from where it settled give the same levels; 2 to 4 whole choices and caps a frame, PRD-01). A choice that moved anything (a held cell let back a level, a scale stepping down) is run again until it settles.
       const read = lodRead;
@@ -1015,8 +1013,7 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
       if (lodStale || !sameRead || !lodSettled) {
         const wasStale = lodStale;
         lodStale = false;
-        fitted();
-        frame.scale = 1;
+        if (fitted(1) > frame.budget) frame.fit(fitted); else frame.scale = 1;
         const chose = lodChosen();
         lodSettled = !wasStale && sameRead && chose === lodChoice;
         lodChoice = chose;
@@ -1184,16 +1181,6 @@ export function createBuildingLayer(anisotropy = 4): BuildingLayer {
     },
     covers(x, y) {
       return cover.covers(x, y);
-    },
-    jobGround() {
-      if (!lastGround) return null;
-      const share = (lastGround.groundAt as SharedGroundAt).share?.current;
-      if (!share) return null;
-      const paving = lastGround.pavedAt as PavingSource | undefined;
-      return {
-        ground: share, naturalIsGround: lastGround.naturalAt === lastGround.groundAt, paved: paving !== undefined,
-        pack: (rect) => paving?.pack?.(rect) ?? null,
-      };
     },
     knownFloor(id) {
       // As the cells' jobs measured it (`CellPool.floorKnown`): the building's record as the town files it (its signature), the ground of its cell

@@ -372,7 +372,7 @@ function chainAlong(points: readonly Vec2[], line: Polyline): Chain | null {
 
 /** A road's central reservation (`world/landscape.ts` medianNose stands its noses back of each crossing): its kerb stone each side, the planting
  *  or the paving between, and its ends walled. */
-export function medianShapes(net: Network, ribbon: SegmentRibbon): Shape[] {
+function medianShapes(net: Network, ribbon: SegmentRibbon): Shape[] {
   const median = ribbon.road.median;
   // A median painted on the carriageway has no kerb and no island.
   if (median <= 0 || ribbon.road.medianFlush) return [];
