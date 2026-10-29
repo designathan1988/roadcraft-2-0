@@ -31,6 +31,12 @@
 7. **No patches over a wrong architecture.** If the design is the cause (whole-map work, expanded data, copies of the whole map), say so and rebuild it. See `reports/architecture-2026-10-29/ARCHITECTURE.md`.
 8. **Do not leave traps for the next session.** Never write into CLAUDE.md, memory, prompts or reports an instruction that makes a shortcut look like the way to test (as "use seed 7 for tests" was once written here). Re-read what you write for that.
 9. **Report what was verified, how, and where the proof is** (screenshot path, log, measurement). If it could not be verified, say exactly that.
+10. **Research on the internet before every decision and every fix. No trial and error.**
+    - Before designing or changing anything, read the official documentation of the exact version the project uses: three.js r186, Electron 44, Chromium/V8, WebGPU/WGSL specs, MDN, Vite. Read the papers and technical talks of shipped games that solved the same problem.
+    - Open the pages (WebFetch). A search snippet or memory is not research.
+    - Cite every page in the report, the commit message or the code comment that relies on it: the link, plus what it says that decides the matter.
+    - Never claim you researched something you did not open. If a page could not be opened, say so and find another official source.
+    - Solve the problem once, at its cause, from what the documentation and the code say. Do NOT change values, flags or code and rerun "to see if it works". A test only confirms a fix that is already understood. When something fails, read the error, the code and the docs first; never retry blindly.
 
 ## WARNING: seed 7 is a COOKED city and proves nothing about the player's path
 - Seed 7 is not grown when opened: it is read from files made in advance (`cooked/large-7.*`, committed 2026-10-26 in `8907a428`). A player who creates, saves and reopens a city never gets that path. A test or measurement on seed 7 is NOT evidence that the game handles a 10 km city; the owner forbids presenting it as such.
