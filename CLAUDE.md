@@ -1,5 +1,37 @@
 # Roadcraft: facts to know before touching the game
 
+## RULES AGAINST FRAUD (the owner's order, 2026-10-29; every one of these was broken before and caught at the first real run)
+1. **Only the player's path is evidence.**
+   - The only valid test of "the game handles a 10 km city" is a NEW city with a random seed: created, saved, the game closed, reopened, played, in the real game window.
+   - Seed 7, `cooked/*`, a kept or cached city (`keepDerivedDurably`, IndexedDB), a fixture or any file made in advance is NEVER evidence and is never presented as such.
+2. **Before any test, check that its input is what the claim is about**, and write it in the report:
+   - which seed;
+   - grown or read from files;
+   - which save;
+   - which commit;
+   - the city's size.
+
+   A result whose input was not checked is not a result.
+3. **A heavy, slow or crashing result is a failure.** Say it as a failure, in plain words, with the numbers. Never call it "pending", "almost", "environment" or "cache".
+4. **Never name a cause you have not proven.** "Cache", "environment", "driver" or "Windows" are claims like any other: they need a concrete check that shows them. Otherwise say "unknown".
+5. **Never say you read, checked, verified or fixed something you did not.**
+   - List the files and line ranges read.
+   - List what was not read.
+   - List what was not verified, and why.
+6. **No fakes.** None of these is ever a fix or a demonstration:
+   - boxes, planes, billboards or impostors in place of buildings or roads;
+   - fake roads;
+   - staged scenes;
+   - features switched off;
+   - quality lowered;
+   - tests weakened or skipped;
+   - hard-coded or massaged metrics.
+
+   The goal is the real game running well, not a check passing.
+7. **No patches over a wrong architecture.** If the design is the cause (whole-map work, expanded data, copies of the whole map), say so and rebuild it. See `reports/architecture-2026-10-29/ARCHITECTURE.md`.
+8. **Do not leave traps for the next session.** Never write into CLAUDE.md, memory, prompts or reports an instruction that makes a shortcut look like the way to test (as "use seed 7 for tests" was once written here). Re-read what you write for that.
+9. **Report what was verified, how, and where the proof is** (screenshot path, log, measurement). If it could not be verified, say exactly that.
+
 ## WARNING: seed 7 is a COOKED city and proves nothing about the player's path
 - Seed 7 is not grown when opened: it is read from files made in advance (`cooked/large-7.*`, committed 2026-10-26 in `8907a428`). A player who creates, saves and reopens a city never gets that path. A test or measurement on seed 7 is NOT evidence that the game handles a 10 km city; the owner forbids presenting it as such.
 - The player's real path is a city grown live (any other seed) or a saved city reopened. On 2026-10-29 the live-grown 10 km city peaked at 10.1 GB: that is the real problem to solve in the architecture.
